@@ -281,6 +281,8 @@ def request_password_reset(request):
         users = keycloak_admin.get_users({"email": email, "exact": True})
         if not users:
             return Response({"message": "Si l'email existe, un lien a été envoyé."})
+        prenom_medecin = users[0].get('firstName', '')
+        nom_medecin = users[0].get('lastName', '')
     except Exception as e:
         return Response({"error": f"Erreur avec Keycloak: {str(e)}"}, status=500)
 
@@ -289,13 +291,26 @@ def request_password_reset(request):
     
     # 3. Envoyer le mail vers REACT
     link = f"http://localhost:8081/reset-password?token={reset_obj.token}"
+    sujet = "[TéléOphta] Demande de réinitialisation de votre mot de passe"
+    message = f"""Bonjour Dr {prenom_medecin} {nom_medecin},
+
+Nous avons reçu une demande de réinitialisation de mot de passe pour votre compte sur la plateforme TéléOphta.
+
+Pour configurer un nouveau mot de passe, veuillez cliquer sur le lien ci-dessous :
+{link}
+
+Cordialement,
+
+L'équipe TéléOphta
+Plateforme de Télédépistage de la Rétinopathie
+"""
     send_mail(
-        "Réinitialisation Mot de Passe",
-        f"Cliquez ici pour réinitialiser : {link}",
+        sujet,
+        message,
         "support@teleophta.fr",
         [email]
     )
-    return Response({"message": "Lien envoyé sur Mailtrap !"})
+    return Response({"message": "Lien envoyé à votre adresse email !"})
 
 @api_view(['POST'])
 @authentication_classes([])
