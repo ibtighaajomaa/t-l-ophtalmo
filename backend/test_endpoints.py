@@ -7,7 +7,7 @@ def test_django_endpoints():
 
     print("Calling ForcerNouveauMotPasseView...")
     reset_res = requests.post(
-        "http://localhost:8000/api/auth/reset-password/",
+        "http://localhost:8001/api/auth/reset-password/",
         json={"username": email, "new_password": new_password}
     )
     print("Reset Status:", reset_res.status_code)
@@ -15,7 +15,7 @@ def test_django_endpoints():
 
     print("Calling LoginView...")
     login_res = requests.post(
-        "http://localhost:8000/api/auth/login/",
+        "http://localhost:8001/api/auth/login/",
         json={"email": email, "password": new_password}
     )
     print("Login Status:", login_res.status_code)
