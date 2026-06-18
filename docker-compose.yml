@@ -1,8 +1,9 @@
-# docker-compose.yml
 version: '3.8'
+
 services:
   postgres-keycloak:
     image: postgres:15
+    container_name: postgres-keycloak
     environment:
       POSTGRES_DB: keycloak
       POSTGRES_USER: keycloak
@@ -11,9 +12,15 @@ services:
       - "5433:5432"
     volumes:
       - postgres-keycloak-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   keycloak:
     image: quay.io/keycloak/keycloak:23.0.0
+    container_name: keycloak
     command: start-dev
     environment:
       KC_DB: postgres
@@ -22,13 +29,31 @@ services:
       KC_DB_PASSWORD: password
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
+      
+      # JAVA_OPTS_APPEND sur une seule ligne pour éviter le crash au boot
+      JAVA_OPTS_APPEND: "-Dmail.smtp.ssl.trust=* -Dmail.smtp.ssl.checkserveridentity=false -Dmail.smtp.starttls.enable=true"
+      
+      # 2. MÉTHODE SPI (Truststore physique)
+      # On force Keycloak à utiliser notre keystore JKS contenant le vrai certificat
+      KC_SPI_TRUSTSTORE_FILE_FILE: "/opt/keycloak/conf/rns_truststore.jks"
+      KC_SPI_TRUSTSTORE_FILE_PASSWORD: "password"
+      KC_SPI_TRUSTSTORE_FILE_HOSTNAME_VERIFICATION_POLICY: "ANY"
+      
+      # Option Quarkus pour la prod/dev
+      QUARKUS_TLS_TRUST_ALL: "true"
+      
+    volumes:
+      - ./rns_truststore.jks:/opt/keycloak/conf/rns_truststore.jks
+      - ./rns.crt:/opt/keycloak/conf/truststores/rns.crt
     ports:
       - "8080:8080"
     depends_on:
-      - postgres-keycloak
+      postgres-keycloak:
+        condition: service_healthy
 
   ohif-viewer:
     image: ohif/app:v3.8.0
+    container_name: ohif-viewer
     ports:
       - "8099:80"
     volumes:

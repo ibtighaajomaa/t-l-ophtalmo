@@ -199,12 +199,20 @@ REST_FRAMEWORK = {
 
 # Email settings
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'sandbox.smtp.mailtrap.io'
-EMAIL_PORT = 2525
-EMAIL_HOST_USER = '92aa9f6ee83488'
-EMAIL_HOST_PASSWORD = '0f8226391ffcde' # N'oubliez pas de mettre le vrai mot de passe ici
+EMAIL_HOST = 'smtp.rns.tn'
+EMAIL_PORT = 587
+EMAIL_HOST_USER = 'tele.ophtalmo@rns.tn'
+EMAIL_HOST_PASSWORD = 'pohvbW2@'
+import ssl
+def _create_unverified_context(*args, **kwargs):
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+ssl.create_default_context = _create_unverified_context
+
 EMAIL_USE_TLS = True
-DEFAULT_FROM_EMAIL = 'support@teleophta.fr'
+DEFAULT_FROM_EMAIL = 'tele.ophtalmo@rns.tn'
 
 # Keycloak settings
 KC_ADMIN_URL = "http://localhost:8080"

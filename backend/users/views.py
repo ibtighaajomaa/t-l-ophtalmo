@@ -99,7 +99,7 @@ L'équipe TéléOphta.
                 send_mail(
                     sujet,
                     message,
-                    'support@teleophta.fr',
+                    settings.DEFAULT_FROM_EMAIL,
                     [data['email']],
                     fail_silently=False,
                 )
@@ -292,10 +292,10 @@ def request_password_reset(request):
     send_mail(
         "Réinitialisation Mot de Passe",
         f"Cliquez ici pour réinitialiser : {link}",
-        "support@teleophta.fr",
+        settings.DEFAULT_FROM_EMAIL,
         [email]
     )
-    return Response({"message": "Lien envoyé sur Mailtrap !"})
+    return Response({"message": "Lien envoyé à votre adresse email !"})
 
 @api_view(['POST'])
 @authentication_classes([])
