@@ -1,8 +1,12 @@
-# docker-compose.yml
 version: '3.8'
+
 services:
+  # =========================
+  #  KEYCLOAK AUTHENTICATION
+  # =========================
   postgres-keycloak:
     image: postgres:15
+    restart: unless-stopped
     environment:
       POSTGRES_DB: keycloak
       POSTGRES_USER: keycloak
@@ -11,10 +15,13 @@ services:
       - "5433:5432"
     volumes:
       - postgres-keycloak-data:/var/lib/postgresql/data
+    networks:
+      - teleophtalmo
 
   keycloak:
     image: quay.io/keycloak/keycloak:23.0.0
     command: start-dev
+    restart: unless-stopped
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres-keycloak:5432/keycloak
@@ -26,13 +33,220 @@ services:
       - "8080:8080"
     depends_on:
       - postgres-keycloak
+    networks:
+      - teleophtalmo
 
-  ohif-viewer:
-    image: ohif/app:v3.8.0
+  # =========================
+  #  DJANGO BACKEND DATABASE
+  # =========================
+  postgres-django:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: teleophtalmo
+      POSTGRES_USER: django
+      POSTGRES_PASSWORD: django_password
     ports:
-      - "8099:80"
+      - "5434:5432"
     volumes:
-      - ./app-config.js:/usr/share/nginx/html/app-config.js
+      - postgres-django-data:/var/lib/postgresql/data
+    networks:
+      - teleophtalmo
 
+  # =========================
+  #  DJANGO BACKEND
+  # =========================
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      DB_NAME: teleophtalmo
+      DB_USER: django
+      DB_PASSWORD: django_password
+      DB_HOST: postgres-django
+      DB_PORT: "5432"
+      KEYCLOAK_SERVER_URL: http://keycloak:8080/
+      KEYCLOAK_REALM: HopitalRealm
+      KEYCLOAK_CLIENT_ID: django-backend
+      KEYCLOAK_CLIENT_SECRET: n3EKYvRxe3rkaP6eMoFYTHPSnlG9j4Pv
+      OIDC_RP_CLIENT_ID: django-backend
+      OIDC_RP_CLIENT_SECRET: n3EKYvRxe3rkaP6eMoFYTHPSnlG9j4Pv
+      DJANGO_SUPERUSER_USERNAME: admin
+      DJANGO_SUPERUSER_EMAIL: admin@teleophtalmo.com
+      DJANGO_SUPERUSER_PASSWORD: admin
+    depends_on:
+      - postgres-django
+      - keycloak
+    networks:
+      - teleophtalmo
+
+  # =========================
+  #  FRONTEND (TanStack Start)
+  # =========================
+  frontend:
+    build:
+      context: ./frontend/sight-bridge-main
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+    depends_on:
+      - backend
+    networks:
+      - teleophtalmo
+
+  # =========================
+  #  ORTHANC INDEX (PostgreSQL)
+  # =========================
+  orthanc-index:
+    image: postgres:15
+    restart: unless-stopped
+    volumes:
+      - orthanc-index-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    networks:
+      - teleophtalmo
+
+  # =========================
+  #  ORTHANC MAIN INSTANCE
+  # =========================
+  orthanc-container:
+    image: orthancteam/orthanc:25.8.0
+    restart: unless-stopped
+    volumes:
+      - orthanc-storage:/var/lib/orthanc/db/
+    environment:
+      ORTHANC__NAME: "OHIF in container"
+      DICOM_WEB_PLUGIN_ENABLED: "true"
+      ORTHANC__DICOM_WEB__PUBLIC_ROOT: "/orthanc-container/dicom-web/"
+      ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__ENABLE_OPEN_IN_OHIF_VIEWER_3: "true"
+      ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__OHIF_VIEWER_3_PUBLIC_ROOT: "http://localhost/ohif/"
+      ORTHANC__AUTHENTICATION_ENABLED: "false"
+      ORTHANC__POSTGRESQL: |
+        {"Host": "orthanc-index"}
+      VERBOSE_STARTUP: "true"
+      VERBOSE_ENABLED: "true"
+    depends_on:
+      - orthanc-index
+    networks:
+      - teleophtalmo
+
+  # =========================
+  #  ORTHANC PLUGIN INSTANCE
+  # =========================
+  orthanc-plugin:
+    image: orthancteam/orthanc:25.8.0
+    restart: unless-stopped
+    ports:
+      - "8053:8042"
+    volumes:
+      - orthanc-storage:/var/lib/orthanc/db/
+      - ./ohif-user-config-for-plugin.js:/ohif-user-config-for-plugin.js
+    environment:
+      ORTHANC__NAME: "OHIF in plugin"
+      DICOM_WEB_PLUGIN_ENABLED: "true"
+      ORTHANC__DICOM_WEB__PUBLIC_ROOT: "/orthanc-plugin/dicom-web/"
+      ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__ENABLE_OPEN_IN_OHIF_VIEWER_3: "true"
+      ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__OHIF_VIEWER_3_PUBLIC_ROOT: "http://localhost/orthanc-plugin/ohif/"
+      STONE_WEB_VIEWER_PLUGIN_ENABLED: "true"
+      OHIF_PLUGIN_ENABLED: "true"
+      ORTHANC__OHIF: |
+        {"RouterBasename": "/orthanc-plugin/ohif/", "DataSource": "dicom-web", "UserConfiguration": "/ohif-user-config-for-plugin.js"}
+      ORTHANC__AUTHENTICATION_ENABLED: "false"
+      ORTHANC__POSTGRESQL: |
+        {"Host": "orthanc-index"}
+      VERBOSE_STARTUP: "true"
+      VERBOSE_ENABLED: "true"
+    depends_on:
+      - orthanc-index
+    networks:
+      - teleophtalmo
+
+  # =========================
+  #  OHIF VIEWER (Custom Build)
+  # =========================
+  ohif:
+    build:
+      context: .
+      dockerfile: ohif/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ./ohif/default-app-config.js:/usr/share/nginx/html/app-config.js
+    depends_on:
+      - orthanc-container
+    networks:
+      - teleophtalmo
+
+  # =========================
+  #  MONAI LABEL (AI SERVER)
+  # =========================
+  monai-label:
+    image: projectmonai/monailabel:latest
+    container_name: monai-label
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./monai-apps:/opt/monai/apps
+      - monai-studies:/opt/monai/studies
+      - ./monai-apps/patch_monailabel.py:/opt/monai/apps/patch_monailabel.py
+      - ./monai-label/cache:/root/.cache/monailabel
+      - ./monai-label/output:/output
+    command: >
+      sh -c "pip3 install -q transformers segmentation_models_pytorch 2>/dev/null;
+      python3 /opt/monai/apps/patch_monailabel.py && 
+      monailabel start_server
+      --app /opt/monai/apps/radiology
+      --studies http://orthanc-container:8042/dicom-web
+      --conf models optic_disc_cup,vessel_seg,lesion_seg,dr_classification
+      --conf sam2 false
+      --host 0.0.0.0
+      --port 8000
+      --root_path /monai"
+    environment:
+      MONAI_LABEL_DICOMWEB_SEARCH_FILTER: "{}"
+    depends_on:
+      - orthanc-container
+    networks:
+      - teleophtalmo
+
+  # =========================
+  #  NGINX REVERSE PROXY
+  # =========================
+  nginx:
+    build: nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - frontend
+      - backend
+      - ohif
+      - orthanc-container
+      - orthanc-plugin
+      - monai-label
+    networks:
+      - teleophtalmo
+
+# =========================
+#  VOLUMES
+# =========================
 volumes:
   postgres-keycloak-data:
+  postgres-django-data:
+  orthanc-storage:
+  orthanc-index-data:
+  monai-studies:
+
+# =========================
+#  NETWORK
+# =========================
+networks:
+  teleophtalmo:
+    driver: bridge

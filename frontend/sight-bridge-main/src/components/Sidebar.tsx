@@ -46,7 +46,7 @@ const NAV: NavItem[] = [
     to: "/historique/examens",
     label: "Historique des examens",
     icon: FileText,
-    roles: ["Admin", "Chef", "Resident"],
+    roles: ["Chef", "Resident"],
   },
   {
     to: "/calendrier",
@@ -81,7 +81,7 @@ export function Sidebar() {
             <Eye className="h-5 w-5" />
           </div>
           <div>
-            <div className="text-sm font-semibold text-slate-900">TéléOphta</div>
+            <div className="text-sm font-semibold text-slate-900">Télé-rétinographie</div>
             <div className="text-xs text-slate-500">Plateforme médicale</div>
           </div>
         </div>

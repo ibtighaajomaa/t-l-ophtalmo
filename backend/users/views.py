@@ -79,12 +79,12 @@ class CreerUtilisateurView(APIView):
 
             # 6. Envoyer l'email de bienvenue avec les identifiants
             from django.core.mail import send_mail
-            sujet = "Bienvenue sur TéléOphta - Vos identifiants"
+            sujet = "Bienvenue sur   - Vos identifiants"
             lien_login = "http://localhost:8081/login"
             
             message = f"""Bonjour Dr {data['prenom']} {data['nom']},
             
-Votre compte TéléOphta a été créé avec succès.
+Votre compte Télé-rétinographie a été créé avec succès.
             
 Voici vos identifiants pour vous connecter :
 Email : {data['email']}

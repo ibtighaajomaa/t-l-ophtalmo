@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth-context";
 import ForgotPassword from "../components/ForgotPassword";
 
 export const Route = createFileRoute("/login")({
-  head: () => ({ meta: [{ title: "Connexion — TéléOphta" }] }),
+  head: () => ({ meta: [{ title: "Connexion — Télé-rétinographie" }] }),
   component: LoginPage,
 });
 
@@ -70,7 +70,7 @@ function LoginPage() {
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/10 backdrop-blur">
             <Eye className="h-6 w-6" />
           </div>
-          <span className="text-lg font-semibold">TéléOphta</span>
+          <span className="text-lg font-semibold">Télé-rétinographie</span>
         </div>
         <div>
           <h1 className="text-4xl font-bold leading-tight">
@@ -85,7 +85,7 @@ function LoginPage() {
             Données chiffrées · Conforme aux exigences hospitalières
           </div>
         </div>
-        <div className="text-xs text-blue-200">© 2026 TéléOphta</div>
+        <div className="text-xs text-blue-200">© 2026 Télé-rétinographie</div>
       </div>
 
       {/* Form panel */}
@@ -95,7 +95,7 @@ function LoginPage() {
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-white">
               <Eye className="h-5 w-5" />
             </div>
-            <span className="text-lg font-semibold text-slate-900">TéléOphta</span>
+            <span className="text-lg font-semibold text-slate-900">Télé-rétinographie</span>
           </div>
 
           <h2 className="text-2xl font-bold text-slate-900">

@@ -3,7 +3,6 @@ import django
 import sys
 from keycloak import KeycloakAdmin
 
-sys.path.append(r'd:\Projet de recherche\web2\t-l-ophtalmo-main\backend')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 

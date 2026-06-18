@@ -1,0 +1,10 @@
+node_modules/
+.git/
+.env
+*.tsbuildinfo
+dist/
+.output/
+.vinxi/
+.tanstack/
+.nitro/
+.wrangler/

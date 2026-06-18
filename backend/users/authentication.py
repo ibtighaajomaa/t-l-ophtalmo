@@ -63,8 +63,8 @@ class KeycloakAuthentication(authentication.BaseAuthentication):
             return (user, token)
 
         except Exception as e:
-            logger.error(f"Keycloak Authentication Failed: {str(e)}")
-            raise exceptions.AuthenticationFailed('Token invalide ou expiré.')
+            logger.warning(f"Keycloak Authentication Failed (allowing anonymous): {str(e)}")
+            return None
 
     def authenticate_header(self, request):
         return 'Bearer'

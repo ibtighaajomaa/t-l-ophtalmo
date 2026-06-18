@@ -63,7 +63,7 @@ export const ResetPasswordPage = () => {
             Données chiffrées · Conforme aux exigences hospitalières
           </div>
         </div>
-        <div className="text-xs text-blue-200">© 2026 TéléOphta</div>
+        <div className="text-xs text-blue-200">© 2026 Télé-rétinographie</div>
       </div>
 
       {/* Form panel */}
