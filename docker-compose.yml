@@ -1,0 +1,38 @@
+# docker-compose.yml
+version: '3.8'
+services:
+  postgres-keycloak:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-keycloak-data:/var/lib/postgresql/data
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0.0
+    command: start-dev
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres-keycloak:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: password
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres-keycloak
+
+  ohif-viewer:
+    image: ohif/app:v3.8.0
+    ports:
+      - "8099:80"
+    volumes:
+      - ./app-config.js:/usr/share/nginx/html/app-config.js
+
+volumes:
+  postgres-keycloak-data:
