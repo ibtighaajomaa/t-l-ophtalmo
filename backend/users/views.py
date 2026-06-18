@@ -355,8 +355,8 @@ def get_keycloak_events(request):
         # Get admin token
         admin_token = keycloak_admin.token['access_token']
         
-        # 2. Get events from Keycloak admin API
-        events_url = f"{settings.KEYCLOAK_SERVER_URL.rstrip('/')}/admin/realms/{settings.KEYCLOAK_REALM}/events?type=LOGIN&type=LOGOUT"
+        # 2. Get events from Keycloak admin API (request up to 1000 to allow sorting/filtering in Python)
+        events_url = f"{settings.KEYCLOAK_SERVER_URL.rstrip('/')}/admin/realms/{settings.KEYCLOAK_REALM}/events?type=LOGIN&type=LOGOUT&max=1000"
         headers = {'Authorization': f'Bearer {admin_token}'}
         
         events_res = requests.get(events_url, headers=headers)
@@ -412,7 +412,48 @@ def get_keycloak_events(request):
                 "action": "login" if event['type'] == "LOGIN" else "logout"
             })
             
-        return JsonResponse(formatted_logs, safe=False)
+        # 4. Extract query params for filtering and pagination
+        page = int(request.GET.get('page', 1))
+        page_size = int(request.GET.get('size', 10))
+        search = request.GET.get('search', '').lower()
+        today_only = request.GET.get('todayOnly', 'false').lower() == 'true'
+        allowed_emails_str = request.GET.get('allowedEmails', '')
+        allowed_emails = [e.strip().lower() for e in allowed_emails_str.split(',')] if allowed_emails_str else None
+
+        from datetime import datetime, timezone
+        today_str = datetime.now().date().isoformat()
+        
+        filtered_logs = []
+        for log in formatted_logs:
+            # Search filter
+            if search and search not in log['userName'].lower() and search not in log['role'].lower():
+                continue
+                
+            # Allowed emails filter
+            if allowed_emails is not None and log['userName'].lower() not in allowed_emails:
+                continue
+                
+            # Today filter
+            if today_only and log['at'][:10] != today_str:
+                continue
+                
+            filtered_logs.append(log)
+            
+        # Sort by 'at' descending (newest first)
+        filtered_logs.sort(key=lambda x: x['at'], reverse=True)
+        
+        # Paginate
+        total_count = len(filtered_logs)
+        total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
+        first = (page - 1) * page_size
+        paginated_logs = filtered_logs[first:first+page_size]
+        
+        return JsonResponse({
+            "logs": paginated_logs,
+            "total": total_count,
+            "page": page,
+            "total_pages": total_pages
+        })
         
     except KeycloakError as e:
         return JsonResponse({"error": f"Keycloak error: {str(e)}"}, status=400)

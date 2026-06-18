@@ -22,13 +22,15 @@ const ROLE_LABEL: Record<Role, string> = {
 };
 
 function LogsPage() {
-  const { usage, users } = useAuth();
+  const { users } = useAuth();
   const [query, setQuery] = useState("");
   const [userQuery, setUserQuery] = useState("");
 
   // Pagination states
   const [logsPage, setLogsPage] = useState(1);
   const [usersPage, setUsersPage] = useState(1);
+  const [backendLogs, setBackendLogs] = useState<any[]>([]);
+  const [logsTotalPages, setLogsTotalPages] = useState(0);
 
   // Reset page when filters change
   useEffect(() => {
@@ -39,22 +41,24 @@ function LogsPage() {
     setUsersPage(1);
   }, [userQuery]);
 
-  const sorted = useMemo(
-    () => [...usage].sort((a, b) => b.at.localeCompare(a.at)),
-    [usage],
-  );
-
-  const filteredLogs = useMemo(() => {
-    const q = query.toLowerCase();
-    if (!q) return sorted;
-    return sorted.filter(
-      (e) => e.userName.toLowerCase().includes(q) || e.role.toLowerCase().includes(q),
-    );
-  }, [sorted, query]);
-
-  const paginatedLogs = useMemo(() => {
-    return filteredLogs.slice((logsPage - 1) * 10, logsPage * 10);
-  }, [filteredLogs, logsPage]);
+  // Fetch paginated logs
+  useEffect(() => {
+    const loadLogs = async () => {
+      try {
+        let url = `http://localhost:8000/api/logs/?page=${logsPage}&size=10`;
+        if (query) url += `&search=${encodeURIComponent(query)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.logs) {
+          setBackendLogs(data.logs);
+          setLogsTotalPages(data.total_pages);
+        }
+      } catch (err) {
+        console.error("Erreur de chargement des logs", err);
+      }
+    };
+    loadLogs();
+  }, [logsPage, query]);
 
   const filteredUsers = useMemo(() => {
     return users.filter((u) => {
@@ -103,14 +107,14 @@ function LogsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {paginatedLogs.length === 0 ? (
+                {backendLogs.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="py-6 text-center text-slate-500">
                       Aucun événement.
                     </td>
                   </tr>
                 ) : (
-                  paginatedLogs.map((e) => {
+                  backendLogs.map((e) => {
                     const d = new Date(e.at);
                     return (
                       <tr key={e.id} className="hover:bg-slate-50">
@@ -144,7 +148,7 @@ function LogsPage() {
           </div>
           <Pagination
             currentPage={logsPage}
-            totalPages={Math.ceil(filteredLogs.length / 10)}
+            totalPages={Math.max(1, logsTotalPages)}
             onPageChange={setLogsPage}
           />
         </section>

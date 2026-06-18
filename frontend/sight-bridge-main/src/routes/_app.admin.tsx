@@ -22,7 +22,7 @@ const ROLE_FILTERS: { value: "all" | Role; label: string }[] = [
 ];
 
 function AdminDashboard() {
-  const { user, users, usage, deleteUser, updateUser } = useAuth();
+  const { user, users, deleteUser, updateUser } = useAuth();
   const [filter, setFilter] = useState<"all" | Role>("all");
   const [nameFilter, setNameFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -56,11 +56,31 @@ function AdminDashboard() {
   // Pagination states
   const [usersPage, setUsersPage] = useState(1);
   const [logsPage, setLogsPage] = useState(1);
+  const [backendLogs, setBackendLogs] = useState<any[]>([]);
+  const [logsTotalPages, setLogsTotalPages] = useState(0);
 
   // Reset pages when filters change
   useEffect(() => {
     setUsersPage(1);
   }, [filter, nameFilter]);
+
+  // Fetch paginated logs
+  useEffect(() => {
+    if (user?.role !== "Admin") return;
+    const loadLogs = async () => {
+      try {
+        const res = await fetch(`http://localhost:8000/api/logs/?page=${logsPage}&size=10&todayOnly=true`);
+        const data = await res.json();
+        if (data.logs) {
+          setBackendLogs(data.logs);
+          setLogsTotalPages(data.total_pages);
+        }
+      } catch (err) {
+        console.error("Erreur de chargement des logs", err);
+      }
+    };
+    loadLogs();
+  }, [logsPage, user?.role]);
 
   // Fetch stats on mount
   useEffect(() => {
@@ -105,24 +125,6 @@ function AdminDashboard() {
     return u.role !== "Admin";
   });
 
-  const todayStr = new Date().toLocaleDateString('sv');
-  const todayUsage = usage
-    .filter((e) => {
-      if (user?.role === "Chef") {
-        const eventEmail = e.userName.toLowerCase();
-        const chefEmail = user.email.toLowerCase();
-        const isSelf = eventEmail === chefEmail;
-        const isSubordinate = visibleUsers.some(u => u.email.toLowerCase() === eventEmail);
-        if (!isSelf && !isSubordinate) return false;
-      }
-      const eventDateStr = new Date(e.at).toLocaleDateString('sv');
-      return eventDateStr === todayStr;
-    })
-    .sort((a, b) => b.at.localeCompare(a.at));
-
-  const paginatedLogs = useMemo(() => {
-    return todayUsage.slice((logsPage - 1) * 10, logsPage * 10);
-  }, [todayUsage, logsPage]);
 
   const handleDelete = (id: string, name: string) => {
     if (!confirm(`Supprimer l'utilisateur "${name}" ?`)) return;
@@ -314,7 +316,7 @@ function AdminDashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {paginatedLogs.map((e) => {
+                  {backendLogs.map((e) => {
                     const d = new Date(e.at);
                     return (
                       <tr key={e.id} className="hover:bg-slate-50">
@@ -341,7 +343,7 @@ function AdminDashboard() {
                       </tr>
                     );
                   })}
-                  {paginatedLogs.length === 0 && (
+                  {backendLogs.length === 0 && (
                     <tr>
                       <td colSpan={4} className="py-6 text-center text-slate-500">
                         Aucune activité aujourd'hui.
@@ -353,7 +355,7 @@ function AdminDashboard() {
             </div>
             <Pagination
               currentPage={logsPage}
-              totalPages={Math.ceil(todayUsage.length / 10)}
+              totalPages={Math.max(1, logsTotalPages)}
               onPageChange={setLogsPage}
             />
           </div>
