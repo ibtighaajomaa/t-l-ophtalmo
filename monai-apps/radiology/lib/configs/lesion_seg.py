@@ -27,6 +27,7 @@ class LesionSeg(TaskConfig):
             "soft_exudates": 4,
         }
         self.path = [
+            os.path.join(self.model_dir, f"{name}_ddr.pt"),
             os.path.join(self.model_dir, f"{name}.pt"),
         ]
 

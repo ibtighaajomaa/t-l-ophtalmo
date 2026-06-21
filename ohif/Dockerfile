@@ -25,7 +25,7 @@ COPY MONAILabel/plugins/ohifv3/modes/monai-label /sources/MONAILabel/plugins/ohi
 # Patch pluginConfig.json to register the monai-label extension and mode,
 # and keep only desired modes (MONAI Label, Basic Viewer, Segmentation)
 WORKDIR /sources/Viewers
-RUN jq '.extensions += [{"packageName": "@ohif/extension-monai-label", "version": "3.0.0", "default": false}] | .modes += [{"packageName": "@ohif/mode-monai-label", "version": "3.0.0", "default": true}] | .modes = [.modes[] | select(.packageName == "@ohif/mode-longitudinal" or .packageName == "@ohif/mode-segmentation" or .packageName == "@ohif/mode-monai-label")]' platform/app/pluginConfig.json > platform/app/pluginConfig.json.tmp && mv platform/app/pluginConfig.json.tmp platform/app/pluginConfig.json
+RUN jq '.extensions += [{"packageName": "@ohif/extension-monai-label", "version": "3.0.0", "default": false}] | .modes += [{"packageName": "@ohif/mode-monai-label", "version": "3.0.0", "default": false}] | .modes = [.modes[] | select(.packageName == "@ohif/mode-longitudinal" or .packageName == "@ohif/mode-segmentation" or .packageName == "@ohif/mode-monai-label")]' platform/app/pluginConfig.json > platform/app/pluginConfig.json.tmp && mv platform/app/pluginConfig.json.tmp platform/app/pluginConfig.json
 
 # Patch isValidMode to accept all modalities (not just CT/MR)
 RUN sed -i 's/valid: modalitiesArray.includes(.CT.) || modalitiesArray.includes(.MR.)/valid: true/' modes/monai-label/src/index.tsx

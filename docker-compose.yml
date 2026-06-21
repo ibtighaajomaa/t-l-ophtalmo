@@ -77,6 +77,7 @@ services:
       DJANGO_SUPERUSER_USERNAME: admin
       DJANGO_SUPERUSER_EMAIL: admin@teleophtalmo.com
       DJANGO_SUPERUSER_PASSWORD: admin
+      OPENROUTER_API_KEY: placeholder-replace-with-your-key
     depends_on:
       - postgres-django
       - keycloak

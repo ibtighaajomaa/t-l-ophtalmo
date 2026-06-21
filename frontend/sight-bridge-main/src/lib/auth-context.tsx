@@ -155,7 +155,7 @@ function loadUsage(): UsageEvent[] {
 function loadSession(users: AppUser[]): AppUser | null {
   if (typeof window === "undefined") return null;
   try {
-    const id = sessionStorage.getItem(STORAGE_SESSION);
+    const id = localStorage.getItem(STORAGE_SESSION) || sessionStorage.getItem(STORAGE_SESSION);
     return users.find((u) => u.id === id) ?? null;
   } catch {
     return null;
@@ -187,7 +187,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [usage]);
 
   useEffect(() => {
-    const token = sessionStorage.getItem("teleoph.token");
+    const token = localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
     if (token) {
       try {
         const decoded = jwtDecode<KeycloakTokenPayload>(token);
@@ -207,7 +207,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           lastName: decoded.family_name || "",
         };
 
-        sessionStorage.setItem(STORAGE_SESSION, loggedUser.id);
+        localStorage.setItem(STORAGE_SESSION, loggedUser.id);
         
         setUsers((prev) => {
           if (!prev.find((u) => u.id === loggedUser.id)) {
@@ -218,12 +218,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(loggedUser);
       } catch (err) {
         console.error("Token invalide", err);
+        localStorage.removeItem("teleoph.token");
+        localStorage.removeItem(STORAGE_SESSION);
         sessionStorage.removeItem("teleoph.token");
         sessionStorage.removeItem(STORAGE_SESSION);
         setUser(null);
       }
     } else {
       setUser(null);
+      localStorage.removeItem(STORAGE_SESSION);
       sessionStorage.removeItem(STORAGE_SESSION);
     }
     setInitKeycloak(true);
@@ -248,9 +251,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
           if (response.ok) {
               const tokens = await response.json();
-              sessionStorage.setItem('teleoph.token', tokens.access_token);
+              localStorage.setItem('teleoph.token', tokens.access_token);
               if (tokens.refresh_token) {
-                sessionStorage.setItem('teleoph.refresh_token', tokens.refresh_token);
+                localStorage.setItem('teleoph.refresh_token', tokens.refresh_token);
               }
               
               const decoded = jwtDecode<KeycloakTokenPayload>(tokens.access_token);
@@ -269,7 +272,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 lastName: decoded.family_name || "",
               };
 
-              sessionStorage.setItem(STORAGE_SESSION, loggedUser.id);
+              localStorage.setItem(STORAGE_SESSION, loggedUser.id);
               
               setUsers((prev) => {
                 if (!prev.find((u) => u.id === loggedUser.id)) {
@@ -292,7 +295,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       },
       logout: () => {
-        const refreshToken = sessionStorage.getItem("teleoph.refresh_token");
+        const refreshToken = localStorage.getItem("teleoph.refresh_token");
         if (refreshToken) {
           fetch("http://localhost:8001/api/auth/logout/", {
             method: 'POST',
@@ -304,6 +307,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             console.error("Erreur lors de la déconnexion Keycloak:", err);
           });
         }
+        localStorage.removeItem(STORAGE_SESSION);
+        localStorage.removeItem("teleoph.token");
+        localStorage.removeItem("teleoph.refresh_token");
         sessionStorage.removeItem(STORAGE_SESSION);
         sessionStorage.removeItem("teleoph.token");
         sessionStorage.removeItem("teleoph.refresh_token");
@@ -341,7 +347,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             createdBy: user ? `${user.firstName} ${user.lastName}` : ""
           };
 
-          const token = sessionStorage.getItem("teleoph.token");
+          const token = localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
           const res = await fetch("http://localhost:8001/api/auth/register-user/", {
             method: "POST",
             headers: {
@@ -391,7 +397,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             role: data.role ? (data.role === "Admin" ? "ADMIN_SYSTEME" : data.role === "Chef" ? "CHEF_SERVICE" : data.role === "Resident" ? "RESIDENT" : "OPHTALMOLOGUE") : undefined
           };
 
-          const token = sessionStorage.getItem("teleoph.token");
+          const token = localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
           const res = await fetch("http://localhost:8001/api/users/update/", {
             method: "PUT",
             headers: {

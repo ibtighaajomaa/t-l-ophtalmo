@@ -1,13 +1,21 @@
 import os
-from datetime import date
-from django.db.models import Q
+from datetime import date, datetime
+from django.db.models import Q, Max
 import requests
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from .models import Exam
-from .serializers import ExamSerializer
+from django.http import FileResponse
+from .models import Exam, AnalysisReport, MedicalReport, MedicalReportVersion
+from .serializers import (
+    ExamSerializer,
+    AnalysisReportSerializer,
+    MedicalReportSerializer,
+    MedicalReportVersionSerializer,
+)
+from users.authentication import KeycloakAuthentication
+from .report_generator import ReportGenerator
 
 
 @api_view(['GET', 'POST'])
@@ -189,3 +197,220 @@ def sync_orthanc(request):
         'skipped': skipped,
         'total': len(study_ids),
     })
+
+
+@api_view(['POST'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def save_analysis(request):
+    series_uid = request.data.get('series_instance_uid')
+    report_json = request.data.get('report_json')
+    if not series_uid or not report_json:
+        return Response(
+            {'error': 'series_instance_uid and report_json are required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    report = AnalysisReport.objects.create(
+        series_instance_uid=series_uid,
+        user=request.user,
+        report_json=report_json,
+    )
+    serializer = AnalysisReportSerializer(report)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def list_analysis_reports(request):
+    series_uid = request.query_params.get('series')
+    reports = AnalysisReport.objects.all()
+    if series_uid:
+        reports = reports.filter(series_instance_uid=series_uid)
+    limit = int(request.query_params.get('limit', 50))
+    if request.query_params.get('mine') in ('true', '1'):
+        reports = reports.filter(user=request.user)
+    reports = reports[:limit]
+    serializer = AnalysisReportSerializer(reports, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['POST'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def generate_report(request):
+    report_data = request.data.get('report_data')
+    patient_id = request.data.get('patient_id', 'inconnu')
+    if not report_data:
+        return Response(
+            {'error': 'report_data is required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        api_key = os.environ.get('OPENROUTER_API_KEY')
+        if not api_key:
+            return Response(
+                {'error': 'OPENROUTER_API_KEY not configured'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        generator = ReportGenerator(api_key=api_key)
+        result = generator.generate_report(
+            report_data=report_data,
+            patient_id=patient_id,
+        )
+        return Response({
+            'report_text': result['report_text'],
+            'report_html': result['report_html'],
+            'report_json': result['report_json'],
+        })
+    except RuntimeError as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+
+@api_view(['GET', 'POST'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def medical_report_list(request):
+    if request.method == 'GET':
+        qs = MedicalReport.objects.all()
+        exam_id = request.query_params.get('examination_id')
+        if exam_id:
+            qs = qs.filter(examination_id=exam_id)
+        limit = int(request.query_params.get('limit', 50))
+        qs = qs[:limit]
+        serializer = MedicalReportSerializer(qs, many=True)
+        return Response(serializer.data)
+
+    elif request.method == 'POST':
+        patient_id = request.data.get('patient_id')
+        examination_id = request.data.get('examination_id')
+        ai_content = request.data.get('ai_content', '')
+        ai_confidence = request.data.get('ai_confidence')
+        ai_report_data = request.data.get('ai_report_data')
+        if not patient_id or not examination_id:
+            return Response(
+                {'error': 'patient_id and examination_id are required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        report = MedicalReport.objects.create(
+            patient_id=patient_id,
+            examination_id=examination_id,
+            generated_by_ai=True,
+            status=MedicalReport.Status.AI_GENERATED,
+            ai_content=ai_content,
+            ai_confidence=ai_confidence,
+            ai_report_data=ai_report_data,
+            created_by=request.user if request.user.is_authenticated else None,
+        )
+        MedicalReportVersion.objects.create(
+            report=report,
+            version_number=1,
+            content=ai_content,
+            version_type=MedicalReportVersion.VersionType.AI,
+            modified_by=request.user if request.user.is_authenticated else None,
+        )
+        serializer = MedicalReportSerializer(report)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PUT'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def medical_report_detail(request, pk):
+    try:
+        report = MedicalReport.objects.get(pk=pk)
+    except MedicalReport.DoesNotExist:
+        return Response({'error': 'Report not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        serializer = MedicalReportSerializer(report)
+        return Response(serializer.data)
+
+    elif request.method == 'PUT':
+        doctor_content = request.data.get('doctor_content')
+        if doctor_content is None:
+            return Response(
+                {'error': 'doctor_content is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        report.doctor_content = doctor_content
+        if report.status == MedicalReport.Status.AI_GENERATED:
+            report.status = MedicalReport.Status.UNDER_REVIEW
+        report.save()
+
+        max_ver = report.versions.aggregate(m=Max('version_number'))['m'] or 0
+        MedicalReportVersion.objects.create(
+            report=report,
+            version_number=max_ver + 1,
+            content=doctor_content,
+            version_type=MedicalReportVersion.VersionType.DOCTOR,
+            modified_by=request.user if request.user.is_authenticated else None,
+        )
+
+        serializer = MedicalReportSerializer(report)
+        return Response(serializer.data)
+
+
+@api_view(['POST'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def sign_medical_report(request, pk):
+    try:
+        report = MedicalReport.objects.get(pk=pk)
+    except MedicalReport.DoesNotExist:
+        return Response({'error': 'Report not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if report.status == MedicalReport.Status.SIGNED:
+        return Response({'error': 'Report already signed'}, status=status.HTTP_400_BAD_REQUEST)
+
+    content_to_sign = report.doctor_content or report.ai_content
+    report.final_content = content_to_sign
+    report.validated_by = request.user if request.user.is_authenticated else None
+    report.validated_at = datetime.now()
+    report.signed_by = request.user if request.user.is_authenticated else None
+    report.signed_at = datetime.now()
+    report.status = MedicalReport.Status.SIGNED
+    report.save()
+
+    max_ver = report.versions.aggregate(m=Max('version_number'))['m'] or 0
+    MedicalReportVersion.objects.create(
+        report=report,
+        version_number=max_ver + 1,
+        content=content_to_sign,
+        version_type=MedicalReportVersion.VersionType.SIGNED,
+        modified_by=request.user if request.user.is_authenticated else None,
+    )
+
+    serializer = MedicalReportSerializer(report)
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def list_report_versions(request, pk):
+    try:
+        report = MedicalReport.objects.get(pk=pk)
+    except MedicalReport.DoesNotExist:
+        return Response({'error': 'Report not found'}, status=status.HTTP_404_NOT_FOUND)
+    versions = report.versions.all()
+    serializer = MedicalReportVersionSerializer(versions, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def export_report_docx(request, pk):
+    try:
+        report = MedicalReport.objects.get(pk=pk)
+    except MedicalReport.DoesNotExist:
+        return Response({'error': 'Report not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    from .docx_export import export_report_to_docx
+    buffer = export_report_to_docx(report)
+    filename = f"rapport-{report.patient_id}-{report.pk}.docx"
+    return FileResponse(buffer, as_attachment=True, filename=filename)

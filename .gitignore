@@ -8,3 +8,11 @@ node_modules/
 dist/
 build/
 .env
+
+# Logs
+*.log
+logs/
+
+# MONAILabel cache
+monai-label/cache/
+monai-apps/radiology/logs/

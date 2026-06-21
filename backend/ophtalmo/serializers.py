@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Exam
+from .models import Exam, AnalysisReport, MedicalReport, MedicalReportVersion
 
 
 class ExamSerializer(serializers.ModelSerializer):
@@ -26,4 +26,80 @@ class ExamSerializer(serializers.ModelSerializer):
     def get_created_by_name(self, obj):
         if obj.created_by:
             return f"{obj.created_by.first_name} {obj.created_by.last_name}"
+        return None
+
+
+class AnalysisReportSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AnalysisReport
+        fields = [
+            'id', 'series_instance_uid', 'user', 'user_name',
+            'analysis_date', 'report_json',
+        ]
+        read_only_fields = ['id', 'user', 'analysis_date', 'user_name']
+
+    def get_user_name(self, obj):
+        if obj.user:
+            return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.username
+        return None
+
+
+class MedicalReportSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    validated_by_name = serializers.SerializerMethodField()
+    signed_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MedicalReport
+        fields = [
+            'id', 'patient_id', 'examination_id', 'generated_by_ai',
+            'status', 'ai_content', 'doctor_content', 'final_content',
+            'ai_confidence', 'ai_report_data',
+            'created_by', 'created_by_name',
+            'validated_by', 'validated_by_name', 'validated_at',
+            'signed_by', 'signed_by_name', 'signed_at',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'created_by', 'created_by_name',
+            'validated_by', 'validated_by_name', 'validated_at',
+            'signed_by', 'signed_by_name', 'signed_at',
+            'created_at', 'updated_at',
+        ]
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return f"{obj.created_by.first_name} {obj.created_by.last_name}".strip() or obj.created_by.username
+        return None
+
+    def get_validated_by_name(self, obj):
+        if obj.validated_by:
+            return f"{obj.validated_by.first_name} {obj.validated_by.last_name}".strip() or obj.validated_by.username
+        return None
+
+    def get_signed_by_name(self, obj):
+        if obj.signed_by:
+            return f"{obj.signed_by.first_name} {obj.signed_by.last_name}".strip() or obj.signed_by.username
+        return None
+
+
+class MedicalReportVersionSerializer(serializers.ModelSerializer):
+    modified_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MedicalReportVersion
+        fields = [
+            'id', 'report', 'version_number', 'content',
+            'version_type', 'modified_by', 'modified_by_name', 'modified_at',
+        ]
+        read_only_fields = [
+            'id', 'report', 'version_number', 'modified_by',
+            'modified_by_name', 'modified_at',
+        ]
+
+    def get_modified_by_name(self, obj):
+        if obj.modified_by:
+            return f"{obj.modified_by.first_name} {obj.modified_by.last_name}".strip() or obj.modified_by.username
         return None

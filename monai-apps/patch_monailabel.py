@@ -317,7 +317,7 @@ if os.path.exists(INFER):
 ### ANALYZE_ENDPOINT ###
 @router.post("/analyze")
 async def analyze(request: dict):
-    import json, tempfile, os, pathlib, hashlib, numpy as np
+    import json, tempfile, os, pathlib, hashlib, numpy as np, base64, io
     from pydicom import Dataset
     from pydicom.dataset import FileMetaDataset
     from pydicom.uid import generate_uid
@@ -332,7 +332,6 @@ async def analyze(request: dict):
     instance = app_instance()
     SEG_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
 
-    # ---- Segmentations ----
     labels = {}
     if run_seg:
         for m in SEG_MODELS:
@@ -345,7 +344,6 @@ async def analyze(request: dict):
             except Exception as e:
                 logger.error("Segmentation %s failed: %s", m, e)
 
-    # ---- Quantify Optic Disc/Cup ----
     optic = {"disc_area_px": 0, "cup_area_px": 0, "cup_disc_ratio": 0.0}
     if "optic_disc_cup" in labels:
         try:
@@ -360,7 +358,30 @@ async def analyze(request: dict):
         except Exception as e:
             logger.error("Optic disc/cup quantification failed: %s", e)
 
-    # ---- Quantify Vessels ----
+    glaucoma = {"vcdr": 0.0, "risk": "N/A", "disc_area_px": 0, "cup_area_px": 0}
+    if "optic_disc_cup" in labels:
+        try:
+            import nrrd
+            data, _ = nrrd.read(labels["optic_disc_cup"])
+            if data.ndim == 3:
+                data = data[0] if data.shape[0] == 1 else data.squeeze()
+            disc_mask = data == 1
+            cup_mask = data == 2
+            disc_area = int(np.sum(disc_mask))
+            cup_area = int(np.sum(cup_mask))
+            disc_rows = np.any(disc_mask, axis=1)
+            cup_rows = np.any(cup_mask, axis=1)
+            disc_h = np.max(np.where(disc_rows)) - np.min(np.where(disc_rows)) if disc_rows.any() else 0
+            cup_h = np.max(np.where(cup_rows)) - np.min(np.where(cup_rows)) if cup_rows.any() else 0
+            vcdr = cup_h / disc_h if disc_h > 0 else 0.0
+            if vcdr < 0.3: risk = "Faible"
+            elif vcdr < 0.5: risk = "Modere"
+            elif vcdr < 0.7: risk = "Eleve"
+            else: risk = "Tres eleve"
+            glaucoma = {"vcdr": round(vcdr, 4), "risk": risk, "disc_area_px": disc_area, "cup_area_px": cup_area}
+        except Exception as e:
+            logger.error("Glaucoma quantification failed: %s", e)
+
     vessel = {"coverage_pct": 0.0, "pixel_count": 0}
     if "vessel_seg" in labels:
         try:
@@ -374,7 +395,6 @@ async def analyze(request: dict):
         except Exception as e:
             logger.error("Vessel quantification failed: %s", e)
 
-    # ---- Quantify Lesions ----
     lesion = {"microaneurysms": 0, "hemorrhages": 0, "exudates": 0, "coverage_pct": 0.0}
     if "lesion_seg" in labels:
         try:
@@ -394,39 +414,45 @@ async def analyze(request: dict):
         except Exception as e:
             logger.error("Lesion quantification failed: %s", e)
 
-    # ---- DR Classification ----
-    dr = {"grade": "Unknown", "confidence": 0.0}
+    dr = {"grade": "Unknown", "confidence": 0.0, "probabilities": []}
     try:
         r = instance.infer({"model": "dr_classification", "image": image})
         if r:
             p = r.get("params", {})
-            grade = p.get("label", p.get("prediction", "Unknown"))
-            conf = p.get("probability", p.get("confidence", 0.0))
-            if isinstance(conf, (list, np.ndarray)):
-                conf = float(max(conf))
-            if isinstance(grade, list):
-                top = max(grade, key=lambda x: x.get("score", 0) if isinstance(x, dict) else 0)
-                grade = top.get("label", str(grade)) if isinstance(top, dict) else str(grade)
-                conf = top.get("score", conf) if isinstance(top, dict) else conf
-            if not grade or grade == "Unknown":
-                for key in ["grade", "label", "prediction", "class"]:
-                    val = r.get(key)
-                    if val:
-                        grade = str(val)
-                        break
-            dr = {"grade": str(grade), "confidence": round(float(conf), 4)}
+            predictions = p.get("prediction", [])
+            dr["probabilities"] = [{"label": pred["label"], "score": pred["score"]} for pred in predictions]
+            if predictions:
+                top = max(predictions, key=lambda x: x["score"])
+                dr["grade"] = top["label"]
+                dr["confidence"] = top["score"]
     except Exception as e:
         logger.error("DR classification failed: %s", e)
 
-    # ---- Build Report ----
+    gradcam_b64 = None
+    clahe_b64 = None
+    dr_task = instance._infers.get("dr_classification")
+    if dr_task and hasattr(dr_task, "_hf_model") and dr_task._hf_model is not None:
+        import sys; sys.path.insert(0, '/opt/monai/apps')
+        from xai_utils import generate_gradcam, generate_clahe
+        try:
+            gradcam_b64 = generate_gradcam(image, instance, dr_task)
+        except Exception as e:
+            logger.warning("Grad-CAM unavailable: %s", str(e)[:200])
+        try:
+            clahe_b64 = generate_clahe(image, instance)
+        except Exception as e:
+            logger.warning("CLAHE unavailable: %s", str(e)[:200])
+
     report = {
         "dr_classification": dr,
         "lesions": lesion,
         "optic_disc_cup": optic,
+        "glaucoma": glaucoma,
         "vessels": vessel,
+        "gradcam_image": gradcam_b64,
+        "clahe_image": clahe_b64,
     }
 
-    # ---- DICOM SR + Orthanc Push ----
     try:
         study_uid = request.get("study_uid", "1.2.3.4.5.6.7.8.9")
         series_uid = request.get("series_uid", None)
@@ -472,7 +498,6 @@ async def analyze(request: dict):
         ds.save_as(sr_path)
         logger.info("DICOM SR saved to %s", sr_path)
 
-        # Push to Orthanc
         import requests
         with open(sr_path, "rb") as f:
             resp = requests.post("http://orthanc-container:8042/instances", data=f, headers={"Content-Type": "application/dicom"})
@@ -488,7 +513,7 @@ async def analyze(request: dict):
             content = content[:idx] + analyze_code + content[idx:]
             with open(INFER, "w") as f:
                 f.write(content)
-            print("infer.py: inserted /infer/analyze endpoint BEFORE /{model} catch-all")
+            print("infer.py: inserted enhanced /infer/analyze endpoint BEFORE /{model} catch-all")
             patches_applied = True
         else:
             print("WARNING: Could not find /{model} route in infer.py to insert analyze endpoint")
