@@ -112,6 +112,7 @@ const SEED_USAGE: UsageEvent[] = [
 interface AuthContextValue {
   user: AppUser | null;
   users: AppUser[];
+  usage: UsageEvent[];
   login: (email: string, password: string) => Promise<{ ok: boolean; requirePasswordReset?: boolean; error?: string }>;
   logout: () => void;
   resetPassword: (email: string, newPassword: string) => Promise<{ ok: boolean; error?: string }>;
@@ -137,12 +138,24 @@ function loadUsers(): AppUser[] {
   }
 }
 
-
+function loadUsage(): UsageEvent[] {
+  if (typeof window === "undefined") return SEED_USAGE;
+  try {
+    const raw = localStorage.getItem(STORAGE_USAGE);
+    if (!raw) {
+      localStorage.setItem(STORAGE_USAGE, JSON.stringify(SEED_USAGE));
+      return SEED_USAGE;
+    }
+    return JSON.parse(raw) as UsageEvent[];
+  } catch {
+    return SEED_USAGE;
+  }
+}
 
 function loadSession(users: AppUser[]): AppUser | null {
   if (typeof window === "undefined") return null;
   try {
-    const id = sessionStorage.getItem(STORAGE_SESSION);
+    const id = localStorage.getItem(STORAGE_SESSION) || sessionStorage.getItem(STORAGE_SESSION);
     return users.find((u) => u.id === id) ?? null;
   } catch {
     return null;
@@ -152,18 +165,29 @@ function loadSession(users: AppUser[]): AppUser | null {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [initKeycloak, setInitKeycloak] = useState(false);
   const [users, setUsers] = useState<AppUser[]>(() => loadUsers());
+  const [usage, setUsage] = useState<UsageEvent[]>([]);
   const [user, setUser] = useState<AppUser | null>(() => loadSession(loadUsers()));
 
-
+  useEffect(() => {
+    fetch("http://localhost:8001/api/logs/")
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to fetch logs");
+        return res.json();
+      })
+      .then((data) => setUsage(data))
+      .catch((err) => console.error("Error loading logs from backend:", err));
+  }, [user]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_USERS, JSON.stringify(users));
   }, [users]);
 
-
+  useEffect(() => {
+    localStorage.setItem(STORAGE_USAGE, JSON.stringify(usage));
+  }, [usage]);
 
   useEffect(() => {
-    const token = sessionStorage.getItem("teleoph.token");
+    const token = localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
     if (token) {
       try {
         const decoded = jwtDecode<KeycloakTokenPayload>(token);
@@ -183,7 +207,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           lastName: decoded.family_name || "",
         };
 
-        sessionStorage.setItem(STORAGE_SESSION, loggedUser.id);
+        localStorage.setItem(STORAGE_SESSION, loggedUser.id);
         
         setUsers((prev) => {
           if (!prev.find((u) => u.id === loggedUser.id)) {
@@ -194,12 +218,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(loggedUser);
       } catch (err) {
         console.error("Token invalide", err);
+        localStorage.removeItem("teleoph.token");
+        localStorage.removeItem(STORAGE_SESSION);
         sessionStorage.removeItem("teleoph.token");
         sessionStorage.removeItem(STORAGE_SESSION);
         setUser(null);
       }
     } else {
       setUser(null);
+      localStorage.removeItem(STORAGE_SESSION);
       sessionStorage.removeItem(STORAGE_SESSION);
     }
     setInitKeycloak(true);
@@ -209,9 +236,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       user,
       users,
+      usage,
       login: async (email, password) => {
         try {
-          const loginUrl = "http://localhost:8000/api/auth/login/";
+          const loginUrl = "http://localhost:8001/api/auth/login/";
           
           const response = await fetch(loginUrl, {
               method: 'POST',
@@ -223,9 +251,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
           if (response.ok) {
               const tokens = await response.json();
-              sessionStorage.setItem('teleoph.token', tokens.access_token);
+              localStorage.setItem('teleoph.token', tokens.access_token);
               if (tokens.refresh_token) {
-                sessionStorage.setItem('teleoph.refresh_token', tokens.refresh_token);
+                localStorage.setItem('teleoph.refresh_token', tokens.refresh_token);
               }
               
               const decoded = jwtDecode<KeycloakTokenPayload>(tokens.access_token);
@@ -244,7 +272,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 lastName: decoded.family_name || "",
               };
 
-              sessionStorage.setItem(STORAGE_SESSION, loggedUser.id);
+              localStorage.setItem(STORAGE_SESSION, loggedUser.id);
               
               setUsers((prev) => {
                 if (!prev.find((u) => u.id === loggedUser.id)) {
@@ -267,9 +295,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       },
       logout: () => {
-        const refreshToken = sessionStorage.getItem("teleoph.refresh_token");
+        const refreshToken = localStorage.getItem("teleoph.refresh_token");
         if (refreshToken) {
-          fetch("http://localhost:8000/api/auth/logout/", {
+          fetch("http://localhost:8001/api/auth/logout/", {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json'
@@ -279,6 +307,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             console.error("Erreur lors de la déconnexion Keycloak:", err);
           });
         }
+        localStorage.removeItem(STORAGE_SESSION);
+        localStorage.removeItem("teleoph.token");
+        localStorage.removeItem("teleoph.refresh_token");
         sessionStorage.removeItem(STORAGE_SESSION);
         sessionStorage.removeItem("teleoph.token");
         sessionStorage.removeItem("teleoph.refresh_token");
@@ -286,7 +317,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       resetPassword: async (email, newPassword) => {
         try {
-          const res = await fetch("http://localhost:8000/api/auth/reset-password/", {
+          const res = await fetch("http://localhost:8001/api/auth/reset-password/", {
             method: "POST",
             headers: {
               "Content-Type": "application/json"
@@ -316,8 +347,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             createdBy: user ? `${user.firstName} ${user.lastName}` : ""
           };
 
-          const token = sessionStorage.getItem("teleoph.token");
-          const res = await fetch("http://localhost:8000/api/auth/register-user/", {
+          const token = localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
+          const res = await fetch("http://localhost:8001/api/auth/register-user/", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -366,8 +397,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             role: data.role ? (data.role === "Admin" ? "ADMIN_SYSTEME" : data.role === "Chef" ? "CHEF_SERVICE" : data.role === "Resident" ? "RESIDENT" : "OPHTALMOLOGUE") : undefined
           };
 
-          const token = sessionStorage.getItem("teleoph.token");
-          const res = await fetch("http://localhost:8000/api/users/update/", {
+          const token = localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
+          const res = await fetch("http://localhost:8001/api/users/update/", {
             method: "PUT",
             headers: {
               "Content-Type": "application/json",
@@ -418,7 +449,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       hasRole: (...roles) => !!user && roles.includes(user.role),
     }),
-    [user, users],
+    [user, users, usage],
   );
 
   if (!initKeycloak) {

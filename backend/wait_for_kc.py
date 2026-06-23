@@ -1,10 +1,13 @@
+import os
 import time
 import requests
 
-print('Waiting for Keycloak to be ready...')
+keycloak_url = os.environ.get('KEYCLOAK_SERVER_URL', 'http://localhost:8080/').rstrip('/')
+
+print(f'Waiting for Keycloak at {keycloak_url}...')
 while True:
     try:
-        response = requests.get('http://localhost:8080/realms/master')
+        response = requests.get(f'{keycloak_url}/realms/master')
         if response.status_code == 200:
             print('Keycloak is ready!')
             break

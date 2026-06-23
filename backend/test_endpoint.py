@@ -1,6 +1,6 @@
 import requests
 
-url = "http://localhost:8000/api/auth/register-user/"
+url = "http://localhost:8001/api/auth/register-user/"
 payload = {
     "email": "test@gmail.com",
     "prenom": "test",

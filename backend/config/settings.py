@@ -119,11 +119,11 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('DB_NAME', 'keycloak'),
-        'USER': os.environ.get('DB_USER', 'keycloak'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', 'password'),
+        'NAME': os.environ.get('DB_NAME', 'teleophtalmo'),
+        'USER': os.environ.get('DB_USER', 'django'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', 'django_password'),
         'HOST': os.environ.get('DB_HOST', 'localhost'),
-        'PORT': os.environ.get('DB_PORT', '5433'),
+        'PORT': os.environ.get('DB_PORT', '5432'),
     }
 }
 

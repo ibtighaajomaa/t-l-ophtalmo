@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth-context";
 import ForgotPassword from "../components/ForgotPassword";
 
 export const Route = createFileRoute("/login")({
-  head: () => ({ meta: [{ title: "Connexion — TéléOphta" }] }),
+  head: () => ({ meta: [{ title: "Connexion — Télé-rétinographie" }] }),
   component: LoginPage,
 });
 

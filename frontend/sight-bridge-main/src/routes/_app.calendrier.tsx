@@ -1,11 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { Navbar } from "@/components/Navbar";
 import { useAuth } from "@/lib/auth-context";
 import { MOCK_PLANNING } from "@/lib/mock-planning";
-import { MOCK_EXAMS } from "@/lib/mock-worklist";
-import { CalendarDays } from "lucide-react";
+import { fetchExams } from "@/lib/exam-api";
+import type { Exam } from "@/lib/mock-worklist";
+import { CalendarDays, Loader2 } from "lucide-react";
 import { Pagination } from "@/components/Pagination";
 
 export const Route = createFileRoute("/_app/calendrier")({
@@ -19,7 +20,16 @@ export const Route = createFileRoute("/_app/calendrier")({
 function CalendrierPage() {
   const { user } = useAuth();
   const [page, setPage] = useState(1);
-  
+  const [exams, setExams] = useState<Exam[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchExams({ page_size: 100 })
+      .then((r) => setExams(r.exams))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
   const normalize = (name: string) => name.toLowerCase().replace(/^(dr\.|pr|dr)\s+/i, '').trim();
 
   const planning = useMemo(() => {
@@ -42,15 +52,14 @@ function CalendrierPage() {
   // Calculer le nombre d'examens assignés par médecin
   const examsCountByDoctor = useMemo(() => {
     const map = new Map<string, number>();
-    MOCK_EXAMS.forEach((e) => {
+    exams.forEach((e) => {
       if (e.assignedTo) {
-        const normalize = (name: string) => name.toLowerCase().replace(/^(dr\.|pr|dr)\s+/i, '').trim();
         const normName = normalize(e.assignedTo);
         map.set(normName, (map.get(normName) || 0) + 1);
       }
     });
     return map;
-  }, []);
+  }, [exams]);
 
   return (
     <>

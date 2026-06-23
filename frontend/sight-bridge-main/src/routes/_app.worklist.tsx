@@ -19,7 +19,7 @@ function WorklistPage() {
     <>
       <Navbar title="Worklist" subtitle={subtitle} />
       <div className="flex-1 p-6">
-        <Worklist todayOnly showStats />
+        <Worklist showStats />
       </div>
     </>
   );

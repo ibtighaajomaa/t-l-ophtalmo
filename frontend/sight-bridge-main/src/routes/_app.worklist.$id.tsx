@@ -1,9 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState } from "react";
-import { ArrowLeft, Calendar, User, FileText, AlertCircle, MonitorPlay, Image } from "lucide-react";
+import { useState, useEffect } from "react";
+import { ArrowLeft, Calendar, User, FileText, AlertCircle, MonitorPlay, Image, Loader2 } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import { AIPanel } from "@/components/AIPanel";
-import { MOCK_EXAMS } from "@/lib/mock-worklist";
+import { getExam } from "@/lib/exam-api";
+import type { Exam } from "@/lib/mock-worklist";
 
 export const Route = createFileRoute("/_app/worklist/$id")({
   component: ExamDetail,
@@ -11,8 +12,28 @@ export const Route = createFileRoute("/_app/worklist/$id")({
 
 function ExamDetail() {
   const { id } = Route.useParams();
-  const exam = MOCK_EXAMS.find((e) => e.id === id);
+  const [exam, setExam] = useState<Exam | null>(null);
+  const [loading, setLoading] = useState(true);
   const [showViewer, setShowViewer] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    getExam(id)
+      .then(setExam)
+      .catch(() => setExam(null))
+      .finally(() => setLoading(false));
+  }, [id]);
+
+  if (loading) {
+    return (
+      <>
+        <Navbar title="Chargement…" />
+        <div className="flex-1 flex items-center justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+        </div>
+      </>
+    );
+  }
 
   if (!exam) {
     return (
@@ -41,7 +62,6 @@ function ExamDetail() {
         </Link>
 
         <div className="grid lg:grid-cols-3 gap-6">
-          {/* Image viewer / OHIF iframe */}
           <div className="lg:col-span-2 rounded-xl border border-slate-200 bg-slate-900 overflow-hidden">
             <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2 text-xs text-slate-300">
               <span className="font-mono">
@@ -68,7 +88,7 @@ function ExamDetail() {
             {showViewer && hasStudy ? (
               <div className="relative" style={{ height: "600px" }}>
                 <iframe
-                  src={`http://localhost:8099/viewer?StudyInstanceUIDs=${exam.studyInstanceUid}`}
+                  src={`/ohif/viewer?StudyInstanceUIDs=${exam.studyInstanceUid}`}
                   width="100%"
                   height="100%"
                   style={{ border: "none" }}
@@ -78,7 +98,6 @@ function ExamDetail() {
               </div>
             ) : (
               <div className="aspect-square relative flex items-center justify-center bg-gradient-radial from-amber-900 via-slate-900 to-black">
-                {/* Simulation d'un fond d'œil */}
                 <div
                   className="absolute inset-8 rounded-full"
                   style={{
@@ -108,7 +127,6 @@ function ExamDetail() {
             )}
           </div>
 
-          {/* Sidebar info */}
           <div className="space-y-4">
             {showViewer && hasStudy ? (
               <AIPanel />
