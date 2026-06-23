@@ -15,14 +15,17 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "TéléOphta — Plateforme de Télé-Ophtalmologie" },
+      { title: "Télé-rétinographie— Plateforme de Télé-Ophtalmologie" },
       {
         name: "description",
         content:
           "Plateforme sécurisée de télé-ophtalmologie : gestion des examens, interprétation à distance et collaboration multi-rôles.",
       },
     ],
-    links: [{ rel: "stylesheet", href: appCss }],
+    links: [
+      { rel: "stylesheet", href: appCss },
+      { rel: "icon", href: "/logo.png" }
+    ],
   }),
   shellComponent: RootShell,
   component: RootComponent,

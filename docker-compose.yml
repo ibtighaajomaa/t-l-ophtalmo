@@ -35,18 +35,18 @@ services:
       
       # 2. MÉTHODE SPI (Truststore physique)
       # On force Keycloak à utiliser notre keystore JKS contenant le vrai certificat
-      KC_SPI_TRUSTSTORE_FILE_FILE: "/opt/keycloak/conf/rns_truststore.jks"
-      KC_SPI_TRUSTSTORE_FILE_PASSWORD: "password"
-      KC_SPI_TRUSTSTORE_FILE_HOSTNAME_VERIFICATION_POLICY: "ANY"
+      # KC_SPI_TRUSTSTORE_FILE_FILE: "/opt/keycloak/conf/rns_truststore.jks"
+      # KC_SPI_TRUSTSTORE_FILE_PASSWORD: "password"
+      # KC_SPI_TRUSTSTORE_FILE_HOSTNAME_VERIFICATION_POLICY: "ANY"
       
       # Option Quarkus pour la prod/dev
       QUARKUS_TLS_TRUST_ALL: "true"
       
-    volumes:
-      - ./rns_truststore.jks:/opt/keycloak/conf/rns_truststore.jks
-      - ./rns.crt:/opt/keycloak/conf/truststores/rns.crt
+    # volumes:
+      # - ./rns_truststore.jks:/opt/keycloak/conf/rns_truststore.jks
+      # - ./rns.crt:/opt/keycloak/conf/truststores/rns.crt
     ports:
-      - "8080:8080"
+      - "8180:8080"
     depends_on:
       postgres-keycloak:
         condition: service_healthy

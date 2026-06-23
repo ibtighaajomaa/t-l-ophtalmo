@@ -178,14 +178,14 @@ AUTHENTICATION_BACKENDS = (
 
 OIDC_RP_CLIENT_ID = os.environ.get('KEYCLOAK_CLIENT_ID', 'django-backend')
 OIDC_RP_CLIENT_SECRET = os.environ.get('KEYCLOAK_CLIENT_SECRET', 'VOTRE_SECRET_KEYCLOAK')
-OIDC_OP_AUTHORIZATION_ENDPOINT = "http://localhost:8080/realms/HopitalRealm/protocol/openid-connect/auth"
-OIDC_OP_TOKEN_ENDPOINT = "http://localhost:8080/realms/HopitalRealm/protocol/openid-connect/token"
-OIDC_OP_USER_ENDPOINT = "http://localhost:8080/realms/HopitalRealm/protocol/openid-connect/userinfo"
-OIDC_OP_JWKS_ENDPOINT = "http://localhost:8080/realms/HopitalRealm/protocol/openid-connect/certs"
+OIDC_OP_AUTHORIZATION_ENDPOINT = "http://localhost:8180/realms/HopitalRealm/protocol/openid-connect/auth"
+OIDC_OP_TOKEN_ENDPOINT = "http://localhost:8180/realms/HopitalRealm/protocol/openid-connect/token"
+OIDC_OP_USER_ENDPOINT = "http://localhost:8180/realms/HopitalRealm/protocol/openid-connect/userinfo"
+OIDC_OP_JWKS_ENDPOINT = "http://localhost:8180/realms/HopitalRealm/protocol/openid-connect/certs"
 
 KEYCLOAK_ADMIN_USER = os.environ.get('KEYCLOAK_ADMIN', 'admin')
 KEYCLOAK_ADMIN_PASSWORD = os.environ.get('KEYCLOAK_ADMIN_PASSWORD', 'admin')
-KEYCLOAK_SERVER_URL = os.environ.get('KEYCLOAK_SERVER_URL', 'http://localhost:8080/')
+KEYCLOAK_SERVER_URL = os.environ.get('KEYCLOAK_SERVER_URL', 'http://localhost:8180/')
 KEYCLOAK_REALM = os.environ.get('KEYCLOAK_REALM', 'HopitalRealm')
 
 REST_FRAMEWORK = {
@@ -207,7 +207,7 @@ EMAIL_USE_TLS = True
 DEFAULT_FROM_EMAIL = 'support@teleophta.fr'
 
 # Keycloak settings
-KC_ADMIN_URL = "http://localhost:8080"
+KC_ADMIN_URL = "http://localhost:8180"
 KC_REALM = "HopitalRealm"
 KC_CLIENT_ID = "django-service"
 KC_CLIENT_SECRET = "VOTRE_SECRET_KEYCLOAK"
