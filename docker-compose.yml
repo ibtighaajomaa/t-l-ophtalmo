@@ -20,6 +20,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - teleophtalmo
 
   keycloak:
     image: quay.io/keycloak/keycloak:23.0.0
@@ -54,20 +56,32 @@ services:
     depends_on:
       postgres-keycloak:
         condition: service_healthy
-
-  ohif-viewer:
-    image: ohif/app:v3.8.0
-    container_name: ohif-viewer
-    ports:
-      - "5434:5432"
-    volumes:
-      - postgres-django-data:/var/lib/postgresql/data
     networks:
       - teleophtalmo
+
 
   # =========================
   #  DJANGO BACKEND
   # =========================
+  postgres-django:
+    image: postgres:15
+    container_name: postgres-django
+    environment:
+      POSTGRES_DB: teleophtalmo
+      POSTGRES_USER: django
+      POSTGRES_PASSWORD: django_password
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres-django-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U django -d teleophtalmo"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - teleophtalmo
+
   backend:
     build:
       context: ./backend
@@ -204,7 +218,7 @@ services:
     container_name: monai-label
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8002:8000"
     volumes:
       - ./monai-apps:/opt/monai/apps
       - monai-studies:/opt/monai/studies
@@ -252,3 +266,11 @@ services:
 # =========================
 volumes:
   postgres-keycloak-data:
+  postgres-django-data:
+  orthanc-index-data:
+  orthanc-storage:
+  monai-studies:
+
+networks:
+  teleophtalmo:
+    driver: bridge
