@@ -5,8 +5,12 @@ window.config = {
   // 🧩 EXTENSIONS
   // =========================
   extensions: [
-    '@ohif/extension-monai-label',
+    '@ohif/extension-default',
+    '@ohif/extension-cornerstone',
+    '@ohif/extension-cornerstone-dicom-sr',
     '@ohif/extension-cornerstone-dicom-seg',
+    '@ohif/extension-measurement-tracking',
+    '@ohif/extension-monai-label',
   ],
 
   modes: ['@ohif/mode-monai-label', '@ohif/mode-longitudinal', '@ohif/mode-segmentation'],
@@ -56,7 +60,7 @@ window.config = {
         supportsFuzzyMatching: false,
         supportsWildcard: true,
 
-        staticWado: true,
+        staticWado: false,
         singlepart: 'bulkdata',
 
         acceptHeader: [
