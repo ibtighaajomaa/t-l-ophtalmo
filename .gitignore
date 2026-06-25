@@ -7,7 +7,20 @@ backend/venv/
 node_modules/
 dist/
 build/
+
+# Environment / Secrets
 .env
+.env.*
+*.env
+backend/.env
+
+# Database
+*.sqlite3
+
+# Test files with credentials
+backend/test_rns_email.py
+backend/test_rns_email2.py
+backend/test_django_email.py
 
 # Logs
 *.log

@@ -202,8 +202,8 @@ REST_FRAMEWORK = {
 EMAIL_BACKEND = 'config.email_backend.UnverifiedEmailBackend'
 EMAIL_HOST = os.environ.get('EMAIL_HOST', 'sandbox.smtp.mailtrap.io')
 EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 2525))
-EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '92aa9f6ee83488')
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '0f8226391ffcde')
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() in ['true', '1', 't', 'y', 'yes']
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'support@teleophta.fr')
 
