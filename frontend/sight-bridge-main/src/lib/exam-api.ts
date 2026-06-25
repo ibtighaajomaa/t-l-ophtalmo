@@ -42,7 +42,7 @@ function getHeaders(): Record<string, string> {
     "Content-Type": "application/json",
   };
   if (typeof window !== "undefined") {
-    const token = sessionStorage.getItem("teleoph.token");
+    const token = localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
@@ -174,7 +174,8 @@ export async function getExam(id: string): Promise<Exam> {
 
 export async function syncWithOrthanc(): Promise<{
   created: number;
-  skipped: number;
+  updated: number;
+  errors: number;
   total: number;
 }> {
   const res = await fetch(`${BASE}/sync-orthanc/`, {

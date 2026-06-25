@@ -11,6 +11,7 @@ window.config = {
     '@ohif/extension-cornerstone-dicom-seg',
     '@ohif/extension-measurement-tracking',
     '@ohif/extension-monai-label',
+    '@ohif/extension-iframe-bridge',
   ],
 
   modes: ['@ohif/mode-monai-label', '@ohif/mode-longitudinal', '@ohif/mode-segmentation'],

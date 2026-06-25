@@ -7,6 +7,7 @@ INFER = "/usr/local/lib/python3.10/dist-packages/monailabel/endpoints/infer.py"
 patches_applied = False
 
 # Patch 1: convert.py - synthetic geometry, FRUID hash, FRUID save/restore, mask dim fix
+# (Legacy patterns – kept for older image versions that still have the for-loop form)
 if os.path.exists(CONVERT):
     with open(CONVERT) as f:
         content = f.read()
@@ -53,7 +54,7 @@ if os.path.exists(CONVERT):
             if has_fruid:
                 logger.info(f'FRUID already present on source: {ds.FrameOfReferenceUID}')
             else:
-                new_fruid = "2.25." + hashlib.md5(str(ds.SOPInstanceUID).encode()).hexdigest()[:39]
+                new_fruid = "2.25." + str(int(hashlib.md5(str(ds.SOPInstanceUID).encode()).hexdigest(), 16))[:39]
                 ds.FrameOfReferenceUID = new_fruid
                 logger.info(f'Set FRUID on source: {new_fruid}')
             logger.info(f'SOP: {ds.SOPInstanceUID}')'''
@@ -61,7 +62,7 @@ if os.path.exists(CONVERT):
         content = content.replace(old_read, new_read)
         changes.append("convert.py: list comprehension + geometry injection + FRUID hash")
     else:
-        print("WARNING: convert.py for-loop read pattern not found")
+        print("INFO: convert.py for-loop read pattern not found (already patched or different version)")
 
     # Fix: reshape label mask if dimensions don't match source DICOMs
     old_mask = '''        mask = SimpleITK.ReadImage(label)
@@ -111,6 +112,167 @@ if os.path.exists(CONVERT):
             f.write(content)
         print(" | ".join(changes))
         patches_applied = True
+
+# Patch 9: OHIF compatibility — geometry injection into ALL source DICOMs + StudyUID post-process
+# Targets the CURRENT installed state: list-comprehension read + existing FRUID save/restore.
+# Root causes addressed:
+#   Cause 2: geometry injection missing from ALL source datasets (only reads stop_before_pixels)
+#   Cause 3: StudyInstanceUID not enforced on output SEG after writer.write()
+OHIF_GEOM_MARKER = "### OHIF_GEOM_ALL ###"
+if os.path.exists(CONVERT):
+    with open(CONVERT) as f:
+        content = f.read()
+
+    if OHIF_GEOM_MARKER not in content:
+        _p9_changed = False
+
+        # Fix A: Inject geometry into ALL source datasets after list-comprehension read.
+        # The current installed code reads with stop_before_pixels=True but never
+        # injects ImagePositionPatient / FrameOfReferenceUID — causing pydicom_seg
+        # to fail for OP/fundus images that lack these mandatory spatial tags.
+        old_geom = '''        image_datasets = [dcmread(str(f), stop_before_pixels=True) for f in image_files]
+        logger.info(f"Total Source Images: {len(image_datasets)}")'''
+        new_geom = '''        image_datasets = [dcmread(str(f), stop_before_pixels=True) for f in image_files]
+        logger.info(f"Total Source Images: {len(image_datasets)}")
+
+        ### OHIF_GEOM_ALL ###
+        # Inject synthetic geometry into ALL source datasets lacking spatial tags.
+        # Fundus / OP images have no ImagePositionPatient or FrameOfReferenceUID;
+        # pydicom_seg needs these to build PerFrameFunctionalGroupsSequence correctly.
+        import hashlib as _ohif_hl
+        _src_study_uid_geom = None
+        for _gi, _gds in enumerate(image_datasets):
+            # Capture StudyInstanceUID from first source for post-processing
+            if _src_study_uid_geom is None and hasattr(_gds, "StudyInstanceUID"):
+                _src_study_uid_geom = str(_gds.StudyInstanceUID)
+            # Assign a unique per-slice FrameOfReferenceUID derived from SOPInstanceUID
+            if not hasattr(_gds, "FrameOfReferenceUID"):
+                _gds.FrameOfReferenceUID = (
+                    "2.25." + str(int(_ohif_hl.md5(str(_gds.SOPInstanceUID).encode()).hexdigest(), 16))[:39]
+                )
+                logger.info(f"Injected FRUID on src[{_gi}]: {_gds.FrameOfReferenceUID}")
+            if not hasattr(_gds, "ImagePositionPatient"):
+                _gds.ImagePositionPatient = [0.0, 0.0, float(_gi)]
+                _gds.ImageOrientationPatient = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+                _gds.SliceThickness = 1.0
+                _gds.SpacingBetweenSlices = 1.0
+                logger.info(f"Injected IPP/IOP/thickness on src[{_gi}]")'''
+        if old_geom in content:
+            content = content.replace(old_geom, new_geom)
+            _p9_changed = True
+            print("convert.py Patch 9A: geometry injection into ALL source datasets applied")
+        else:
+            print("WARNING: Patch 9A — list-comprehension read pattern not found in convert.py")
+
+        # Fix B: Post-process output SEG to enforce StudyInstanceUID from source.
+        # pydicom_seg may not copy StudyInstanceUID correctly, causing OHIF to miss
+        # the SEG when browsing a study (OHIF only loads SEGs within the open study).
+        old_save_dcm = '''        if expected_fruid:
+            dcm.FrameOfReferenceUID = expected_fruid
+            logger.info(f'Set SEG FRUID: {expected_fruid}')
+        else:
+            logger.warning('Could not set SEG FRUID (no source FRUID available)')
+        dcm.save_as(output_file)'''
+        new_save_dcm = '''        if expected_fruid:
+            dcm.FrameOfReferenceUID = expected_fruid
+            logger.info(f'Set SEG FRUID: {expected_fruid}')
+        else:
+            logger.warning('Could not set SEG FRUID (no source FRUID available)')
+        # OHIF fix: enforce StudyInstanceUID from source so SEG appears in same study
+        if _src_study_uid_geom and (not hasattr(dcm, 'StudyInstanceUID') or str(dcm.StudyInstanceUID) != _src_study_uid_geom):
+            dcm.StudyInstanceUID = _src_study_uid_geom
+            logger.info(f'Set SEG StudyInstanceUID: {_src_study_uid_geom}')
+        # OHIF fix: enforce PatientID / PatientName from source if present
+        _src_ds0 = image_datasets[0] if image_datasets else None
+        if _src_ds0 and hasattr(_src_ds0, 'PatientID'):
+            dcm.PatientID = str(_src_ds0.PatientID)
+        if _src_ds0 and hasattr(_src_ds0, 'PatientName'):
+            dcm.PatientName = str(_src_ds0.PatientName)
+        # OHIF fix: enforce ReferencedSeriesSequence SeriesInstanceUID from source
+        if _src_ds0 and hasattr(_src_ds0, "SeriesInstanceUID") and hasattr(dcm, "ReferencedSeriesSequence"):
+            for _rs in dcm.ReferencedSeriesSequence:
+                if hasattr(_rs, "SeriesInstanceUID"):
+                    _rs.SeriesInstanceUID = str(_src_ds0.SeriesInstanceUID)
+                    logger.info(f"Fixed SEG ReferencedSeriesSequence SeriesUID: {_src_ds0.SeriesInstanceUID}")
+        # OHIF fix: enforce ReferencedSOPInstanceUID in ALL functional groups sequences.
+        # Cornerstone3D reads both PerFrameFunctionalGroupsSequence AND
+        # SharedFunctionalGroupsSequence.  Also handles ReferencedImageSequence
+        # as a fallback path.
+        if image_datasets:
+            _p10_valid_sops = {str(ds.SOPInstanceUID) for ds in image_datasets if hasattr(ds, "SOPInstanceUID")}
+            _p10_sop_list = [str(ds.SOPInstanceUID) for ds in image_datasets if hasattr(ds, "SOPInstanceUID")]
+            if _p10_valid_sops:
+                # Validate frame count
+                if hasattr(dcm, "PerFrameFunctionalGroupsSequence"):
+                    _nf = len(dcm.PerFrameFunctionalGroupsSequence)
+                    _ns = len(_p10_sop_list)
+                    if _nf != _ns:
+                        logger.warning(
+                            f"Frame count mismatch: SEG has {_nf} frames "
+                            f"but source has {_ns} images"
+                        )
+
+                def _fix_sop_ref_p9(_fg_item, _frame_idx, _sop_list, _uid_set):
+                    _lm = False
+                    # Path 1: DerivationImageSequence > SourceImageSequence
+                    if hasattr(_fg_item, "DerivationImageSequence"):
+                        for _d in _fg_item.DerivationImageSequence:
+                            if hasattr(_d, "SourceImageSequence"):
+                                for _sr in _d.SourceImageSequence:
+                                    if not hasattr(_sr, "ReferencedSOPInstanceUID"):
+                                        continue
+                                    _cu = str(_sr.ReferencedSOPInstanceUID)
+                                    if _cu not in _uid_set:
+                                        _rn = _sop_list[_frame_idx] if _frame_idx < len(_sop_list) else _sop_list[0]
+                                        logger.warning(
+                                            f"Frame {_frame_idx}: ReferencedSOPInstanceUID "
+                                            f"{_cu[:60]}... not in source set -> patching to {_rn[:60]}..."
+                                        )
+                                        _sr.ReferencedSOPInstanceUID = _rn
+                                        _lm = True
+                    # Path 2: ReferencedImageSequence (direct)
+                    if hasattr(_fg_item, "ReferencedImageSequence"):
+                        for _sr in _fg_item.ReferencedImageSequence:
+                            if not hasattr(_sr, "ReferencedSOPInstanceUID"):
+                                continue
+                            _cu = str(_sr.ReferencedSOPInstanceUID)
+                            if _cu not in _uid_set:
+                                _rn = _sop_list[_frame_idx] if _frame_idx < len(_sop_list) else _sop_list[0]
+                                logger.warning(
+                                    f"Frame {_frame_idx} (ReferencedImageSequence): "
+                                    f"ReferencedSOPInstanceUID {_cu[:60]}... -> patching to {_rn[:60]}..."
+                                )
+                                _sr.ReferencedSOPInstanceUID = _rn
+                                _lm = True
+                    return _lm
+
+                # Fix PerFrameFunctionalGroupsSequence
+                if hasattr(dcm, "PerFrameFunctionalGroupsSequence"):
+                    for _p10_fi, _p10_fg in enumerate(dcm.PerFrameFunctionalGroupsSequence):
+                        if _fix_sop_ref_p9(_p10_fg, _p10_fi, _p10_sop_list, _p10_valid_sops):
+                            pass  # modifications tracked inside helper
+
+                # Fix SharedFunctionalGroupsSequence
+                if hasattr(dcm, "SharedFunctionalGroupsSequence"):
+                    for _sfg in dcm.SharedFunctionalGroupsSequence:
+                        for _sfi in range(len(_p10_sop_list)):
+                            _fix_sop_ref_p9(_sfg, _sfi, _p10_sop_list, _p10_valid_sops)
+        dcm.save_as(output_file)'''
+        if old_save_dcm in content:
+            content = content.replace(old_save_dcm, new_save_dcm)
+            _p9_changed = True
+            print("convert.py Patch 9B: StudyUID/SOPUID post-processing added")
+        else:
+            print("WARNING: Patch 9B — FRUID save pattern not found in convert.py (check Patch 1 applied)")
+
+        if _p9_changed:
+            with open(CONVERT, "w") as f:
+                f.write(content)
+            print("convert.py: OHIF geometry+StudyUID fixes applied (Patch 9)")
+            patches_applied = True
+    else:
+        patches_applied = True  # Patch 9 already applied
+        print("convert.py: Patch 9 already applied")
 
 # Patch 2: infer.py - fix label_info fallback + use_itk=False + send_response fallback
 if os.path.exists(INFER):
@@ -209,7 +371,7 @@ if os.path.exists(INFER):
                             if not hasattr(src_ds, 'FrameOfReferenceUID') or needs_ipp:
                                 src_full = dcmread(src_path)
                                 if not hasattr(src_full, 'FrameOfReferenceUID'):
-                                    src_full.FrameOfReferenceUID = "2.25." + hashlib.md5(str(src_full.SOPInstanceUID).encode()).hexdigest()[:39]
+                                    src_full.FrameOfReferenceUID = "2.25." + str(int(hashlib.md5(str(src_full.SOPInstanceUID).encode()).hexdigest(), 16))[:39]
                                 if needs_ipp:
                                     src_full.ImagePositionPatient = [0, 0, 0]
                                     src_full.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
@@ -263,7 +425,7 @@ if os.path.exists(INFER):
                             if not hasattr(src_ds, 'FrameOfReferenceUID') or needs_ipp:
                                 src_full = dcmread(src_path)
                                 if not hasattr(src_full, 'FrameOfReferenceUID'):
-                                    src_full.FrameOfReferenceUID = "2.25." + hashlib.md5(str(src_full.SOPInstanceUID).encode()).hexdigest()[:39]
+                                    src_full.FrameOfReferenceUID = "2.25." + str(int(hashlib.md5(str(src_full.SOPInstanceUID).encode()).hexdigest(), 16))[:39]
                                 if needs_ipp:
                                     src_full.ImagePositionPatient = [0, 0, 0]
                                     src_full.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
@@ -608,6 +770,230 @@ if os.path.exists(INFER):
             f.write(content)
         print("infer.py: study_uid + patient_id injected into source DICOMs BEFORE SEG gen")
         patches_applied = True
+
+
+# Patch 8: Fix DICOM SEG for OHIF — BINARY type + geometry injection + StudyUID post-processing
+# Target: _highdicom_nifti_to_dicom_seg() inside the installed convert.py
+OHIF_SEG_MARKER = "### OHIF_SEG_COMPAT ###"
+if os.path.exists(CONVERT):
+    with open(CONVERT) as f:
+        content = f.read()
+
+    if OHIF_SEG_MARKER not in content:
+        _p8_changed = False
+
+        # ── Fix A: Geometry injection + BINARY pixel_array ──────────────────────
+        # Replace the hd.seg.Segmentation() call that uses LABELMAP with one that:
+        #   1. Injects geometry into all source datasets in-memory
+        #   2. Builds a 4D BINARY one-hot mask (D, H, W, n_segs)
+        #   3. Uses BINARY segmentation type for broad OHIF/Cornerstone3D support
+        old_seg_labelmap = '''    seg = hd.seg.Segmentation(
+        source_images=image_datasets,
+        pixel_array=seg_array,
+        segmentation_type=hd.seg.SegmentationTypeValues.LABELMAP,'''
+        new_seg_binary = '''    ### OHIF_SEG_COMPAT ###
+    # Inject geometry into ALL source datasets lacking spatial tags (fundus/OP images)
+    import hashlib as _hl
+    for _si, _sd in enumerate(image_datasets):
+        if not hasattr(_sd, "FrameOfReferenceUID"):
+            _sd.FrameOfReferenceUID = "2.25." + str(int(_hl.md5(str(_sd.SOPInstanceUID).encode()).hexdigest(), 16))[:39]
+        if not hasattr(_sd, "ImagePositionPatient"):
+            _sd.ImagePositionPatient = [0.0, 0.0, float(_si)]
+            _sd.ImageOrientationPatient = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+            _sd.SliceThickness = 1.0
+            _sd.SpacingBetweenSlices = 1.0
+    # Build BINARY one-hot masks (D, H, W, n_segs) for OHIF compatibility
+    _nsegs = len(segment_descriptions)
+    _sa = seg_array if seg_array.ndim == 3 else seg_array[np.newaxis]
+    _bin = np.stack([(_sa == s + 1).astype(np.uint8) for s in range(_nsegs)], axis=-1)
+    seg = hd.seg.Segmentation(
+        source_images=image_datasets,
+        pixel_array=_bin,
+        segmentation_type=hd.seg.SegmentationTypeValues.BINARY,'''
+
+        if old_seg_labelmap in content:
+            content = content.replace(old_seg_labelmap, new_seg_binary)
+            _p8_changed = True
+            print("convert.py Patch 8A: LABELMAP→BINARY + geometry injection applied")
+        else:
+            # Fallback: at least inject the marker and switch type alone
+            if "SegmentationTypeValues.LABELMAP" in content:
+                content = content.replace(
+                    "SegmentationTypeValues.LABELMAP",
+                    "SegmentationTypeValues.BINARY  ### OHIF_SEG_COMPAT ###"
+                )
+                _p8_changed = True
+                print("convert.py Patch 8A (fallback): LABELMAP→BINARY only")
+            else:
+                # Already patched or BINARY already in use; add marker so we skip next run
+                print("WARNING: Patch 8A — LABELMAP pattern not found (already BINARY or different version)")
+
+        # ── Fix B: Post-process SEG to enforce StudyInstanceUID from source ──────
+        old_save_return = '''    seg.save_as(output_file)
+    logger.info(f"DICOM SEG saved to: {output_file}")
+
+    return output_file'''
+        new_save_return = '''    seg.save_as(output_file)
+    logger.info(f"DICOM SEG saved to: {output_file}")
+
+    # OHIF fix: enforce StudyInstanceUID + ReferencedSeriesSequence + PerFrame ReferencedSOPInstanceUID from source images
+    try:
+        if image_datasets:
+            _st = str(image_datasets[0].StudyInstanceUID) if hasattr(image_datasets[0], "StudyInstanceUID") else None
+            _sr = str(image_datasets[0].SeriesInstanceUID) if hasattr(image_datasets[0], "SeriesInstanceUID") else None
+            _p10_valid_sops = {str(ds.SOPInstanceUID) for ds in image_datasets if hasattr(ds, "SOPInstanceUID")}
+            _p10_sop_list = [str(ds.SOPInstanceUID) for ds in image_datasets if hasattr(ds, "SOPInstanceUID")}
+            if _st or _sr or _p10_valid_sops:
+                from pydicom import dcmread as _dr
+                _seg_fix = _dr(output_file)
+                _mod_fix = False
+                if _st and str(_seg_fix.StudyInstanceUID) != _st:
+                    _seg_fix.StudyInstanceUID = _st
+                    _mod_fix = True
+                    logger.info(f"Fixed SEG StudyInstanceUID: {_st}")
+                if _sr and hasattr(_seg_fix, "ReferencedSeriesSequence"):
+                    for _rs in _seg_fix.ReferencedSeriesSequence:
+                        if hasattr(_rs, "SeriesInstanceUID") and str(_rs.SeriesInstanceUID) != _sr:
+                            _rs.SeriesInstanceUID = _sr
+                            _mod_fix = True
+                            logger.info(f"Fixed SEG ReferencedSeriesSequence SeriesUID: {_sr}")
+                # Fix ReferencedSOPInstanceUID in ALL functional groups sequences.
+                # Cornerstone3D reads both PerFrameFunctionalGroupsSequence AND
+                # SharedFunctionalGroupsSequence.  Also handles ReferencedImageSequence
+                # as a fallback path.
+                if _p10_valid_sops:
+                    # Validate frame count
+                    if hasattr(_seg_fix, "PerFrameFunctionalGroupsSequence"):
+                        _nf = len(_seg_fix.PerFrameFunctionalGroupsSequence)
+                        _ns = len(_p10_sop_list)
+                        if _nf != _ns:
+                            logger.warning(
+                                f"Frame count mismatch: SEG has {_nf} frames "
+                                f"but source has {_ns} images"
+                            )
+
+                    def _fix_sop_ref_p10(_fg_item, _frame_idx, _sop_list, _uid_set):
+                        _lm = False
+                        # Path 1: DerivationImageSequence > SourceImageSequence
+                        if hasattr(_fg_item, "DerivationImageSequence"):
+                            for _d in _fg_item.DerivationImageSequence:
+                                if hasattr(_d, "SourceImageSequence"):
+                                    for _sr in _d.SourceImageSequence:
+                                        if not hasattr(_sr, "ReferencedSOPInstanceUID"):
+                                            continue
+                                        _cu = str(_sr.ReferencedSOPInstanceUID)
+                                        if _cu not in _uid_set:
+                                            _rn = _sop_list[_frame_idx] if _frame_idx < len(_sop_list) else _sop_list[0]
+                                            logger.warning(
+                                                f"Frame {_frame_idx}: ReferencedSOPInstanceUID "
+                                                f"{_cu[:60]}... not in source set -> patching to {_rn[:60]}..."
+                                            )
+                                            _sr.ReferencedSOPInstanceUID = _rn
+                                            _lm = True
+                        # Path 2: ReferencedImageSequence (direct)
+                        if hasattr(_fg_item, "ReferencedImageSequence"):
+                            for _sr in _fg_item.ReferencedImageSequence:
+                                if not hasattr(_sr, "ReferencedSOPInstanceUID"):
+                                    continue
+                                _cu = str(_sr.ReferencedSOPInstanceUID)
+                                if _cu not in _uid_set:
+                                    _rn = _sop_list[_frame_idx] if _frame_idx < len(_sop_list) else _sop_list[0]
+                                    logger.warning(
+                                        f"Frame {_frame_idx} (ReferencedImageSequence): "
+                                        f"ReferencedSOPInstanceUID {_cu[:60]}... -> patching to {_rn[:60]}..."
+                                    )
+                                    _sr.ReferencedSOPInstanceUID = _rn
+                                    _lm = True
+                        return _lm
+
+                    # Fix PerFrameFunctionalGroupsSequence
+                    if hasattr(_seg_fix, "PerFrameFunctionalGroupsSequence"):
+                        for _p10_fi, _p10_fg in enumerate(_seg_fix.PerFrameFunctionalGroupsSequence):
+                            if _fix_sop_ref_p10(_p10_fg, _p10_fi, _p10_sop_list, _p10_valid_sops):
+                                _mod_fix = True
+
+                    # Fix SharedFunctionalGroupsSequence
+                    if hasattr(_seg_fix, "SharedFunctionalGroupsSequence"):
+                        for _sfg in _seg_fix.SharedFunctionalGroupsSequence:
+                            for _sfi in range(len(_p10_sop_list)):
+                                if _fix_sop_ref_p10(_sfg, _sfi, _p10_sop_list, _p10_valid_sops):
+                                    _mod_fix = True
+                if _mod_fix:
+                    _seg_fix.save_as(output_file)
+                    logger.info("SEG re-saved with corrected study/series/SOP UIDs")
+    except Exception as _pe:
+        logger.warning(f"SEG UID post-processing skipped: {_pe}")
+
+    return output_file'''
+
+        if old_save_return in content:
+            content = content.replace(old_save_return, new_save_return)
+            _p8_changed = True
+            print("convert.py Patch 8B: StudyUID/SOPUID post-processing added")
+        else:
+            print("WARNING: Patch 8B — seg.save_as block not found (pattern mismatch?)")
+
+        if _p8_changed:
+            with open(CONVERT, "w") as f:
+                f.write(content)
+            print("convert.py: OHIF SEG compatibility fixes applied (Patch 8/10)")
+            patches_applied = True
+    else:
+        patches_applied = True  # Patch 8 already applied
+
+# Patch 10: Add Django webhook call after each Orthanc push to notify the worklist
+if os.path.exists(INFER):
+    with open(INFER) as f:
+        content = f.read()
+
+    marker_django = "### MONAI_DJANGO_WEBHOOK ###"
+    if marker_django not in content:
+        # Replace Orthanc push calls to also notify Django worklist
+        old_push = '''                    resp = requests.post("http://orthanc-container:8042/instances", data=f, headers={"Content-Type": "application/dicom"})
+                            logger.info(f"Pushed DICOM-SEG to Orthanc: {resp.status_code}")'''
+        new_push = '''                    resp = requests.post("http://orthanc-container:8042/instances", data=f, headers={"Content-Type": "application/dicom"})
+                            logger.info(f"Pushed DICOM-SEG to Orthanc: {resp.status_code}")
+                            # Notify Django worklist
+                            try:
+                                import json as _dj_json
+                                _dj_body = _dj_json.dumps({"study_instance_uid": str(source_study_uid or ""), "status": "AI_ANALYZED"})
+                                _dj_resp = requests.post("http://backend:8001/api/exams/monai-webhook/", data=_dj_body, headers={"Content-Type": "application/json"}, timeout=10)
+                                logger.info(f"Notified Django worklist: {_dj_resp.status_code}")
+                            except Exception as _dj_e:
+                                logger.warning(f"Failed to notify Django worklist: {_dj_e}")
+                        ### MONAI_DJANGO_WEBHOOK ###'''
+
+        if old_push in content:
+            content = content.replace(old_push, new_push)
+            with open(INFER, "w") as f:
+                f.write(content)
+            print("infer.py Patch 10: Django worklist webhook added after Orthanc push")
+            patches_applied = True
+        else:
+            # Try the alternative push pattern (from Patch 3/7 auto-push)
+            old_push2 = '''                            resp = requests.post("http://orthanc-container:8042/instances", data=f, headers={"Content-Type": "application/dicom"})
+                            logger.info(f"Pushed DICOM-SEG to Orthanc: {resp.status_code}")'''
+            new_push2 = '''                            resp = requests.post("http://orthanc-container:8042/instances", data=f, headers={"Content-Type": "application/dicom"})
+                            logger.info(f"Pushed DICOM-SEG to Orthanc: {resp.status_code}")
+                            # Notify Django worklist
+                            try:
+                                import json as _dj_json
+                                _dj_body = _dj_json.dumps({"study_instance_uid": str(source_study_uid or ""), "status": "AI_ANALYZED"})
+                                _dj_resp = requests.post("http://backend:8001/api/exams/monai-webhook/", data=_dj_body, headers={"Content-Type": "application/json"}, timeout=10)
+                                logger.info(f"Notified Django worklist: {_dj_resp.status_code}")
+                            except Exception as _dj_e:
+                                logger.warning(f"Failed to notify Django worklist: {_dj_e}")
+                        ### MONAI_DJANGO_WEBHOOK ###'''
+            if old_push2 in content:
+                content = content.replace(old_push2, new_push2)
+                with open(INFER, "w") as f:
+                    f.write(content)
+                print("infer.py Patch 10: Django worklist webhook added after Orthanc push (alt)")
+                patches_applied = True
+            else:
+                print("WARNING: Patch 10 — Orthanc push pattern not found in infer.py")
+    else:
+        patches_applied = True  # Patch 10 already applied
 
 if not patches_applied:
     print("No patches needed (already applied or versions mismatch)")

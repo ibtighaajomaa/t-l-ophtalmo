@@ -214,6 +214,16 @@ KC_CLIENT_ID = "django-service"
 KC_CLIENT_SECRET = "VOTRE_SECRET_KEYCLOAK"
 
 # =========================
+#  CACHE CONFIGURATION (Redis)
+# =========================
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': os.environ.get('REDIS_URL', 'redis://redis:6379/1'),
+    }
+}
+
+# =========================
 #  CELERY CONFIGURATION
 # =========================
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0')
@@ -228,6 +238,10 @@ CELERY_BEAT_SCHEDULE = {
     'verification-quotidienne-24h': {
         'task': 'ophtalmo.tasks.tache_verification_24h',
         'schedule': timedelta(hours=24),
+    },
+    'sync-orthanc-incremental': {
+        'task': 'ophtalmo.tasks.tache_sync_orthanc_incremental',
+        'schedule': timedelta(seconds=60),
     },
 }
 

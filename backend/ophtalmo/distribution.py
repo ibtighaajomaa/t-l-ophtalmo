@@ -54,8 +54,8 @@ def get_examens_en_attente():
     ).order_by(
         # Urgent en premier (les valeurs "Urgent" sont triées avant "Normal" inversé)
         '-priority',
-        # Le plus ancien d'abord
-        'created_at',
+        # Le plus ancien d'abord (date de l'examen)
+        'date',
     )
 
 
@@ -85,8 +85,8 @@ def trier_avec_equite_regionale(examens):
     def score_examen(exam):
         # Score de priorité : Urgent = 0 (premier), Normal = 1
         urgence_score = 0 if exam.priority == 'Urgent' else 1
-        # Score de temps : plus ancien = plus petit timestamp
-        temps_score = exam.created_at.timestamp() if exam.created_at else 0
+        # Score de temps : plus ancien = date plus ancienne = plus petit ordinal
+        temps_score = exam.date.toordinal() if exam.date else 0
         # Score régional : régions moins servies = score plus bas = priorité
         region_score = region_scores.get(exam.region, 0)
         return (urgence_score, region_score, temps_score)
@@ -252,6 +252,46 @@ def recalculer_charges():
     return {'profils_corriges': updated}
 
 
+@transaction.atomic
+def assigner_examens_nouveau_medecin(profil):
+    """
+    Assigne immédiatement jusqu'à MAX_CHARGE_PAR_MEDECIN examens 
+    les plus prioritaires à un nouveau médecin dès la création de son compte.
+    """
+    if profil.role not in ROLES_MEDECIN or not profil.is_disponible:
+        return {'distribues': 0}
+
+    # Ne distribuer que la capacité restante (normalement MAX_CHARGE_PAR_MEDECIN si nouveau)
+    capacite = max(0, MAX_CHARGE_PAR_MEDECIN - profil.charge_actuelle)
+    if capacite <= 0:
+        return {'distribues': 0}
+
+    examens_attente = list(get_examens_en_attente())
+    if not examens_attente:
+        logger.info("Aucun examen en attente à assigner au nouveau médecin.")
+        return {'distribues': 0}
+
+    examens_tries = trier_avec_equite_regionale(examens_attente)[:capacite]
+    distribues = 0
+
+    for examen in examens_tries:
+        examen.assigned_to = profil.user
+        examen.status = 'En cours'
+        examen.date_assignation = timezone.now()
+        examen.save(update_fields=['assigned_to', 'status', 'date_assignation'])
+        distribues += 1
+
+    if distribues > 0:
+        profil.charge_actuelle += distribues
+        profil.save(update_fields=['charge_actuelle'])
+        logger.info(
+            f"Initialisation rapide : {distribues} examens assignés à "
+            f"au Dr {profil.user.get_full_name() or profil.user.username}"
+        )
+
+    return {'distribues': distribues}
+
+
 def _envoyer_rappel_email(user, examen):
     """Envoie un email de rappel au médecin pour un examen en retard."""
     try:
@@ -283,3 +323,30 @@ Plateforme de Télédépistage de la Rétinopathie
         logger.info(f"Rappel envoyé à {user.email} pour l'examen #{examen.id}")
     except Exception as e:
         logger.error(f"Erreur envoi rappel à {user.email}: {e}")
+
+
+@transaction.atomic
+def rendre_indisponible_et_reassigner(user_id):
+    """Libère les patients d'un médecin et relance la distribution."""
+    try:
+        profil = Profil.objects.get(user_id=user_id)
+    except Profil.DoesNotExist:
+        return 0
+
+    profil.is_disponible = False
+    profil.save(update_fields=['is_disponible'])
+
+    # 1. Libérer ses examens en cours
+    examens = Exam.objects.filter(assigned_to_id=user_id, status='En cours')
+    count = examens.count()
+    
+    examens.update(status='En attente', assigned_to=None, date_assignation=None)
+    
+    # 2. Remettre sa charge à 0
+    profil.charge_actuelle = 0
+    profil.save(update_fields=['charge_actuelle'])
+
+    # 3. Redistribuer immédiatement à TOUS les autres médecins disponibles
+    distribuer_examens()
+    
+    return count

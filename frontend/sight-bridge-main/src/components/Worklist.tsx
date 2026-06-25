@@ -76,7 +76,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
     setSyncing(true);
     try {
       const result = await syncWithOrthanc();
-      alert(`Synchronisation terminée : ${result.created} créé(s), ${result.skipped} ignoré(s)`);
+      alert(`Synchronisation terminée : ${result.created} créé(s), ${result.updated} mis à jour, ${result.errors} erreur(s)`);
       loadExams();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Erreur de synchronisation";
@@ -97,19 +97,9 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
     }
   };
 
-  const scopedExams = useMemo(() => {
-    console.log("[Worklist] scopedExams input:", exams.length, "user role:", user?.role);
-    if (user?.role === "Medecin" || user?.role === "Resident") {
-      const myName = `Dr. ${user?.firstName} ${user?.lastName}`;
-      const filtered = exams.filter(
-        (e) => e.assignedTo === myName || e.assignedTo === null,
-      );
-      console.log("[Worklist] scopedExams output:", filtered.length);
-      return filtered;
-    }
-    console.log("[Worklist] scopedExams output (all):", exams.length);
-    return exams;
-  }, [exams, user]);
+  // Le backend filtre déjà par utilisateur authentifié (token Keycloak).
+  // Pas besoin de filtrer côté client.
+  const scopedExams = exams;
 
   const filtered = useMemo(
     () =>
@@ -128,8 +118,10 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
   );
 
   const paginatedExams = useMemo(() => {
-    return filtered.slice((page - 1) * 10, page * 10);
-  }, [filtered, page]);
+    // Les données sont déjà paginées par le backend (10 par page).
+    // Inutile de faire un slice() qui casserait l'affichage à partir de la page 2.
+    return filtered;
+  }, [filtered]);
 
   return (
     <div className="space-y-4">
@@ -306,7 +298,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
         </div>
         <Pagination
           currentPage={page}
-          totalPages={Math.ceil(filtered.length / 10)}
+          totalPages={Math.ceil(total / 10)}
           onPageChange={setPage}
         />
       </div>

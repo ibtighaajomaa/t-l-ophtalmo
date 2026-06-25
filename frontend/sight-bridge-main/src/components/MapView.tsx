@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup, GeoJSON } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, GeoJSON, useMapEvents } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
@@ -21,6 +21,13 @@ interface RegionData {
   en_attente: number;
   en_cours: number;
   interprete: number;
+}
+
+function MapEventHandler({ onMapClick }: { onMapClick: () => void }) {
+  useMapEvents({
+    click: () => onMapClick(),
+  });
+  return null;
 }
 
 export default function MapView({
@@ -110,8 +117,8 @@ export default function MapView({
       scrollWheelZoom={true}
       dragging={true}
       className="w-full h-full"
-      onClick={() => setSelectedRegionId(null)}
     >
+      <MapEventHandler onMapClick={() => setSelectedRegionId(null)} />
       <style>
         {`
           .leaflet-bar {

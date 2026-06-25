@@ -1,0 +1,51 @@
+{
+  "name": "@ohif/extension-iframe-bridge",
+  "version": "3.0.0",
+  "description": "OHIFv3 extension for postMessage iframe bridge (worklist ↔ OHIF synchronization)",
+  "author": "TeleOphtalmo",
+  "license": "MIT",
+  "main": "dist/ohif-extension-iframe-bridge.umd.js",
+  "module": "src/index.tsx",
+  "files": [
+    "dist/**",
+    "public/**",
+    "README.md"
+  ],
+  "repository": "OHIF/Viewers",
+  "keywords": [
+    "ohif-extension"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=14",
+    "npm": ">=6",
+    "yarn": ">=1.18.0"
+  },
+  "scripts": {
+    "clean": "shx rm -rf dist",
+    "clean:deep": "yarn run clean && shx rm -rf node_modules",
+    "dev": "cross-env NODE_ENV=development webpack --config .webpack/webpack.dev.js --watch --output-pathinfo",
+    "build": "cross-env NODE_ENV=production webpack --config .webpack/webpack.prod.js",
+    "build:package-1": "yarn run build",
+    "start": "yarn run dev",
+    "test:unit": "jest --watchAll",
+    "test:unit:ci": "jest --ci --runInBand --collectCoverage --passWithNoTests"
+  },
+  "peerDependencies": {
+    "@ohif/core": "3.11.0",
+    "@ohif/extension-cornerstone": "3.11.0",
+    "@ohif/extension-default": "3.11.0",
+    "@ohif/i18n": "3.11.0",
+    "prop-types": "^15.6.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-i18next": "^12.2.2",
+    "react-router": "^6.23.1",
+    "react-router-dom": "^6.23.1"
+  },
+  "dependencies": {
+    "@babel/runtime": "^7.20.13"
+  }
+}

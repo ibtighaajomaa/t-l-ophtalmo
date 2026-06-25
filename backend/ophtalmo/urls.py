@@ -6,6 +6,7 @@ urlpatterns = [
     path('api/exams/stats/', views.exam_stats, name='exam-stats'),
     path('api/exams/sync-orthanc/', views.sync_orthanc, name='exam-sync-orthanc'),
     path('api/exams/orthanc-webhook/', views.orthanc_webhook, name='orthanc-webhook'),
+    path('api/exams/monai-webhook/', views.monai_inference_webhook, name='monai-inference-webhook'),
     path('api/exams/distribuer/', views.distribuer_manuellement, name='distribuer-examens'),
     path('api/exams/mes-examens/', views.mes_examens, name='mes-examens'),
     path('api/exams/save-analysis/', views.save_analysis, name='save-analysis'),

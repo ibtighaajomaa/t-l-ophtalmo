@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Activity, Search } from "lucide-react";
+import { Activity, Search, UserCheck, UserX } from "lucide-react";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { Navbar } from "@/components/Navbar";
 import { useAuth, type Role, type UsageEvent } from "@/lib/auth-context";
@@ -60,17 +60,47 @@ function LogsPage() {
     loadLogs();
   }, [logsPage, query]);
 
-  const filteredUsers = useMemo(() => {
-    return users.filter((u) => {
-      if (u.role === "Admin") return false;
-      const fullName = `${u.firstName} ${u.lastName}`.toLowerCase();
-      return !userQuery || fullName.includes(userQuery.toLowerCase());
-    });
-  }, [users, userQuery]);
+  // Users backend state
+  const [backendUsers, setBackendUsers] = useState<any[]>([]);
+  const [usersTotalPages, setUsersTotalPages] = useState(0);
+  const [reloadTrigger, setReloadTrigger] = useState(0);
 
-  const paginatedUsers = useMemo(() => {
-    return filteredUsers.slice((usersPage - 1) * 10, usersPage * 10);
-  }, [filteredUsers, usersPage]);
+  // Fetch paginated users
+  useEffect(() => {
+    const loadUsers = async () => {
+      try {
+        let url = `/api/users/paginated/?page=${usersPage}&size=10`;
+        if (userQuery) url += `&search=${encodeURIComponent(userQuery)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.users) {
+          setBackendUsers(data.users);
+          setUsersTotalPages(data.total_pages);
+        }
+      } catch (err) {
+        console.error("Erreur de chargement des utilisateurs", err);
+      }
+    };
+    loadUsers();
+  }, [usersPage, userQuery, reloadTrigger]);
+
+  const handleToggleAvailability = async (email: string) => {
+    try {
+      const res = await fetch("/api/users/toggle-status/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setReloadTrigger(prev => prev + 1);
+      } else {
+        alert("Erreur : " + data.error);
+      }
+    } catch (err) {
+      alert("Erreur réseau");
+    }
+  };
 
   return (
     <>
@@ -127,7 +157,7 @@ function LogsPage() {
                         <td className="py-3 pr-4 font-medium text-slate-900">
                           {e.userName}
                         </td>
-                        <td className="py-3 pr-4 text-slate-600">{ROLE_LABEL[e.role] || e.role}</td>
+                        <td className="py-3 pr-4 text-slate-600">{ROLE_LABEL[e.role as Role] || e.role}</td>
                         <td className="py-3 pr-4">
                           <span
                             className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
@@ -176,27 +206,44 @@ function LogsPage() {
                   <th className="py-2 pr-4">Email</th>
                   <th className="py-2 pr-4">Téléphone</th>
                   <th className="py-2 pr-4">Créé le</th>
+                  <th className="py-2 pr-4">Disponibilité</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {paginatedUsers.length === 0 ? (
+                {backendUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="py-6 text-center text-slate-500">
+                    <td colSpan={6} className="py-6 text-center text-slate-500">
                       Aucun utilisateur enregistré.
                     </td>
                   </tr>
                 ) : (
-                  paginatedUsers.map((u) => {
+                  backendUsers.map((u) => {
                     return (
                       <tr key={u.id} className="hover:bg-slate-50">
                         <td className="py-3 pr-4 font-medium text-slate-900">
                           {u.firstName} {u.lastName}
                         </td>
-                        <td className="py-3 pr-4 text-slate-600">{ROLE_LABEL[u.role]}</td>
+                        <td className="py-3 pr-4 text-slate-600">{ROLE_LABEL[u.role as Role]}</td>
                         <td className="py-3 pr-4 text-slate-600">{u.email}</td>
                         <td className="py-3 pr-4 text-slate-600">{u.phone ?? "—"}</td>
                         <td className="py-3 pr-4 text-slate-600">
                           {u.createdAt ? u.createdAt.slice(0, 10) : "—"}
+                        </td>
+                        <td className="py-3 pr-4">
+                          {(u.role === "Medecin" || u.role === "Resident") ? (
+                            <button
+                              onClick={() => handleToggleAvailability(u.email)}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium transition hover:opacity-80 cursor-pointer ${
+                                u.is_disponible ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                              }`}
+                              title={u.is_disponible ? "Rendre Indisponible" : "Rendre Disponible"}
+                            >
+                              {u.is_disponible ? <UserCheck size={12} /> : <UserX size={12} />}
+                              {u.is_disponible ? " Disponible" : " Indisponible"}
+                            </button>
+                          ) : (
+                            <span className="text-slate-400 text-xs">—</span>
+                          )}
                         </td>
                       </tr>
                     );
@@ -207,7 +254,7 @@ function LogsPage() {
           </div>
           <Pagination
             currentPage={usersPage}
-            totalPages={Math.ceil(filteredUsers.length / 10)}
+            totalPages={Math.max(1, usersTotalPages)}
             onPageChange={setUsersPage}
           />
         </section>

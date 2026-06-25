@@ -28,6 +28,10 @@ def exam_list(request):
         if status_param and status_param != 'Tous':
             exams = exams.filter(status=status_param)
 
+        study_uid = request.query_params.get('study_instance_uid')
+        if study_uid:
+            exams = exams.filter(study_instance_uid=study_uid)
+
         q = request.query_params.get('q', '')
         if q:
             exams = exams.filter(
@@ -52,11 +56,11 @@ def exam_list(request):
         if request.user.is_authenticated:
             try:
                 profil = request.user.profil
-                if profil.role in ('Medecin', 'Resident'):
+                if profil.role in ('Medecin', 'Resident', 'OPHTALMOLOGUE', 'CHEF_SERVICE', 'Chef'):
                     exams = exams.filter(
                         Q(assigned_to=request.user) | Q(created_by=request.user)
                     )
-            except Exam.profil.RelatedObjectDoesNotExist:
+            except Exception:
                 pass
 
         page = int(request.query_params.get('page', 1))
@@ -141,13 +145,28 @@ def sync_orthanc(request):
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
+    force_refresh = request.query_params.get('force_refresh', '').lower() in ('true', '1')
+
+    # Récupérer les UIDs déjà présents en base en une seule requête SQL
+    existing_uids = set(
+        Exam.objects.filter(study_instance_uid__in=study_ids)
+        .values_list('study_instance_uid', flat=True)
+    )
+
     created = 0
-    skipped = 0
+    updated = 0
+    errors = 0
+
     for study_id in study_ids:
-        if Exam.objects.filter(study_instance_uid=study_id).exists():
-            skipped += 1
+        already_exists = study_id in existing_uids
+
+        # Chemin rapide : l'étude existe et on ne force pas le rafraîchissement
+        if already_exists and not force_refresh:
+            updated += 1
             continue
 
+        # Appel Orthanc uniquement pour les nouvelles études
+        # (ou toutes si force_refresh=true)
         try:
             detail = requests.get(
                 f'{ORTHANC_URL}/studies/{study_id}',
@@ -156,7 +175,7 @@ def sync_orthanc(request):
             detail.raise_for_status()
             meta = detail.json()
         except requests.RequestException:
-            skipped += 1
+            errors += 1
             continue
 
         main_patient = meta.get('PatientMainDicomTags', {})
@@ -183,19 +202,41 @@ def sync_orthanc(request):
         institution = main_dicom.get('InstitutionName', '')
         region = institution if institution else ''
 
-        Exam.objects.create(
-            study_instance_uid=study_id,
-            patient_name=patient_name,
-            patient_age=patient_age,
-            exam_type='Rétinographie',
-            date=study_date,
-            priority='Normal',
-            status='En attente',
-            region=region,
-            modality_ip='',
-            notes='',
-        )
-        created += 1
+        if already_exists:
+            # force_refresh=true : mettre à jour les métadonnées DICOM
+            # sans écraser le statut ni l'assignation
+            existing = Exam.objects.filter(study_instance_uid=study_id).first()
+            if existing:
+                changed_fields = []
+                if existing.patient_name != patient_name:
+                    existing.patient_name = patient_name
+                    changed_fields.append('patient_name')
+                if existing.patient_age != patient_age:
+                    existing.patient_age = patient_age
+                    changed_fields.append('patient_age')
+                if existing.date != study_date:
+                    existing.date = study_date
+                    changed_fields.append('date')
+                if existing.region != region:
+                    existing.region = region
+                    changed_fields.append('region')
+                if changed_fields:
+                    existing.save(update_fields=changed_fields)
+            updated += 1
+        else:
+            Exam.objects.create(
+                study_instance_uid=study_id,
+                patient_name=patient_name,
+                patient_age=patient_age,
+                exam_type='Rétinographie',
+                date=study_date,
+                priority='Normal',
+                status='En attente',
+                region=region,
+                modality_ip='',
+                notes='',
+            )
+            created += 1
 
     # Déclencher la distribution automatique après la sync
     if created > 0:
@@ -209,8 +250,10 @@ def sync_orthanc(request):
 
     return Response({
         'created': created,
-        'skipped': skipped,
+        'updated': updated,
+        'errors': errors,
         'total': len(study_ids),
+        'force_refresh': force_refresh,
     })
 
 
@@ -293,6 +336,58 @@ def orthanc_webhook(request):
         'patient_name': patient_name,
         'study_id': study_id,
     }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def monai_inference_webhook(request):
+    """
+    Webhook appelé par MONAI Label après une inférence réussie.
+    Met à jour l'examen correspondant dans la worklist avec les résultats IA.
+    Body attendu: {
+        "study_instance_uid": "...",
+        "status": "AI_ANALYZED" | "AI_FAILED",
+        "analysis": { ... }  // optionnel, résultats d'analyse
+    }
+    """
+    study_uid = request.data.get('study_instance_uid')
+    if not study_uid:
+        return Response(
+            {'error': 'study_instance_uid is required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    ai_status = request.data.get('status', 'AI_ANALYZED')
+    analysis_data = request.data.get('analysis')
+
+    try:
+        exam = Exam.objects.get(study_instance_uid=study_uid)
+    except Exam.DoesNotExist:
+        return Response(
+            {'error': 'No exam found for this study UID'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if exam.status == 'En attente':
+        exam.status = 'En cours'
+        exam.save(update_fields=['status'])
+
+    if analysis_data:
+        AnalysisReport.objects.create(
+            series_instance_uid=study_uid,
+            user=None,
+            report_json={
+                'source': 'monai_label',
+                'status': ai_status,
+                'data': analysis_data,
+            },
+        )
+
+    return Response({
+        'status': 'updated',
+        'exam_id': exam.id,
+        'study_instance_uid': study_uid,
+    })
 
 
 @api_view(['POST'])

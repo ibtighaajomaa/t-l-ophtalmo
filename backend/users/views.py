@@ -745,6 +745,9 @@ def get_paginated_users(request):
             telephone = prof.telephone if prof and prof.telephone else (u.get('attributes', {}).get('phone', [''])[0] if u.get('attributes') else '')
             created_by_attr = u.get('attributes', {}).get('createdBy', [''])[0] if u.get('attributes') else ''
             
+            is_disponible = prof.is_disponible if prof else True
+            charge_actuelle = prof.charge_actuelle if prof else 0
+            
             created_at = u.get('createdTimestamp', 0)
             from datetime import datetime
             created_at_iso = datetime.fromtimestamp(created_at / 1000.0).isoformat() + "Z" if created_at else ""
@@ -757,7 +760,9 @@ def get_paginated_users(request):
                 "role": local_role,
                 "phone": telephone,
                 "createdAt": created_at_iso,
-                "createdBy": created_by_attr
+                "createdBy": created_by_attr,
+                "is_disponible": is_disponible,
+                "charge_actuelle": charge_actuelle
             })
             
         total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
@@ -794,3 +799,51 @@ def get_user_stats(request):
         })
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+
+@api_view(['POST'])
+@authentication_classes([]) # Ajuster l'authentification selon vos besoins
+@permission_classes([permissions.AllowAny])
+def toggle_medecin_status_admin(request):
+    """
+    Endpoint pour l'admin : bascule la disponibilité d'un médecin.
+    S'il devient indisponible, ses examens sont réassignés.
+    """
+    email = request.data.get('email')
+    if not email:
+        return Response({"error": "L'email du médecin est requis"}, status=400)
+        
+    try:
+        # On utilise get_or_create pour éviter les erreurs 404 si le profil local n'existe pas encore
+        # On essaie d'abord de trouver par email si le username est différent (comme pour admin)
+        user = User.objects.filter(email=email).first()
+        if not user:
+            user, _ = User.objects.get_or_create(username=email, defaults={'email': email})
+            
+        profil, _ = Profil.objects.get_or_create(user=user, defaults={'role': 'Medecin'})
+        
+        # Toggle de la disponibilité
+        if profil.is_disponible:
+            # S'il était disponible, on le rend indisponible et on réassigne ses examens
+            from ophtalmo.distribution import rendre_indisponible_et_reassigner
+            reassigned_count = rendre_indisponible_et_reassigner(user.id)
+            message = f"Médecin rendu indisponible. {reassigned_count} examens réassignés."
+        else:
+            # S'il était indisponible, on le rend disponible et on distribue de nouveaux examens
+            from ophtalmo.distribution import distribuer_examens
+            profil.is_disponible = True
+            profil.save(update_fields=['is_disponible'])
+            distribuer_examens()
+            message = "Médecin de nouveau disponible et prêt à recevoir des examens."
+            
+        return Response({
+            "status": "success", 
+            "message": message, 
+            "is_disponible": profil.is_disponible, 
+            "charge_actuelle": profil.charge_actuelle
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": f"Erreur serveur : {str(e)}"}, status=500)
+

@@ -37,6 +37,8 @@ export interface AppUser {
   phone?: string;
   createdAt?: string; // ISO date
   createdBy?: string; // Admin's name who added the user
+  is_disponible?: boolean;
+  charge_actuelle?: number;
 }
 
 export interface UsageEvent {

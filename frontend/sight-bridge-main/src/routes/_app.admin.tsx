@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Users, Trash2, Stethoscope, GraduationCap, Briefcase, Activity, Edit, X } from "lucide-react";
+import { Users, Trash2, Stethoscope, GraduationCap, Briefcase, Activity, Edit, X, UserCheck, UserX } from "lucide-react";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { Navbar } from "@/components/Navbar";
-import { useAuth, type Role } from "@/lib/auth-context";
+import { useAuth, type Role, type AppUser } from "@/lib/auth-context";
 import { Pagination } from "@/components/Pagination";
 
 export const Route = createFileRoute("/_app/admin")({
@@ -32,6 +32,7 @@ function AdminDashboard() {
   const [loading, setLoading] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
+  const [reloadTrigger, setReloadTrigger] = useState(0);
   
   const [stats, setStats] = useState({ total: 0, chefs: 0, medecins: 0, residents: 0 });
 
@@ -116,7 +117,7 @@ function AdminDashboard() {
       }
     };
     loadUsers();
-  }, [usersPage, nameFilter, filter]);
+  }, [usersPage, nameFilter, filter, user?.role, user?.firstName, user?.lastName, reloadTrigger]);
 
   const visibleUsers = users.filter((u) => {
     if (user?.role === "Chef") {
@@ -130,7 +131,25 @@ function AdminDashboard() {
     if (!confirm(`Supprimer l'utilisateur "${name}" ?`)) return;
     const res = deleteUser(id);
     if (!res.ok) setError(res.error ?? "Erreur");
-    else setError(null);
+    else { setError(null); setReloadTrigger(prev => prev + 1); }
+  };
+
+  const handleToggleAvailability = async (email: string) => {
+    try {
+      const res = await fetch("/api/users/toggle-status/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setReloadTrigger(prev => prev + 1);
+      } else {
+        alert("Erreur : " + data.error);
+      }
+    } catch (err) {
+      alert("Erreur réseau");
+    }
   };
 
   const handleEdit = (u: AppUser) => {
@@ -167,6 +186,7 @@ function AdminDashboard() {
       
       if (res.ok) {
         setEditingUser(null);
+        setReloadTrigger(prev => prev + 1);
       } else {
         setEditError(res.error || "Une erreur est survenue lors de la mise à jour.");
       }
@@ -233,8 +253,8 @@ function AdminDashboard() {
                 <tr className="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
                   <th className="w-1/4 py-2 pr-4">Nom</th>
                   <th className="w-1/6 py-2 pr-4">Rôle</th>
-                  <th className="w-1/4 py-2 pr-4">Email</th>
-                  <th className="w-1/6 py-2 pr-4">Téléphone</th>
+                  <th className="w-1/4 py-2 pr-4">Contact</th>
+                  <th className="w-1/6 py-2 pr-4">Disponibilité</th>
                   {user?.role === "Admin" && <th className="w-1/6 py-2 pr-4">Ajouté par</th>}
                   <th className="w-1/6 py-2 pr-4 text-right">Actions</th>
                 </tr>
@@ -261,10 +281,54 @@ function AdminDashboard() {
                       <td className="py-3 pr-4">
                         <RoleBadge role={u.role} />
                       </td>
-                      <td className="py-3 pr-4 text-slate-600">{u.email}</td>
-                      <td className="py-3 pr-4 text-slate-600">{u.phone || "—"}</td>
+                      <td className="py-3 pr-4 text-slate-600">
+                        <div className="font-medium">{u.email}</div>
+                        <div className="text-xs text-slate-400 mt-0.5">{u.phone || "—"}</div>
+                      </td>
+                      <td className="py-3 pr-4">
+                        {(u.role === "Medecin" || u.role === "Resident") ? (
+                          <div className="flex flex-col gap-1.5">
+                            <div>
+                              {u.is_disponible ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-green-100 text-green-700">
+                                  <UserCheck size={12} /> Disponible
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-700">
+                                  <UserX size={12} /> Indisponible
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <div className="w-16 bg-slate-200 rounded-full h-1.5">
+                                <div 
+                                  className={`h-1.5 rounded-full ${(u.charge_actuelle || 0) >= 25 ? 'bg-orange-500' : 'bg-blue-500'}`} 
+                                  style={{width: `${Math.min(((u.charge_actuelle || 0)/30)*100, 100)}%`}}>
+                                </div>
+                              </div>
+                              <span className="text-[10px] text-slate-500 font-medium">{u.charge_actuelle || 0}/30</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 text-xs">—</span>
+                        )}
+                      </td>
                       {user?.role === "Admin" && <td className="py-3 pr-4 text-slate-600">{u.createdBy || "—"}</td>}
                     <td className="py-3 pr-4 text-right space-x-2">
+                      {user?.role === "Admin" && (u.role === "Medecin" || u.role === "Resident") && (
+                        <button
+                          onClick={() => handleToggleAvailability(u.email)}
+                          className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
+                            u.is_disponible 
+                            ? "text-red-600 hover:bg-red-50" 
+                            : "text-green-600 hover:bg-green-50"
+                          }`}
+                          title={u.is_disponible ? "Rendre Indisponible" : "Rendre Disponible"}
+                        >
+                          {u.is_disponible ? <UserX className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}
+                          Basculer
+                        </button>
+                      )}
                       <button
                         onClick={() => handleEdit(u)}
                         className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50"
