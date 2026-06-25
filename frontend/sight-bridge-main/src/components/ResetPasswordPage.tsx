@@ -20,7 +20,7 @@ export const ResetPasswordPage = () => {
     setError(null);
     
     try {
-      const res = await axios.post('http://localhost:8001/api/confirm-reset/', { token, password });
+      const res = await axios.post('/api/confirm-reset/', { token, password });
       const email = res.data.email;
       
       // Auto-login with the new password

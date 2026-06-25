@@ -9,7 +9,7 @@ const ForgotPassword = () => {
         e.preventDefault();
         try {
             // Appel à votre API Django
-            const response = await axios.post('http://localhost:8001/api/request-reset/', { email });
+            const response = await axios.post('/api/request-reset/', { email });
             setMessage(response.data.message || response.data.error);
         } catch (error) {
             setMessage("Une erreur est survenue.");

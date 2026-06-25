@@ -178,14 +178,14 @@ AUTHENTICATION_BACKENDS = (
 
 OIDC_RP_CLIENT_ID = os.environ.get('KEYCLOAK_CLIENT_ID', 'django-backend')
 OIDC_RP_CLIENT_SECRET = os.environ.get('KEYCLOAK_CLIENT_SECRET', 'VOTRE_SECRET_KEYCLOAK')
-OIDC_OP_AUTHORIZATION_ENDPOINT = "http://localhost:8180/realms/HopitalRealm/protocol/openid-connect/auth"
-OIDC_OP_TOKEN_ENDPOINT = "http://localhost:8180/realms/HopitalRealm/protocol/openid-connect/token"
-OIDC_OP_USER_ENDPOINT = "http://localhost:8180/realms/HopitalRealm/protocol/openid-connect/userinfo"
-OIDC_OP_JWKS_ENDPOINT = "http://localhost:8180/realms/HopitalRealm/protocol/openid-connect/certs"
+OIDC_OP_AUTHORIZATION_ENDPOINT = "http://193.95.31.196/auth/realms/HopitalRealm/protocol/openid-connect/auth"
+OIDC_OP_TOKEN_ENDPOINT = "http://193.95.31.196/auth/realms/HopitalRealm/protocol/openid-connect/token"
+OIDC_OP_USER_ENDPOINT = "http://193.95.31.196/auth/realms/HopitalRealm/protocol/openid-connect/userinfo"
+OIDC_OP_JWKS_ENDPOINT = "http://193.95.31.196/auth/realms/HopitalRealm/protocol/openid-connect/certs"
 
 KEYCLOAK_ADMIN_USER = os.environ.get('KEYCLOAK_ADMIN', 'admin')
 KEYCLOAK_ADMIN_PASSWORD = os.environ.get('KEYCLOAK_ADMIN_PASSWORD', 'admin')
-KEYCLOAK_SERVER_URL = os.environ.get('KEYCLOAK_SERVER_URL', 'http://localhost:8180/')
+KEYCLOAK_SERVER_URL = os.environ.get('KEYCLOAK_SERVER_URL', 'http://193.95.31.196/auth/')
 KEYCLOAK_REALM = os.environ.get('KEYCLOAK_REALM', 'HopitalRealm')
 
 REST_FRAMEWORK = {
@@ -198,16 +198,16 @@ REST_FRAMEWORK = {
 }
 
 # Email settings
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'sandbox.smtp.mailtrap.io'
-EMAIL_PORT = 2525
-EMAIL_HOST_USER = '92aa9f6ee83488'
-EMAIL_HOST_PASSWORD = '0f8226391ffcde' # N'oubliez pas de mettre le vrai mot de passe ici
-EMAIL_USE_TLS = True
-DEFAULT_FROM_EMAIL = 'support@teleophta.fr'
+EMAIL_BACKEND = 'config.email_backend.UnverifiedEmailBackend'
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'sandbox.smtp.mailtrap.io')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 2525))
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '92aa9f6ee83488')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '0f8226391ffcde')
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() in ['true', '1', 't', 'y', 'yes']
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'support@teleophta.fr')
 
 # Keycloak settings
-KC_ADMIN_URL = "http://localhost:8180"
+KC_ADMIN_URL = "http://193.95.31.196/auth"
 KC_REALM = "HopitalRealm"
 KC_CLIENT_ID = "django-service"
 KC_CLIENT_SECRET = "VOTRE_SECRET_KEYCLOAK"

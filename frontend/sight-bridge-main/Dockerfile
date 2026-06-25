@@ -15,6 +15,7 @@ FROM node:22-alpine AS runner
 WORKDIR /app
 
 COPY --from=builder /app/.output ./.output
+COPY --from=builder /app/public ./.output/public
 COPY --from=builder /app/package.json ./
 
 EXPOSE 3000

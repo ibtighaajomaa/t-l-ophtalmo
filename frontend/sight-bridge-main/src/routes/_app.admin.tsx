@@ -69,7 +69,7 @@ function AdminDashboard() {
     if (user?.role !== "Admin") return;
     const loadLogs = async () => {
       try {
-        const res = await fetch(`http://localhost:8000/api/logs/?page=${logsPage}&size=10&todayOnly=true`);
+        const res = await fetch(`/api/logs/?page=${logsPage}&size=10&todayOnly=true`);
         const data = await res.json();
         if (data.logs) {
           setBackendLogs(data.logs);
@@ -84,7 +84,7 @@ function AdminDashboard() {
 
   // Fetch stats on mount
   useEffect(() => {
-    fetch("http://localhost:8001/api/users/stats/")
+    fetch("/api/users/stats/")
       .then(r => r.json())
       .then(d => setStats(d))
       .catch(console.error);
@@ -95,7 +95,7 @@ function AdminDashboard() {
     const loadUsers = async () => {
       setLoading(true);
       try {
-        let url = `http://localhost:8001/api/users/paginated/?page=${usersPage}&size=10`;
+        let url = `/api/users/paginated/?page=${usersPage}&size=10`;
         if (nameFilter) url += `&search=${nameFilter}`;
         if (filter !== "all") url += `&role=${filter}`;
         if (user?.role === "Chef") {

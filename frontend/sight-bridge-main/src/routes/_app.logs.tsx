@@ -45,7 +45,7 @@ function LogsPage() {
   useEffect(() => {
     const loadLogs = async () => {
       try {
-        let url = `http://localhost:8000/api/logs/?page=${logsPage}&size=10`;
+        let url = `/api/logs/?page=${logsPage}&size=10`;
         if (query) url += `&search=${encodeURIComponent(query)}`;
         const res = await fetch(url);
         const data = await res.json();

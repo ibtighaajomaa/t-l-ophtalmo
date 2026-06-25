@@ -518,6 +518,97 @@ async def analyze(request: dict):
         else:
             print("WARNING: Could not find /{model} route in infer.py to insert analyze endpoint")
 
+# Patch 6: Fix series_dir to use DICOM directory instead of NIfTI path for SEG generation
+# Also ensures DICOM files are downloaded first via get_image_uri
+if os.path.exists(INFER):
+    with open(INFER) as f:
+        content = f.read()
+
+    old = '''                image_path = os.path.realpath(os.path.join(instance.datastore()._datastore.image_path(), image))
+                if not os.path.isdir(image_path):
+                    image_uri = instance.datastore().get_image_uri(image)
+                    image_path = next((image_uri.replace(s, "") for s in [".nii", ".nii.gz", ".nrrd"] if image_uri.endswith(s)), "")
+                if image_path and os.path.isdir(image_path):'''
+    new = '''                image_uri = instance.datastore().get_image_uri(image)
+                image_dir = os.path.realpath(os.path.join(instance.datastore()._datastore.image_path(), image))
+                if not os.path.isdir(image_dir):
+                    image_dir = next((image_uri.replace(s, "") for s in [".nii", ".nii.gz", ".nrrd"] if image_uri.endswith(s)), "")
+                image_path = image_dir
+                if image_path and os.path.isdir(image_path):'''
+    if old in content and 'image_uri = instance.datastore().get_image_uri(image)' not in content[:600]:
+        content = content.replace(old, new)
+        with open(INFER, "w") as f:
+            f.write(content)
+        print("infer.py: fixed series_dir to use DICOM directory (calls get_image_uri first)")
+        patches_applied = True
+
+# Patch 7: Inject correct StudyInstanceUID from source DICOMs into generated SEG
+# Must run AFTER Patch 6 (which ensures DICOM files are downloaded)
+if os.path.exists(INFER):
+    with open(INFER) as f:
+        content = f.read()
+
+    old = '''                    dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, label_info, use_itk=False)
+                    if dicom_seg_file and os.path.exists(dicom_seg_file):
+                        # Inject correct StudyInstanceUID from source DICOMs
+                        try:
+                            dcm_files = list(pathlib.Path(image_path).glob("*"))
+                            if dcm_files:
+                                src_ds = dcmread(str(dcm_files[0]), stop_before_pixels=True)
+                                if hasattr(src_ds, 'StudyInstanceUID'):
+                                    seg_ds = dcmread(dicom_seg_file)
+                                    seg_ds.StudyInstanceUID = src_ds.StudyInstanceUID
+                                    seg_ds.save_as(dicom_seg_file)
+                                    logger.info(f"Set SEG StudyInstanceUID: {src_ds.StudyInstanceUID}")
+                        except Exception as e:
+                            logger.warning(f"Could not set SEG StudyInstanceUID: {e}")
+                        with open(dicom_seg_file, "rb") as f:'''
+    new = '''                    # Read study_uid + patient_id from frontend params, inject into source DICOMs BEFORE SEG gen
+                    source_study_uid = p.get("study_uid") or result.get("params", {}).get("study_uid")
+                    source_patient_id = p.get("patient_id") or result.get("params", {}).get("patient_id")
+                    if not source_study_uid:
+                        try:
+                            dcm_files = list(pathlib.Path(image_path).glob("*"))
+                            if dcm_files:
+                                src_ds = dcmread(str(dcm_files[0]), stop_before_pixels=True)
+                                if hasattr(src_ds, 'StudyInstanceUID'):
+                                    source_study_uid = str(src_ds.StudyInstanceUID)
+                        except Exception as e:
+                            logger.warning(f"Could not read source StudyInstanceUID: {e}")
+
+                    # Inject study_uid + patient_id into source DICOMs BEFORE SEG gen so highdicom inherits them
+                    if source_study_uid or source_patient_id:
+                        try:
+                            dcm_files = list(pathlib.Path(image_path).glob("*"))
+                            for fpath in dcm_files:
+                                ds = dcmread(str(fpath))
+                                modified = False
+                                if source_study_uid and str(ds.StudyInstanceUID) != source_study_uid:
+                                    ds.StudyInstanceUID = source_study_uid
+                                    modified = True
+                                if source_patient_id and hasattr(ds, 'PatientID') and str(ds.PatientID) != source_patient_id:
+                                    ds.PatientID = source_patient_id
+                                    modified = True
+                                if modified:
+                                    ds.save_as(str(fpath))
+                                    logger.info(f"Injected tags into source: {fpath.name}")
+                        except Exception as e:
+                            logger.warning(f"Could not inject tags into sources: {e}")
+                    if source_study_uid:
+                        logger.info(f"Source StudyInstanceUID: {source_study_uid}")
+                    if source_patient_id:
+                        logger.info(f"Source PatientID: {source_patient_id}")
+
+                    dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, label_info, use_itk=False)
+                    if dicom_seg_file and os.path.exists(dicom_seg_file):
+                        with open(dicom_seg_file, "rb") as f:'''
+    if old in content:
+        content = content.replace(old, new)
+        with open(INFER, "w") as f:
+            f.write(content)
+        print("infer.py: study_uid + patient_id injected into source DICOMs BEFORE SEG gen")
+        patches_applied = True
+
 if not patches_applied:
     print("No patches needed (already applied or versions mismatch)")
 else:

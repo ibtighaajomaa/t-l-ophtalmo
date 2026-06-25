@@ -169,7 +169,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AppUser | null>(() => loadSession(loadUsers()));
 
   useEffect(() => {
-    fetch("http://localhost:8001/api/logs/")
+    fetch("/api/logs/")
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch logs");
         return res.json();
@@ -239,7 +239,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       usage,
       login: async (email, password) => {
         try {
-          const loginUrl = "http://localhost:8001/api/auth/login/";
+          const loginUrl = "/api/auth/login/";
           
           const response = await fetch(loginUrl, {
               method: 'POST',
@@ -297,7 +297,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout: () => {
         const refreshToken = localStorage.getItem("teleoph.refresh_token");
         if (refreshToken) {
-          fetch("http://localhost:8001/api/auth/logout/", {
+          fetch("/api/auth/logout/", {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json'
@@ -317,7 +317,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       resetPassword: async (email, newPassword) => {
         try {
-          const res = await fetch("http://localhost:8001/api/auth/reset-password/", {
+          const res = await fetch("/api/auth/reset-password/", {
             method: "POST",
             headers: {
               "Content-Type": "application/json"
@@ -348,7 +348,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           };
 
           const token = localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
-          const res = await fetch("http://localhost:8001/api/auth/register-user/", {
+          const res = await fetch("/api/auth/register-user/", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -398,7 +398,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           };
 
           const token = localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
-          const res = await fetch("http://localhost:8001/api/users/update/", {
+          const res = await fetch("/api/users/update/", {
             method: "PUT",
             headers: {
               "Content-Type": "application/json",

@@ -79,8 +79,8 @@ class CreerUtilisateurView(APIView):
 
             # 6. Envoyer l'email de bienvenue avec les identifiants
             from django.core.mail import send_mail
-            sujet = "Bienvenue sur   - Vos identifiants"
-            lien_login = "http://localhost:8081/login"
+            sujet = "Bienvenue sur TéléOphta - Vos identifiants"
+            lien_login = "http://193.95.31.196/login"
             
             message = f"""Bonjour Dr {data['prenom']} {data['nom']},
             
@@ -99,7 +99,7 @@ L'équipe TéléOphta.
                 send_mail(
                     sujet,
                     message,
-                    'support@teleophta.fr',
+                    settings.DEFAULT_FROM_EMAIL,
                     [data['email']],
                     fail_silently=False,
                 )
@@ -290,7 +290,7 @@ def request_password_reset(request):
     reset_obj = PasswordResetToken.objects.create(email=email)
     
     # 3. Envoyer le mail vers REACT
-    link = f"http://localhost:8081/reset-password?token={reset_obj.token}"
+    link = f"http://193.95.31.196/reset-password?token={reset_obj.token}"
     sujet = "[TéléOphta] Demande de réinitialisation de votre mot de passe"
     message = f"""Bonjour Dr {prenom_medecin} {nom_medecin},
 
@@ -307,7 +307,7 @@ Plateforme de Télédépistage de la Rétinopathie
     send_mail(
         sujet,
         message,
-        "support@teleophta.fr",
+        settings.DEFAULT_FROM_EMAIL,
         [email]
     )
     return Response({"message": "Lien envoyé à votre adresse email !"})

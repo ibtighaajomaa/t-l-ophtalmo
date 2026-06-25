@@ -41,16 +41,19 @@ services:
       
       # 2. MÉTHODE SPI (Truststore physique)
       # On force Keycloak à utiliser notre keystore JKS contenant le vrai certificat
-      # KC_SPI_TRUSTSTORE_FILE_FILE: "/opt/keycloak/conf/rns_truststore.jks"
-      # KC_SPI_TRUSTSTORE_FILE_PASSWORD: "password"
-      # KC_SPI_TRUSTSTORE_FILE_HOSTNAME_VERIFICATION_POLICY: "ANY"
+      KC_SPI_TRUSTSTORE_FILE_FILE: "/opt/keycloak/conf/rns_truststore.jks"
+      KC_SPI_TRUSTSTORE_FILE_PASSWORD: "password"
+      KC_SPI_TRUSTSTORE_FILE_HOSTNAME_VERIFICATION_POLICY: "ANY"
       
       # Option Quarkus pour la prod/dev
       QUARKUS_TLS_TRUST_ALL: "true"
       
-    # volumes:
-      # - ./rns_truststore.jks:/opt/keycloak/conf/rns_truststore.jks
-      # - ./rns.crt:/opt/keycloak/conf/truststores/rns.crt
+      # Serve Keycloak under /auth/ path to match Nginx proxy
+      KC_HTTP_RELATIVE_PATH: /auth
+      
+    volumes:
+      - ./rns_truststore.jks:/opt/keycloak/conf/rns_truststore.jks
+      - ./rns.crt:/opt/keycloak/conf/truststores/rns.crt
     ports:
       - "8180:8080"
     depends_on:
@@ -58,6 +61,8 @@ services:
         condition: service_healthy
     networks:
       - teleophtalmo
+    extra_hosts:
+      - "smtp.rns.tn:193.95.84.21"
 
 
   # =========================
@@ -94,7 +99,7 @@ services:
       DB_PASSWORD: django_password
       DB_HOST: postgres-django
       DB_PORT: "5432"
-      KEYCLOAK_SERVER_URL: http://keycloak:8080/
+      KEYCLOAK_SERVER_URL: http://keycloak:8080/auth/
       KEYCLOAK_REALM: HopitalRealm
       KEYCLOAK_CLIENT_ID: django-backend
       KEYCLOAK_CLIENT_SECRET: n3EKYvRxe3rkaP6eMoFYTHPSnlG9j4Pv
@@ -104,12 +109,20 @@ services:
       DJANGO_SUPERUSER_EMAIL: admin@teleophtalmo.com
       DJANGO_SUPERUSER_PASSWORD: admin
       OPENROUTER_API_KEY: placeholder-replace-with-your-key
+      EMAIL_HOST: smtp.rns.tn
+      EMAIL_PORT: "587"
+      EMAIL_HOST_USER: "tele.ophtalmo"
+      EMAIL_HOST_PASSWORD: "pohvbW2@"
+      EMAIL_USE_TLS: "True"
+      DEFAULT_FROM_EMAIL: tele.ophtalmo@rns.tn
     depends_on:
       - postgres-django
       - keycloak
+      - mailpit
     networks:
       - teleophtalmo
-
+    extra_hosts:
+      - "smtp.rns.tn:193.95.84.21"
   # =========================
   #  FRONTEND (TanStack Start)
   # =========================
@@ -153,7 +166,7 @@ services:
       DICOM_WEB_PLUGIN_ENABLED: "true"
       ORTHANC__DICOM_WEB__PUBLIC_ROOT: "/orthanc-container/dicom-web/"
       ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__ENABLE_OPEN_IN_OHIF_VIEWER_3: "true"
-      ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__OHIF_VIEWER_3_PUBLIC_ROOT: "http://localhost/ohif/"
+      ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__OHIF_VIEWER_3_PUBLIC_ROOT: "http://193.95.31.196/ohif/"
       ORTHANC__AUTHENTICATION_ENABLED: "false"
       ORTHANC__POSTGRESQL: |
         {"Host": "orthanc-index"}
@@ -180,7 +193,7 @@ services:
       DICOM_WEB_PLUGIN_ENABLED: "true"
       ORTHANC__DICOM_WEB__PUBLIC_ROOT: "/orthanc-plugin/dicom-web/"
       ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__ENABLE_OPEN_IN_OHIF_VIEWER_3: "true"
-      ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__OHIF_VIEWER_3_PUBLIC_ROOT: "http://localhost/orthanc-plugin/ohif/"
+      ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__OHIF_VIEWER_3_PUBLIC_ROOT: "http://193.95.31.196/orthanc-plugin/ohif/"
       STONE_WEB_VIEWER_PLUGIN_ENABLED: "true"
       OHIF_PLUGIN_ENABLED: "true"
       ORTHANC__OHIF: |
@@ -240,6 +253,21 @@ services:
       MONAI_LABEL_DICOMWEB_SEARCH_FILTER: "{}"
     depends_on:
       - orthanc-container
+    networks:
+      - teleophtalmo
+
+  # =========================
+  #  MAILPIT (SMTP interne)
+  # =========================
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
     networks:
       - teleophtalmo
 
