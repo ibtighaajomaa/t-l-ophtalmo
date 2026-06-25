@@ -119,10 +119,82 @@ services:
       - postgres-django
       - keycloak
       - mailpit
+      - redis
     networks:
       - teleophtalmo
     extra_hosts:
       - "smtp.rns.tn:193.95.84.21"
+
+  # =========================
+  #  REDIS (Celery Broker)
+  # =========================
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - teleophtalmo
+
+  # =========================
+  #  CELERY WORKER
+  # =========================
+  celery-worker:
+    build:
+      context: ./backend
+    container_name: celery-worker
+    restart: unless-stopped
+    command: celery -A config worker -l info
+    environment:
+      DB_NAME: teleophtalmo
+      DB_USER: django
+      DB_PASSWORD: django_password
+      DB_HOST: postgres-django
+      DB_PORT: "5432"
+      KEYCLOAK_SERVER_URL: http://keycloak:8080/auth/
+      KEYCLOAK_REALM: HopitalRealm
+      KEYCLOAK_CLIENT_ID: django-backend
+      KEYCLOAK_CLIENT_SECRET: n3EKYvRxe3rkaP6eMoFYTHPSnlG9j4Pv
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      EMAIL_HOST: smtp.rns.tn
+      EMAIL_PORT: "587"
+      EMAIL_HOST_USER: "tele.ophtalmo"
+      EMAIL_HOST_PASSWORD: "pohvbW2@"
+      EMAIL_USE_TLS: "True"
+      DEFAULT_FROM_EMAIL: tele.ophtalmo@rns.tn
+    depends_on:
+      - redis
+      - postgres-django
+    networks:
+      - teleophtalmo
+    extra_hosts:
+      - "smtp.rns.tn:193.95.84.21"
+
+  # =========================
+  #  CELERY BEAT (Scheduler)
+  # =========================
+  celery-beat:
+    build:
+      context: ./backend
+    container_name: celery-beat
+    restart: unless-stopped
+    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      DB_NAME: teleophtalmo
+      DB_USER: django
+      DB_PASSWORD: django_password
+      DB_HOST: postgres-django
+      DB_PORT: "5432"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      - redis
+      - postgres-django
+    networks:
+      - teleophtalmo
+
   # =========================
   #  FRONTEND (TanStack Start)
   # =========================

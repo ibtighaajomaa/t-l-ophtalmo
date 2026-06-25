@@ -178,6 +178,11 @@ def sync_orthanc(request):
             except ValueError:
                 pass
 
+        # Extraire la région depuis InstitutionName (tag DICOM)
+        main_dicom = meta.get('MainDicomTags', {})
+        institution = main_dicom.get('InstitutionName', '')
+        region = institution if institution else ''
+
         Exam.objects.create(
             study_instance_uid=study_id,
             patient_name=patient_name,
@@ -186,16 +191,229 @@ def sync_orthanc(request):
             date=study_date,
             priority='Normal',
             status='En attente',
-            region='',
+            region=region,
             modality_ip='',
             notes='',
         )
         created += 1
 
+    # Déclencher la distribution automatique après la sync
+    if created > 0:
+        try:
+            from .tasks import tache_distribution
+            tache_distribution.delay()
+        except Exception:
+            # Si Celery n'est pas dispo, distribuer en synchrone
+            from .distribution import distribuer_examens
+            distribuer_examens()
+
     return Response({
         'created': created,
         'skipped': skipped,
         'total': len(study_ids),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def orthanc_webhook(request):
+    """
+    Webhook appelé par Orthanc (Lua/Python plugin) quand une Study est stable.
+    Attendu : POST avec {"ID": "<orthanc_study_id>", ...}
+    """
+    study_id = request.data.get('ID')
+    if not study_id:
+        return Response(
+            {'error': 'ID de study manquant'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Vérifier si déjà traité
+    if Exam.objects.filter(study_instance_uid=study_id).exists():
+        return Response({'status': 'already_exists', 'study_id': study_id})
+
+    # Récupérer les métadonnées depuis Orthanc
+    try:
+        detail = requests.get(f'{ORTHANC_URL}/studies/{study_id}', timeout=15)
+        detail.raise_for_status()
+        meta = detail.json()
+    except requests.RequestException as e:
+        return Response(
+            {'error': f'Cannot reach Orthanc: {str(e)}'},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    main_patient = meta.get('PatientMainDicomTags', {})
+    patient_name = main_patient.get('PatientName', 'Unknown')
+    patient_age = None
+    age_str = main_patient.get('PatientAge', '')
+    if age_str and age_str.rstrip('Y').isdigit():
+        patient_age = int(age_str.rstrip('Y'))
+
+    study_date_str = meta.get('MainDicomTags', {}).get('StudyDate', '')
+    study_date = date.today()
+    if study_date_str and len(study_date_str) == 8:
+        try:
+            study_date = date(
+                int(study_date_str[:4]),
+                int(study_date_str[4:6]),
+                int(study_date_str[6:8]),
+            )
+        except ValueError:
+            pass
+
+    # Extraire la région depuis InstitutionName
+    main_dicom = meta.get('MainDicomTags', {})
+    institution = main_dicom.get('InstitutionName', '')
+
+    exam = Exam.objects.create(
+        study_instance_uid=study_id,
+        patient_name=patient_name,
+        patient_age=patient_age,
+        exam_type='Rétinographie',
+        date=study_date,
+        priority='Normal',
+        status='En attente',
+        region=institution if institution else '',
+        modality_ip='',
+        notes='',
+    )
+
+    # Déclencher la distribution automatique
+    try:
+        from .tasks import tache_distribution
+        tache_distribution.delay()
+    except Exception:
+        from .distribution import distribuer_examens
+        distribuer_examens()
+
+    return Response({
+        'status': 'created',
+        'exam_id': exam.id,
+        'patient_name': patient_name,
+        'study_id': study_id,
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def distribuer_manuellement(request):
+    """Déclenche manuellement la distribution des examens en attente."""
+    try:
+        from .tasks import tache_distribution
+        tache_distribution.delay()
+        return Response({'status': 'distribution lancée en arrière-plan'})
+    except Exception:
+        from .distribution import distribuer_examens
+        result = distribuer_examens()
+        return Response({'status': 'distribution synchrone terminée', **result})
+
+
+@api_view(['GET'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def mes_examens(request):
+    """
+    Retourne les examens assignés au médecin connecté.
+    Filtres optionnels : ?status=En cours&priority=Urgent
+    """
+    exams = Exam.objects.filter(
+        assigned_to=request.user,
+    ).order_by('-priority', 'created_at')
+
+    status_param = request.query_params.get('status')
+    if status_param:
+        exams = exams.filter(status=status_param)
+
+    priority_param = request.query_params.get('priority')
+    if priority_param:
+        exams = exams.filter(priority=priority_param)
+
+    page = int(request.query_params.get('page', 1))
+    page_size = int(request.query_params.get('page_size', 30))
+    total = exams.count()
+    start = (page - 1) * page_size
+    end = start + page_size
+
+    serializer = ExamSerializer(exams[start:end], many=True)
+    return Response({
+        'count': total,
+        'page': page,
+        'page_size': page_size,
+        'results': serializer.data,
+    })
+
+
+@api_view(['POST'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def terminer_examen(request, pk):
+    """
+    Le médecin marque un examen comme 'Interprété' (terminé).
+    Décrémente sa charge_actuelle.
+    """
+    try:
+        exam = Exam.objects.get(pk=pk)
+    except Exam.DoesNotExist:
+        return Response({'error': 'Examen non trouvé'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Vérifier que l'examen est bien assigné à ce médecin
+    if exam.assigned_to != request.user:
+        return Response(
+            {'error': 'Cet examen ne vous est pas assigné.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if exam.status == 'Interprété':
+        return Response({'error': 'Cet examen est déjà terminé.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Marquer comme terminé
+    exam.status = 'Interprété'
+    exam.save(update_fields=['status'])
+
+    # Décrémenter la charge du médecin
+    try:
+        profil = request.user.profil
+        profil.charge_actuelle = max(0, profil.charge_actuelle - 1)
+        profil.save(update_fields=['charge_actuelle'])
+    except Exception:
+        pass
+
+    serializer = ExamSerializer(exam)
+    return Response({
+        'message': 'Examen marqué comme terminé.',
+        'exam': serializer.data,
+    })
+
+
+@api_view(['PUT'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def toggle_disponibilite(request):
+    """
+    Le médecin toggle sa disponibilité.
+    Body optionnel : {"is_disponible": true/false}
+    Si pas de body, on inverse l'état actuel.
+    """
+    try:
+        profil = request.user.profil
+    except Exception:
+        return Response(
+            {'error': 'Profil non trouvé'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    new_value = request.data.get('is_disponible')
+    if new_value is not None:
+        profil.is_disponible = bool(new_value)
+    else:
+        profil.is_disponible = not profil.is_disponible
+
+    profil.save(update_fields=['is_disponible'])
+
+    return Response({
+        'is_disponible': profil.is_disponible,
+        'message': f"Disponibilité {'activée' if profil.is_disponible else 'désactivée'}.",
     })
 
 
@@ -414,3 +632,4 @@ def export_report_docx(request, pk):
     buffer = export_report_to_docx(report)
     filename = f"rapport-{report.patient_id}-{report.pk}.docx"
     return FileResponse(buffer, as_attachment=True, filename=filename)
+

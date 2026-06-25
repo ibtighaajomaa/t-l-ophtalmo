@@ -43,6 +43,7 @@ class Exam(models.Model):
     region = models.CharField(max_length=255, blank=True, default="")
     modality_ip = models.CharField(max_length=255, blank=True, default="")
     notes = models.TextField(blank=True, default="")
+    date_assignation = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

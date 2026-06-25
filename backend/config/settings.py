@@ -78,6 +78,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'mozilla_django_oidc',
     'corsheaders',
+    'django_celery_beat',
     'users',
     'ophtalmo',
 ]
@@ -211,3 +212,25 @@ KC_ADMIN_URL = "http://193.95.31.196/auth"
 KC_REALM = "HopitalRealm"
 KC_CLIENT_ID = "django-service"
 KC_CLIENT_SECRET = "VOTRE_SECRET_KEYCLOAK"
+
+# =========================
+#  CELERY CONFIGURATION
+# =========================
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0')
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+
+# Celery Beat — Tâches planifiées
+CELERY_BEAT_SCHEDULE = {
+    'verification-quotidienne-24h': {
+        'task': 'ophtalmo.tasks.tache_verification_24h',
+        'schedule': timedelta(hours=24),
+    },
+}
+
+# Distribution settings
+MAX_CHARGE_PAR_MEDECIN = 30
+DELAI_REASSIGNATION_HEURES = 24
