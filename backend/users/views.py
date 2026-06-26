@@ -836,6 +836,8 @@ def toggle_medecin_status_admin(request):
             distribuer_examens()
             message = "Médecin de nouveau disponible et prêt à recevoir des examens."
             
+        profil.refresh_from_db()
+            
         return Response({
             "status": "success", 
             "message": message, 

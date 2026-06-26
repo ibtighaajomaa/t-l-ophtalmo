@@ -194,14 +194,13 @@ if os.path.exists(CONVERT):
                 if hasattr(_rs, "SeriesInstanceUID"):
                     _rs.SeriesInstanceUID = str(_src_ds0.SeriesInstanceUID)
                     logger.info(f"Fixed SEG ReferencedSeriesSequence SeriesUID: {_src_ds0.SeriesInstanceUID}")
-        # OHIF fix: enforce ReferencedSOPInstanceUID in ALL functional groups sequences.
-        # Cornerstone3D reads both PerFrameFunctionalGroupsSequence AND
-        # SharedFunctionalGroupsSequence.  Also handles ReferencedImageSequence
-        # as a fallback path.
+        # OHIF fix: brute-force enforce ALL ReferencedSOPInstanceUID values in
+        # functional groups sequences.  Uses a recursive walker to find every
+        # ReferencedSOPInstanceUID regardless of the DICOM path structure,
+        # and always sets it to the correct source SOP UID by frame index.
         if image_datasets:
-            _p10_valid_sops = {str(ds.SOPInstanceUID) for ds in image_datasets if hasattr(ds, "SOPInstanceUID")}
             _p10_sop_list = [str(ds.SOPInstanceUID) for ds in image_datasets if hasattr(ds, "SOPInstanceUID")]
-            if _p10_valid_sops:
+            if _p10_sop_list:
                 # Validate frame count
                 if hasattr(dcm, "PerFrameFunctionalGroupsSequence"):
                     _nf = len(dcm.PerFrameFunctionalGroupsSequence)
@@ -212,51 +211,43 @@ if os.path.exists(CONVERT):
                             f"but source has {_ns} images"
                         )
 
-                def _fix_sop_ref_p9(_fg_item, _frame_idx, _sop_list, _uid_set):
-                    _lm = False
-                    # Path 1: DerivationImageSequence > SourceImageSequence
-                    if hasattr(_fg_item, "DerivationImageSequence"):
-                        for _d in _fg_item.DerivationImageSequence:
-                            if hasattr(_d, "SourceImageSequence"):
-                                for _sr in _d.SourceImageSequence:
-                                    if not hasattr(_sr, "ReferencedSOPInstanceUID"):
-                                        continue
-                                    _cu = str(_sr.ReferencedSOPInstanceUID)
-                                    if _cu not in _uid_set:
-                                        _rn = _sop_list[_frame_idx] if _frame_idx < len(_sop_list) else _sop_list[0]
-                                        logger.warning(
-                                            f"Frame {_frame_idx}: ReferencedSOPInstanceUID "
-                                            f"{_cu[:60]}... not in source set -> patching to {_rn[:60]}..."
-                                        )
-                                        _sr.ReferencedSOPInstanceUID = _rn
-                                        _lm = True
-                    # Path 2: ReferencedImageSequence (direct)
-                    if hasattr(_fg_item, "ReferencedImageSequence"):
-                        for _sr in _fg_item.ReferencedImageSequence:
-                            if not hasattr(_sr, "ReferencedSOPInstanceUID"):
-                                continue
-                            _cu = str(_sr.ReferencedSOPInstanceUID)
-                            if _cu not in _uid_set:
-                                _rn = _sop_list[_frame_idx] if _frame_idx < len(_sop_list) else _sop_list[0]
-                                logger.warning(
-                                    f"Frame {_frame_idx} (ReferencedImageSequence): "
-                                    f"ReferencedSOPInstanceUID {_cu[:60]}... -> patching to {_rn[:60]}..."
+                def _force_fix_sop_refs(_item, _frame_idx, _sop_list):
+                    """Recursively find and brute-force set ALL ReferencedSOPInstanceUID
+                    values to match the source SOP UID at _frame_idx, regardless of
+                    the DICOM path structure."""
+                    _expected = _sop_list[_frame_idx] if _frame_idx < len(_sop_list) else _sop_list[0]
+                    _count = 0
+                    for _elem in _item:
+                        if _elem.keyword == "ReferencedSOPInstanceUID":
+                            _old_val = str(_elem.value)
+                            if _old_val != _expected:
+                                _elem.value = _expected
+                                _count += 1
+                                logger.info(
+                                    f"SEG Frame {_frame_idx}: Forced ReferencedSOPInstanceUID "
+                                    f"{_old_val[:60]}... -> {_expected[:60]}..."
                                 )
-                                _sr.ReferencedSOPInstanceUID = _rn
-                                _lm = True
-                    return _lm
+                            else:
+                                _count += 1
+                        elif _elem.VR == "SQ" and _elem.value is not None:
+                            for _sub_item in _elem.value:
+                                _count += _force_fix_sop_refs(_sub_item, _frame_idx, _sop_list)
+                    return _count
 
+                _total_fixes = 0
                 # Fix PerFrameFunctionalGroupsSequence
                 if hasattr(dcm, "PerFrameFunctionalGroupsSequence"):
                     for _p10_fi, _p10_fg in enumerate(dcm.PerFrameFunctionalGroupsSequence):
-                        if _fix_sop_ref_p9(_p10_fg, _p10_fi, _p10_sop_list, _p10_valid_sops):
-                            pass  # modifications tracked inside helper
+                        _total_fixes += _force_fix_sop_refs(_p10_fg, _p10_fi, _p10_sop_list)
 
-                # Fix SharedFunctionalGroupsSequence
+                # Fix SharedFunctionalGroupsSequence (apply to all frames)
                 if hasattr(dcm, "SharedFunctionalGroupsSequence"):
                     for _sfg in dcm.SharedFunctionalGroupsSequence:
                         for _sfi in range(len(_p10_sop_list)):
-                            _fix_sop_ref_p9(_sfg, _sfi, _p10_sop_list, _p10_valid_sops)
+                            _total_fixes += _force_fix_sop_refs(_sfg, _sfi, _p10_sop_list)
+
+                if _total_fixes > 0:
+                    logger.info(f"SEG: Fixed {_total_fixes} ReferencedSOPInstanceUID references")
         dcm.save_as(output_file)'''
         if old_save_dcm in content:
             content = content.replace(old_save_dcm, new_save_dcm)
@@ -712,18 +703,6 @@ if os.path.exists(INFER):
 
     old = '''                    dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, label_info, use_itk=False)
                     if dicom_seg_file and os.path.exists(dicom_seg_file):
-                        # Inject correct StudyInstanceUID from source DICOMs
-                        try:
-                            dcm_files = list(pathlib.Path(image_path).glob("*"))
-                            if dcm_files:
-                                src_ds = dcmread(str(dcm_files[0]), stop_before_pixels=True)
-                                if hasattr(src_ds, 'StudyInstanceUID'):
-                                    seg_ds = dcmread(dicom_seg_file)
-                                    seg_ds.StudyInstanceUID = src_ds.StudyInstanceUID
-                                    seg_ds.save_as(dicom_seg_file)
-                                    logger.info(f"Set SEG StudyInstanceUID: {src_ds.StudyInstanceUID}")
-                        except Exception as e:
-                            logger.warning(f"Could not set SEG StudyInstanceUID: {e}")
                         with open(dicom_seg_file, "rb") as f:'''
     new = '''                    # Read study_uid + patient_id from frontend params, inject into source DICOMs BEFORE SEG gen
                     source_study_uid = p.get("study_uid") or result.get("params", {}).get("study_uid")
@@ -841,9 +820,8 @@ if os.path.exists(CONVERT):
         if image_datasets:
             _st = str(image_datasets[0].StudyInstanceUID) if hasattr(image_datasets[0], "StudyInstanceUID") else None
             _sr = str(image_datasets[0].SeriesInstanceUID) if hasattr(image_datasets[0], "SeriesInstanceUID") else None
-            _p10_valid_sops = {str(ds.SOPInstanceUID) for ds in image_datasets if hasattr(ds, "SOPInstanceUID")}
-            _p10_sop_list = [str(ds.SOPInstanceUID) for ds in image_datasets if hasattr(ds, "SOPInstanceUID")}
-            if _st or _sr or _p10_valid_sops:
+            _p10_sop_list = [str(ds.SOPInstanceUID) for ds in image_datasets if hasattr(ds, "SOPInstanceUID")]
+            if _st or _sr or _p10_sop_list:
                 from pydicom import dcmread as _dr
                 _seg_fix = _dr(output_file)
                 _mod_fix = False
@@ -857,11 +835,10 @@ if os.path.exists(CONVERT):
                             _rs.SeriesInstanceUID = _sr
                             _mod_fix = True
                             logger.info(f"Fixed SEG ReferencedSeriesSequence SeriesUID: {_sr}")
-                # Fix ReferencedSOPInstanceUID in ALL functional groups sequences.
-                # Cornerstone3D reads both PerFrameFunctionalGroupsSequence AND
-                # SharedFunctionalGroupsSequence.  Also handles ReferencedImageSequence
-                # as a fallback path.
-                if _p10_valid_sops:
+                # Fix ReferencedSOPInstanceUID: brute-force recursive walker that finds
+                # EVERY ReferencedSOPInstanceUID regardless of DICOM path structure and
+                # always sets it to the correct source SOP UID by frame index.
+                if _p10_sop_list:
                     # Validate frame count
                     if hasattr(_seg_fix, "PerFrameFunctionalGroupsSequence"):
                         _nf = len(_seg_fix.PerFrameFunctionalGroupsSequence)
@@ -872,52 +849,39 @@ if os.path.exists(CONVERT):
                                 f"but source has {_ns} images"
                             )
 
-                    def _fix_sop_ref_p10(_fg_item, _frame_idx, _sop_list, _uid_set):
-                        _lm = False
-                        # Path 1: DerivationImageSequence > SourceImageSequence
-                        if hasattr(_fg_item, "DerivationImageSequence"):
-                            for _d in _fg_item.DerivationImageSequence:
-                                if hasattr(_d, "SourceImageSequence"):
-                                    for _sr in _d.SourceImageSequence:
-                                        if not hasattr(_sr, "ReferencedSOPInstanceUID"):
-                                            continue
-                                        _cu = str(_sr.ReferencedSOPInstanceUID)
-                                        if _cu not in _uid_set:
-                                            _rn = _sop_list[_frame_idx] if _frame_idx < len(_sop_list) else _sop_list[0]
-                                            logger.warning(
-                                                f"Frame {_frame_idx}: ReferencedSOPInstanceUID "
-                                                f"{_cu[:60]}... not in source set -> patching to {_rn[:60]}..."
-                                            )
-                                            _sr.ReferencedSOPInstanceUID = _rn
-                                            _lm = True
-                        # Path 2: ReferencedImageSequence (direct)
-                        if hasattr(_fg_item, "ReferencedImageSequence"):
-                            for _sr in _fg_item.ReferencedImageSequence:
-                                if not hasattr(_sr, "ReferencedSOPInstanceUID"):
-                                    continue
-                                _cu = str(_sr.ReferencedSOPInstanceUID)
-                                if _cu not in _uid_set:
-                                    _rn = _sop_list[_frame_idx] if _frame_idx < len(_sop_list) else _sop_list[0]
-                                    logger.warning(
-                                        f"Frame {_frame_idx} (ReferencedImageSequence): "
-                                        f"ReferencedSOPInstanceUID {_cu[:60]}... -> patching to {_rn[:60]}..."
+                    def _force_fix_sop_refs(_item, _frame_idx, _sop_list):
+                        _expected = _sop_list[_frame_idx] if _frame_idx < len(_sop_list) else _sop_list[0]
+                        _count = 0
+                        for _elem in _item:
+                            if _elem.keyword == "ReferencedSOPInstanceUID":
+                                _old_val = str(_elem.value)
+                                if _old_val != _expected:
+                                    _elem.value = _expected
+                                    _count += 1
+                                    logger.info(
+                                        f"SEG Frame {_frame_idx}: Forced ReferencedSOPInstanceUID "
+                                        f"{_old_val[:60]}... -> {_expected[:60]}..."
                                     )
-                                    _sr.ReferencedSOPInstanceUID = _rn
-                                    _lm = True
-                        return _lm
+                                else:
+                                    _count += 1
+                            elif _elem.VR == "SQ" and _elem.value is not None:
+                                for _sub_item in _elem.value:
+                                    _count += _force_fix_sop_refs(_sub_item, _frame_idx, _sop_list)
+                        return _count
 
-                    # Fix PerFrameFunctionalGroupsSequence
+                    _total_fixes = 0
                     if hasattr(_seg_fix, "PerFrameFunctionalGroupsSequence"):
                         for _p10_fi, _p10_fg in enumerate(_seg_fix.PerFrameFunctionalGroupsSequence):
-                            if _fix_sop_ref_p10(_p10_fg, _p10_fi, _p10_sop_list, _p10_valid_sops):
-                                _mod_fix = True
+                            _total_fixes += _force_fix_sop_refs(_p10_fg, _p10_fi, _p10_sop_list)
 
-                    # Fix SharedFunctionalGroupsSequence
                     if hasattr(_seg_fix, "SharedFunctionalGroupsSequence"):
                         for _sfg in _seg_fix.SharedFunctionalGroupsSequence:
                             for _sfi in range(len(_p10_sop_list)):
-                                if _fix_sop_ref_p10(_sfg, _sfi, _p10_sop_list, _p10_valid_sops):
-                                    _mod_fix = True
+                                _total_fixes += _force_fix_sop_refs(_sfg, _sfi, _p10_sop_list)
+
+                    if _total_fixes > 0:
+                        _mod_fix = True
+                        logger.info(f"SEG: Fixed {_total_fixes} ReferencedSOPInstanceUID references")
                 if _mod_fix:
                     _seg_fix.save_as(output_file)
                     logger.info("SEG re-saved with corrected study/series/SOP UIDs")
@@ -994,6 +958,171 @@ if os.path.exists(INFER):
                 print("WARNING: Patch 10 — Orthanc push pattern not found in infer.py")
     else:
         patches_applied = True  # Patch 10 already applied
+
+# Patch 11: Append brute-force ReferencedSOPInstanceUID fix in the WRAPPER function
+# nifti_to_dicom_seg(), right before the final latency log.  This runs after BOTH
+# the ITK and highdicom paths, reads the SEG output, and forces ALL
+# ReferencedSOPInstanceUID values to match the ACTUAL SOPInstanceUID from the
+# source DICOM file on disk (not the directory name / request UID).  This fixes
+# the "No imageId found for SOPInstanceUID" error when the DICOM file on disk
+# has a different SOPInstanceUID than what OHIF expects.
+PATCH11_CONVERT = "/usr/local/lib/python3.10/dist-packages/monailabel/datastore/utils/convert.py"
+PATCH11_MARKER = "### OHIF_PATCH_11_FORCE_SOP ###"
+
+# The old-style code block (file-read + dirname fallback) that needs upgrading:
+PATCH11_OLD_CODE_BLOCK = """            # Discover the actual SOPInstanceUID from source DICOM files on disk
+            _p11_src_dir = _p11_pl.Path(series_dir)
+            _p11_dcm_files = sorted(_p11_src_dir.glob("*.dcm"))
+            _p11_expected = None
+            if _p11_dcm_files:
+                _p11_src = _p11_dr(str(_p11_dcm_files[0]), stop_before_pixels=True)
+                if hasattr(_p11_src, "SOPInstanceUID"):
+                    _p11_expected = str(_p11_src.SOPInstanceUID)
+                    logger.info(f"Patch 11: Source SOPInstanceUID from file: {_p11_expected}")
+
+            if _p11_expected is None:
+                _p11_expected = _p11_pl.Path(series_dir).name
+                logger.warning(f"Patch 11: Falling back to series_dir name: {_p11_expected}")"""
+# The new Orthanc-querying code (with file fallback) to replace the old block:
+PATCH11_NEW_ORTHANC = """            # Query Orthanc for the actual SOPInstanceUID in this series.
+            # The cache file's SOPInstanceUID may be stale (different from Orthanc).
+            import urllib.request as _p11_urlreq
+            import json as _p11_json
+            _p11_expected = None
+            _p11_series_uid = _p11_pl.Path(series_dir).name
+            try:
+                _p11_q = _p11_json.dumps({"Level": "series", "Query": {"SeriesInstanceUID": _p11_series_uid}}).encode()
+                _p11_req = _p11_urlreq.Request("http://orthanc-container:8042/tools/find", data=_p11_q, headers={"Content-Type": "application/json"})
+                _p11_resp = _p11_urlreq.urlopen(_p11_req, timeout=10)
+                _p11_sids = _p11_json.loads(_p11_resp.read())
+                if _p11_sids:
+                    _p11_resp2 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/series/{_p11_sids[0]}/instances", timeout=10)
+                    _p11_insts = _p11_json.loads(_p11_resp2.read())
+                    if _p11_insts:
+                        _p11_resp3 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/instances/{_p11_insts[0]}/simplified-tags", timeout=10)
+                        _p11_tags = _p11_json.loads(_p11_resp3.read())
+                        _p11_expected = _p11_tags.get("SOPInstanceUID")
+                        logger.info(f"Patch 11: Orthanc SOPInstanceUID: {_p11_expected}")
+            except Exception as _p11_oe:
+                logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")
+
+            if _p11_expected is None:
+                logger.warning("Patch 11: Orthanc query returned no result, falling back to file")
+                _p11_src_dir = _p11_pl.Path(series_dir)
+                _p11_dcm_files = sorted(_p11_src_dir.glob("*.dcm"))
+                if _p11_dcm_files:
+                    _p11_src = _p11_dr(str(_p11_dcm_files[0]), stop_before_pixels=True)
+                    if hasattr(_p11_src, "SOPInstanceUID"):
+                        _p11_expected = str(_p11_src.SOPInstanceUID)
+                        logger.info(f"Patch 11: Fallback SOPInstanceUID from file: {_p11_expected}")
+
+            if _p11_expected is None:
+                _p11_expected = _p11_pl.Path(series_dir).name
+                logger.warning(f"Patch 11: Final fallback to series_dir name: {_p11_expected}")"""
+
+if os.path.exists(PATCH11_CONVERT):
+    with open(PATCH11_CONVERT) as f:
+        _p11_content = f.read()
+
+    # --- Upgrade path: replace old file-read+fallback with Orthanc-querying version ---
+    if PATCH11_OLD_CODE_BLOCK in _p11_content and "Orthanc SOPInstanceUID" not in _p11_content:
+        _p11_content = _p11_content.replace(PATCH11_OLD_CODE_BLOCK, PATCH11_NEW_ORTHANC)
+        with open(PATCH11_CONVERT, "w") as f:
+            f.write(_p11_content)
+        print("convert.py Patch 11 UPGRADED: now queries Orthanc for correct SOPInstanceUID")
+        patches_applied = True
+
+    # --- Fresh install: insert the whole block if marker not present ---
+    elif PATCH11_MARKER not in _p11_content:
+        # Find: the latency log line in nifti_to_dicom_seg wrapper function
+        _p11_old = '''    logger.info(f"nifti_to_dicom_seg latency : {time.time() - start} (sec)")
+    return output_file'''
+        _p11_new = '''    # Patch 11: brute-force force ALL ReferencedSOPInstanceUID in SEG to use
+    # the actual SOPInstanceUID from Orthanc (queried by series UID).  The
+    # cache file's SOPInstanceUID may be stale, so we always ask Orthanc first.
+    # This ensures the SEG references match what OHIF/Cornerstone loads via DICOMweb.
+    if output_file and os.path.exists(output_file):
+        try:
+            import pathlib as _p11_pl
+            from pydicom import dcmread as _p11_dr
+            import urllib.request as _p11_urlreq
+            import json as _p11_json
+            _p11_seg = _p11_dr(output_file)
+            _p11_mod = False
+            _p11_total = 0
+
+            # Query Orthanc for the actual SOPInstanceUID in this series
+            _p11_expected = None
+            _p11_series_uid = _p11_pl.Path(series_dir).name
+            try:
+                _p11_q = _p11_json.dumps({"Level": "series", "Query": {"SeriesInstanceUID": _p11_series_uid}}).encode()
+                _p11_req = _p11_urlreq.Request("http://orthanc-container:8042/tools/find", data=_p11_q, headers={"Content-Type": "application/json"})
+                _p11_resp = _p11_urlreq.urlopen(_p11_req, timeout=10)
+                _p11_sids = _p11_json.loads(_p11_resp.read())
+                if _p11_sids:
+                    _p11_resp2 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/series/{_p11_sids[0]}/instances", timeout=10)
+                    _p11_insts = _p11_json.loads(_p11_resp2.read())
+                    if _p11_insts:
+                        _p11_resp3 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/instances/{_p11_insts[0]}/simplified-tags", timeout=10)
+                        _p11_tags = _p11_json.loads(_p11_resp3.read())
+                        _p11_expected = _p11_tags.get("SOPInstanceUID")
+                        logger.info(f"Patch 11: Orthanc SOPInstanceUID: {_p11_expected}")
+            except Exception as _p11_oe:
+                logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")
+
+            if _p11_expected is None:
+                logger.warning("Patch 11: Orthanc query returned no result, falling back to file")
+                _p11_src_dir = _p11_pl.Path(series_dir)
+                _p11_dcm_files = sorted(_p11_src_dir.glob("*.dcm"))
+                if _p11_dcm_files:
+                    _p11_src = _p11_dr(str(_p11_dcm_files[0]), stop_before_pixels=True)
+                    if hasattr(_p11_src, "SOPInstanceUID"):
+                        _p11_expected = str(_p11_src.SOPInstanceUID)
+                        logger.info(f"Patch 11: Fallback SOPInstanceUID from file: {_p11_expected}")
+
+            if _p11_expected is None:
+                _p11_expected = _p11_pl.Path(series_dir).name
+                logger.warning(f"Patch 11: Final fallback to series_dir name: {_p11_expected}")
+
+            def _p11_force(item, uid):
+                c = 0
+                for e in item:
+                    if e.keyword == "ReferencedSOPInstanceUID":
+                        ov = str(e.value)
+                        if ov != uid:
+                            e.value = uid
+                            c += 1
+                    elif e.VR == "SQ" and e.value is not None:
+                        for si in e.value:
+                            c += _p11_force(si, uid)
+                return c
+
+            if hasattr(_p11_seg, "PerFrameFunctionalGroupsSequence"):
+                for fi, fg in enumerate(_p11_seg.PerFrameFunctionalGroupsSequence):
+                    _p11_total += _p11_force(fg, _p11_expected)
+            if hasattr(_p11_seg, "SharedFunctionalGroupsSequence"):
+                for sfg in _p11_seg.SharedFunctionalGroupsSequence:
+                    _p11_total += _p11_force(sfg, _p11_expected)
+            if _p11_total > 0:
+                _p11_seg.save_as(output_file)
+                logger.info(f"Patch 11: Forced {_p11_total} ReferencedSOPInstanceUID -> {_p11_expected}")
+        except Exception as _p11_e:
+            logger.warning(f"Patch 11 SOP fix skipped: {_p11_e}")
+
+    ### OHIF_PATCH_11_FORCE_SOP ###
+    logger.info(f"nifti_to_dicom_seg latency : {time.time() - start} (sec)")
+    return output_file'''
+        if _p11_old in _p11_content:
+            _p11_content = _p11_content.replace(_p11_old, _p11_new)
+            with open(PATCH11_CONVERT, "w") as f:
+                f.write(_p11_content)
+            print("convert.py Patch 11: brute-force SOP fix applied to nifti_to_dicom_seg wrapper")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 11 — latency log pattern not found in convert.py")
+    else:
+        patches_applied = True
+        print("convert.py: Patch 11 already applied")
 
 if not patches_applied:
     print("No patches needed (already applied or versions mismatch)")

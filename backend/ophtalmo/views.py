@@ -56,10 +56,10 @@ def exam_list(request):
         if request.user.is_authenticated:
             try:
                 profil = request.user.profil
-                if profil.role in ('Medecin', 'Resident', 'OPHTALMOLOGUE', 'CHEF_SERVICE', 'Chef'):
-                    exams = exams.filter(
-                        Q(assigned_to=request.user) | Q(created_by=request.user)
-                    )
+                if profil.role in ('Medecin', 'Resident', 'RESIDENT', 'OPHTALMOLOGUE', 'CHEF_SERVICE', 'Chef'):
+                    # Tous les rôles médicaux ne voient QUE les examens qui leur sont assignés
+                    exams = exams.filter(assigned_to=request.user)
+                # Admin : pas de filtre, voit tout
             except Exception:
                 pass
 

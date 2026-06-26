@@ -286,7 +286,7 @@ function AdminDashboard() {
                         <div className="text-xs text-slate-400 mt-0.5">{u.phone || "—"}</div>
                       </td>
                       <td className="py-3 pr-4">
-                        {(u.role === "Medecin" || u.role === "Resident") ? (
+                        {(u.role === "Medecin" || u.role === "Resident" || u.role === "Chef") ? (
                           <div className="flex flex-col gap-1.5">
                             <div>
                               {u.is_disponible ? (
@@ -315,7 +315,7 @@ function AdminDashboard() {
                       </td>
                       {user?.role === "Admin" && <td className="py-3 pr-4 text-slate-600">{u.createdBy || "—"}</td>}
                     <td className="py-3 pr-4 text-right space-x-2">
-                      {user?.role === "Admin" && (u.role === "Medecin" || u.role === "Resident") && (
+                      {user?.role === "Admin" && (u.role === "Medecin" || u.role === "Resident" || u.role === "Chef") && (
                         <button
                           onClick={() => handleToggleAvailability(u.email)}
                           className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${

@@ -70,7 +70,8 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
     [exams],
   );
 
-  const showAssignedTo = user?.role === "Admin" || user?.role === "Chef";
+  // On affiche la colonne "Assigné à" uniquement pour les admins (les autres médecins ne voient que leurs propres examens)
+  const showAssignedTo = user?.role === "Admin";
 
   const handleSync = async () => {
     setSyncing(true);

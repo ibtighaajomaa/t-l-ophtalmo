@@ -241,7 +241,7 @@ services:
       ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__ENABLE_OPEN_IN_OHIF_VIEWER_3: "true"
       ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__OHIF_VIEWER_3_PUBLIC_ROOT: "http://193.95.31.196/ohif/"
       ORTHANC__AUTHENTICATION_ENABLED: "false"
-      ORTHANC__LUA_SCRIPTS: "/etc/orthanc/scripts/on_stable_study.lua"
+      ORTHANC__LUA_SCRIPTS: '["/etc/orthanc/scripts/on_stable_study.lua"]'
       ORTHANC__POSTGRESQL: |
         {"Host": "orthanc-index"}
       VERBOSE_STARTUP: "true"

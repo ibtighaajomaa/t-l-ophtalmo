@@ -10,10 +10,10 @@ function OnStableStudy(studyId)
     local ok, resp = pcall(HttpPost, webhook_url, body, "application/json")
 
     if ok then
-        Print("[OnStableStudy] Study " .. studyId .. " synced to worklist: " .. resp)
+        print("[OnStableStudy] Study " .. studyId .. " synced to worklist: " .. resp)
     else
-        Print("[OnStableStudy] Study " .. studyId .. " webhook failed: " .. tostring(resp))
+        print("[OnStableStudy] Study " .. studyId .. " webhook failed: " .. tostring(resp))
     end
 end
 
-Print("[Lua] on_stable_study.lua loaded — auto-sync enabled for new studies")
+print("[Lua] on_stable_study.lua loaded — auto-sync enabled for new studies")

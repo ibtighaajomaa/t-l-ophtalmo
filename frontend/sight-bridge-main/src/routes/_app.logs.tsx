@@ -230,7 +230,7 @@ function LogsPage() {
                           {u.createdAt ? u.createdAt.slice(0, 10) : "—"}
                         </td>
                         <td className="py-3 pr-4">
-                          {(u.role === "Medecin" || u.role === "Resident") ? (
+                          {(u.role === "Medecin" || u.role === "Resident" || u.role === "Chef") ? (
                             <button
                               onClick={() => handleToggleAvailability(u.email)}
                               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium transition hover:opacity-80 cursor-pointer ${
