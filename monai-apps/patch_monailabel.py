@@ -617,8 +617,21 @@ async def analyze(request: dict):
         file_meta.TransferSyntaxUID = "1.2.840.10008.1.2"
         file_meta.ImplementationClassUID = "1.2.826.0.1.3680043.10.1234"
         ds.file_meta = file_meta
+        # Use real PatientID/PatientName from source DICOM to prevent "Multiple Patients" in OHIF
         ds.PatientName = ""
         ds.PatientID = ""
+        try:
+            _src_path = instance.datastore().get_image_uri(image)
+            if _src_path and os.path.isdir(_src_path):
+                _dcm_files = list(pathlib.Path(_src_path).glob("*"))
+                if _dcm_files:
+                    _src_ds = dcmread(str(_dcm_files[0]), stop_before_pixels=True)
+                    if hasattr(_src_ds, 'PatientName'):
+                        ds.PatientName = str(_src_ds.PatientName)
+                    if hasattr(_src_ds, 'PatientID'):
+                        ds.PatientID = str(_src_ds.PatientID)
+        except Exception as _sr_e:
+            logger.warning(f"Could not read source PatientID/PatientName: {_sr_e}")
         ds.StudyInstanceUID = study_uid
         ds.SeriesInstanceUID = series_uid or generate_uid()
         ds.SOPClassUID = file_meta.MediaStorageSOPClassUID
@@ -704,8 +717,48 @@ if os.path.exists(INFER):
     old = '''                    dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, label_info, use_itk=False)
                     if dicom_seg_file and os.path.exists(dicom_seg_file):
                         with open(dicom_seg_file, "rb") as f:'''
-    new = '''                    # Read study_uid + patient_id from frontend params, inject into source DICOMs BEFORE SEG gen
+    new = '''                    # Read study_uid from frontend params, inject into source DICOMs BEFORE SEG gen.
+                    # NOTE: We do NOT inject patient_id here — the frontend sends a random
+                    # synthetic PatientID that differs from the actual DICOM PatientID, which
+                    # would cause OHIF to show "Multiple Patients" for the same study.
                     source_study_uid = p.get("study_uid") or result.get("params", {}).get("study_uid")
+                    if not source_study_uid:
+                        try:
+                            dcm_files = list(pathlib.Path(image_path).glob("*"))
+                            if dcm_files:
+                                src_ds = dcmread(str(dcm_files[0]), stop_before_pixels=True)
+                                if hasattr(src_ds, 'StudyInstanceUID'):
+                                    source_study_uid = str(src_ds.StudyInstanceUID)
+                        except Exception as e:
+                            logger.warning(f"Could not read source StudyInstanceUID: {e}")
+
+                    # Inject study_uid into source DICOMs BEFORE SEG gen so highdicom inherits them
+                    if source_study_uid:
+                        try:
+                            dcm_files = list(pathlib.Path(image_path).glob("*"))
+                            for fpath in dcm_files:
+                                ds = dcmread(str(fpath))
+                                if str(ds.StudyInstanceUID) != source_study_uid:
+                                    ds.StudyInstanceUID = source_study_uid
+                                    ds.save_as(str(fpath))
+                                    logger.info(f"Injected StudyInstanceUID into source: {fpath.name}")
+                        except Exception as e:
+                            logger.warning(f"Could not inject StudyInstanceUID into sources: {e}")
+                        logger.info(f"Source StudyInstanceUID: {source_study_uid}")
+
+                    dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, label_info, use_itk=False)
+                    if dicom_seg_file and os.path.exists(dicom_seg_file):
+                        with open(dicom_seg_file, "rb") as f:'''
+    if old in content:
+        content = content.replace(old, new)
+        with open(INFER, "w") as f:
+            f.write(content)
+        print("infer.py: StudyInstanceUID injected into source DICOMs BEFORE SEG gen (NOT patient_id)")
+        patches_applied = True
+    else:
+        # Patch 7B: If infer.py already has the OLD patient_id injection code (from a previous
+        # patch run), replace it with the corrected version that does NOT inject patient_id.
+        _p7b_old = '''                    source_study_uid = p.get("study_uid") or result.get("params", {}).get("study_uid")
                     source_patient_id = p.get("patient_id") or result.get("params", {}).get("patient_id")
                     if not source_study_uid:
                         try:
@@ -743,12 +796,44 @@ if os.path.exists(INFER):
                     dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, label_info, use_itk=False)
                     if dicom_seg_file and os.path.exists(dicom_seg_file):
                         with open(dicom_seg_file, "rb") as f:'''
-    if old in content:
-        content = content.replace(old, new)
-        with open(INFER, "w") as f:
-            f.write(content)
-        print("infer.py: study_uid + patient_id injected into source DICOMs BEFORE SEG gen")
-        patches_applied = True
+        _p7b_new = '''                    # Read study_uid from frontend params, inject into source DICOMs BEFORE SEG gen.
+                    # NOTE: We do NOT inject patient_id here — the frontend sends a random
+                    # synthetic PatientID that differs from the actual DICOM PatientID, which
+                    # would cause OHIF to show "Multiple Patients" for the same study.
+                    source_study_uid = p.get("study_uid") or result.get("params", {}).get("study_uid")
+                    if not source_study_uid:
+                        try:
+                            dcm_files = list(pathlib.Path(image_path).glob("*"))
+                            if dcm_files:
+                                src_ds = dcmread(str(dcm_files[0]), stop_before_pixels=True)
+                                if hasattr(src_ds, 'StudyInstanceUID'):
+                                    source_study_uid = str(src_ds.StudyInstanceUID)
+                        except Exception as e:
+                            logger.warning(f"Could not read source StudyInstanceUID: {e}")
+
+                    # Inject study_uid into source DICOMs BEFORE SEG gen so highdicom inherits them
+                    if source_study_uid:
+                        try:
+                            dcm_files = list(pathlib.Path(image_path).glob("*"))
+                            for fpath in dcm_files:
+                                ds = dcmread(str(fpath))
+                                if str(ds.StudyInstanceUID) != source_study_uid:
+                                    ds.StudyInstanceUID = source_study_uid
+                                    ds.save_as(str(fpath))
+                                    logger.info(f"Injected StudyInstanceUID into source: {fpath.name}")
+                        except Exception as e:
+                            logger.warning(f"Could not inject StudyInstanceUID into sources: {e}")
+                        logger.info(f"Source StudyInstanceUID: {source_study_uid}")
+
+                    dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, label_info, use_itk=False)
+                    if dicom_seg_file and os.path.exists(dicom_seg_file):
+                        with open(dicom_seg_file, "rb") as f:'''
+        if _p7b_old in content:
+            content = content.replace(_p7b_old, _p7b_new)
+            with open(INFER, "w") as f:
+                f.write(content)
+            print("infer.py: REMOVED patient_id injection from source DICOMs (kept StudyInstanceUID only)")
+            patches_applied = True
 
 
 # Patch 8: Fix DICOM SEG for OHIF — BINARY type + geometry injection + StudyUID post-processing
@@ -983,38 +1068,82 @@ PATCH11_OLD_CODE_BLOCK = """            # Discover the actual SOPInstanceUID fro
             if _p11_expected is None:
                 _p11_expected = _p11_pl.Path(series_dir).name
                 logger.warning(f"Patch 11: Falling back to series_dir name: {_p11_expected}")"""
-# The new Orthanc-querying code (with file fallback) to replace the old block:
+# The new Orthanc-querying code (with file fallback) to replace the old block.
+# Fixed to read StudyInstanceUID from source DICOM file (NOT from parent dir hash).
 PATCH11_NEW_ORTHANC = """            # Query Orthanc for the actual SOPInstanceUID in this series.
             # The cache file's SOPInstanceUID may be stale (different from Orthanc).
             import urllib.request as _p11_urlreq
             import json as _p11_json
             _p11_expected = None
             _p11_series_uid = _p11_pl.Path(series_dir).name
+            # Read both SOPInstanceUID and StudyInstanceUID from cached source DICOM
+            _p11_src_dir = _p11_pl.Path(series_dir)
+            _p11_dcm_files = sorted(_p11_src_dir.glob("*.dcm"))
+            _p11_file_sop = None
+            _p11_study_uid = None
+            if _p11_dcm_files:
+                _p11_src = _p11_dr(str(_p11_dcm_files[0]), stop_before_pixels=True)
+                if hasattr(_p11_src, "SOPInstanceUID"):
+                    _p11_file_sop = str(_p11_src.SOPInstanceUID)
+                if hasattr(_p11_src, "StudyInstanceUID"):
+                    _p11_study_uid = str(_p11_src.StudyInstanceUID)
             try:
-                _p11_q = _p11_json.dumps({"Level": "series", "Query": {"SeriesInstanceUID": _p11_series_uid}}).encode()
-                _p11_req = _p11_urlreq.Request("http://orthanc-container:8042/tools/find", data=_p11_q, headers={"Content-Type": "application/json"})
-                _p11_resp = _p11_urlreq.urlopen(_p11_req, timeout=10)
-                _p11_sids = _p11_json.loads(_p11_resp.read())
-                if _p11_sids:
-                    _p11_resp2 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/series/{_p11_sids[0]}/instances", timeout=10)
-                    _p11_insts = _p11_json.loads(_p11_resp2.read())
-                    if _p11_insts:
-                        _p11_resp3 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/instances/{_p11_insts[0]}/simplified-tags", timeout=10)
-                        _p11_tags = _p11_json.loads(_p11_resp3.read())
-                        _p11_expected = _p11_tags.get("SOPInstanceUID")
+                if _p11_study_uid:
+                    # Query Orthanc at instance level with BOTH Study+Series UIDs for precise filtering
+                    _p11_q = _p11_json.dumps({"Level": "instance", "Query": {"StudyInstanceUID": _p11_study_uid, "SeriesInstanceUID": _p11_series_uid}}).encode()
+                    _p11_req = _p11_urlreq.Request("http://orthanc-container:8042/tools/find", data=_p11_q, headers={"Content-Type": "application/json"})
+                    _p11_resp = _p11_urlreq.urlopen(_p11_req, timeout=10)
+                    _p11_data = _p11_json.loads(_p11_resp.read())
+                    if isinstance(_p11_data, dict):
+                        _p11_first_key = next(iter(_p11_data), None)
+                        if _p11_first_key is not None:
+                            _p11_entry = _p11_data[_p11_first_key]
+                            if isinstance(_p11_entry, dict):
+                                _p11_expected = _p11_entry.get("MainDicomTags", {}).get("SOPInstanceUID")
+                            if not _p11_expected:
+                                _p11_expected = _p11_entry.get("SOPInstanceUID")
+                    elif isinstance(_p11_data, list) and _p11_data:
+                        _p11_first = _p11_data[0]
+                        if isinstance(_p11_first, dict):
+                            _p11_expected = _p11_first.get("MainDicomTags", {}).get("SOPInstanceUID")
+                            if not _p11_expected:
+                                _p11_expected = _p11_first.get("SOPInstanceUID")
+                        elif isinstance(_p11_first, str):
+                            _p11_resp2 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/instances/{_p11_first}/simplified-tags", timeout=10)
+                            _p11_tags = _p11_json.loads(_p11_resp2.read())
+                            _p11_expected = _p11_tags.get("SOPInstanceUID")
+                    if _p11_expected:
                         logger.info(f"Patch 11: Orthanc SOPInstanceUID: {_p11_expected}")
+                        # Also sync PatientID from Orthanc to prevent "Multiple Patients"
+                        _p11_pa = _p11_data
+                        _p11_pid = None
+                        if isinstance(_p11_pa, dict) and _p11_pa:
+                            _p11_fk = next(iter(_p11_pa), None)
+                            if _p11_fk is not None:
+                                _p11_en = _p11_pa[_p11_fk]
+                                if isinstance(_p11_en, dict):
+                                    _p11_pid = _p11_en.get("MainDicomTags", {}).get("PatientID")
+                        elif isinstance(_p11_pa, list) and _p11_pa:
+                            _p11_fi = _p11_pa[0]
+                            if isinstance(_p11_fi, dict):
+                                _p11_pid = _p11_fi.get("MainDicomTags", {}).get("PatientID")
+                            elif isinstance(_p11_fi, str):
+                                try:
+                                    _p11_r3 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/instances/{_p11_fi}/simplified-tags", timeout=10)
+                                    _p11_pid = _p11_json.loads(_p11_r3.read()).get("PatientID")
+                                except Exception:
+                                    pass
+                        if _p11_pid:
+                            _p11_seg.PatientID = str(_p11_pid)
+                            logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_pid}")
             except Exception as _p11_oe:
                 logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")
 
             if _p11_expected is None:
                 logger.warning("Patch 11: Orthanc query returned no result, falling back to file")
-                _p11_src_dir = _p11_pl.Path(series_dir)
-                _p11_dcm_files = sorted(_p11_src_dir.glob("*.dcm"))
-                if _p11_dcm_files:
-                    _p11_src = _p11_dr(str(_p11_dcm_files[0]), stop_before_pixels=True)
-                    if hasattr(_p11_src, "SOPInstanceUID"):
-                        _p11_expected = str(_p11_src.SOPInstanceUID)
-                        logger.info(f"Patch 11: Fallback SOPInstanceUID from file: {_p11_expected}")
+                _p11_expected = _p11_file_sop
+                if _p11_expected:
+                    logger.info(f"Patch 11: Fallback SOPInstanceUID from file: {_p11_expected}")
 
             if _p11_expected is None:
                 _p11_expected = _p11_pl.Path(series_dir).name
@@ -1032,7 +1161,131 @@ if os.path.exists(PATCH11_CONVERT):
         print("convert.py Patch 11 UPGRADED: now queries Orthanc for correct SOPInstanceUID")
         patches_applied = True
 
-    # --- Fresh install: insert the whole block if marker not present ---
+    # --- Upgrade: add PatientID sync to existing Orthanc query (Patch 11D) ---
+    # Detect convert.py that has Orthanc query but missing PatientID sync
+    _p11d_old = '''                    if _p11_expected:
+                        logger.info(f"Patch 11: Orthanc SOPInstanceUID: {_p11_expected}")
+                except Exception as _p11_oe:
+                    logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")'''
+    _p11d_new = '''                    if _p11_expected:
+                        logger.info(f"Patch 11: Orthanc SOPInstanceUID: {_p11_expected}")
+                        # Also sync PatientID from Orthanc to prevent "Multiple Patients"
+                        _p11_pa = _p11_data
+                        _p11_pid = None
+                        if isinstance(_p11_pa, dict) and _p11_pa:
+                            _p11_fk = next(iter(_p11_pa), None)
+                            if _p11_fk is not None:
+                                _p11_en = _p11_pa[_p11_fk]
+                                if isinstance(_p11_en, dict):
+                                    _p11_pid = _p11_en.get("MainDicomTags", {}).get("PatientID")
+                        elif isinstance(_p11_pa, list) and _p11_pa:
+                            _p11_fi = _p11_pa[0]
+                            if isinstance(_p11_fi, dict):
+                                _p11_pid = _p11_fi.get("MainDicomTags", {}).get("PatientID")
+                            elif isinstance(_p11_fi, str):
+                                try:
+                                    _p11_r3 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/instances/{_p11_fi}/simplified-tags", timeout=10)
+                                    _p11_pid = _p11_json.loads(_p11_r3.read()).get("PatientID")
+                                except Exception:
+                                    pass
+                        if _p11_pid:
+                            _p11_seg.PatientID = str(_p11_pid)
+                            logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_pid}")
+                except Exception as _p11_oe:
+                    logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")'''
+    if "Set SEG PatientID from Orthanc" not in _p11_content and _p11d_old in _p11_content:
+        _p11_content = _p11_content.replace(_p11d_old, _p11d_new)
+        with open(PATCH11_CONVERT, "w") as f:
+            f.write(_p11_content)
+        print("convert.py Patch 11D UPGRADED: added PatientID sync from Orthanc")
+        patches_applied = True
+
+    # --- Upgrade from old series-level query to instance-level with correct StudyUID ---
+    _p11c_old = """            _p11_expected = None
+            _p11_series_uid = _p11_pl.Path(series_dir).name
+            try:
+                _p11_q = _p11_json.dumps({"Level": "series", "Query": {"SeriesInstanceUID": _p11_series_uid}}).encode()
+                _p11_req = _p11_urlreq.Request("http://orthanc-container:8042/tools/find", data=_p11_q, headers={"Content-Type": "application/json"})
+                _p11_resp = _p11_urlreq.urlopen(_p11_req, timeout=10)
+                _p11_sids = _p11_json.loads(_p11_resp.read())
+                if _p11_sids:
+                    _p11_resp2 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/series/{_p11_sids[0]}/instances", timeout=10)
+                    _p11_insts = _p11_json.loads(_p11_resp2.read())
+                    if _p11_insts:
+                        _p11_first = _p11_insts[0]
+                        if isinstance(_p11_first, dict):
+                            _p11_expected = _p11_first.get("MainDicomTags", {}).get("SOPInstanceUID")
+                        else:
+                            _p11_resp3 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/instances/{_p11_first}/simplified-tags", timeout=10)
+                            _p11_tags = _p11_json.loads(_p11_resp3.read())
+                            _p11_expected = _p11_tags.get("SOPInstanceUID")
+                        logger.info(f"Patch 11: Orthanc SOPInstanceUID: {_p11_expected}")
+            except Exception as _p11_oe:
+                logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")"""
+    _p11c_new = """            _p11_series_uid = _p11_pl.Path(series_dir).name
+            # Read StudyInstanceUID from source DICOM for precise Orthanc query
+            _p11_src_dir = _p11_pl.Path(series_dir)
+            _p11_dcm_files = sorted(_p11_src_dir.glob("*.dcm"))
+            _p11_study_uid = None
+            if _p11_dcm_files:
+                _p11_src = _p11_dr(str(_p11_dcm_files[0]), stop_before_pixels=True)
+                if hasattr(_p11_src, "StudyInstanceUID"):
+                    _p11_study_uid = str(_p11_src.StudyInstanceUID)
+            # Only overwrite _p11_expected if Orthanc query succeeds (don't clear file-based value)
+            if _p11_study_uid:
+                try:
+                    _p11_q = _p11_json.dumps({"Level": "instance", "Query": {"StudyInstanceUID": _p11_study_uid, "SeriesInstanceUID": _p11_series_uid}}).encode()
+                    _p11_req = _p11_urlreq.Request("http://orthanc-container:8042/tools/find", data=_p11_q, headers={"Content-Type": "application/json"})
+                    _p11_resp = _p11_urlreq.urlopen(_p11_req, timeout=10)
+                    _p11_data = _p11_json.loads(_p11_resp.read())
+                    if isinstance(_p11_data, dict):
+                        _p11_first_key = next(iter(_p11_data), None)
+                        if _p11_first_key is not None:
+                            _p11_entry = _p11_data[_p11_first_key]
+                            if isinstance(_p11_entry, dict):
+                                _p11_expected = _p11_entry.get("MainDicomTags", {}).get("SOPInstanceUID")
+                            if not _p11_expected:
+                                _p11_expected = _p11_entry.get("SOPInstanceUID")
+                    elif isinstance(_p11_data, list) and _p11_data:
+                        _p11_first = _p11_data[0]
+                        if isinstance(_p11_first, dict):
+                            _p11_expected = _p11_first.get("MainDicomTags", {}).get("SOPInstanceUID")
+                            if not _p11_expected:
+                                _p11_expected = _p11_first.get("SOPInstanceUID")
+                        elif isinstance(_p11_first, str):
+                            _p11_resp2 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/instances/{_p11_first}/simplified-tags", timeout=10)
+                            _p11_tags = _p11_json.loads(_p11_resp2.read())
+                            _p11_expected = _p11_tags.get("SOPInstanceUID")
+                    if _p11_expected:
+                        logger.info(f"Patch 11: Orthanc SOPInstanceUID: {_p11_expected}")
+                        # Also extract PatientID from Orthanc response to fix "Multiple Patients"
+                        _p11_orthanc_patient_id = None
+                        if isinstance(_p11_data, dict):
+                            _p11_first_key = next(iter(_p11_data), None)
+                            if _p11_first_key is not None:
+                                _p11_entry = _p11_data[_p11_first_key]
+                                if isinstance(_p11_entry, dict):
+                                    _p11_orthanc_patient_id = _p11_entry.get("MainDicomTags", {}).get("PatientID")
+                        elif isinstance(_p11_data, list) and _p11_data:
+                            _p11_first = _p11_data[0]
+                            if isinstance(_p11_first, dict):
+                                _p11_orthanc_patient_id = _p11_first.get("MainDicomTags", {}).get("PatientID")
+                            elif isinstance(_p11_first, str):
+                                _p11_resp3 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/instances/{_p11_first}/simplified-tags", timeout=10)
+                                _p11_tags2 = _p11_json.loads(_p11_resp3.read())
+                                _p11_orthanc_patient_id = _p11_tags2.get("PatientID")
+                        if _p11_orthanc_patient_id:
+                            _p11_seg.PatientID = str(_p11_orthanc_patient_id)
+                            logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_orthanc_patient_id}")
+                except Exception as _p11_oe:
+                    logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")"""
+    if _p11c_old in _p11_content:
+        _p11_content = _p11_content.replace(_p11c_old, _p11c_new)
+        with open(PATCH11_CONVERT, "w") as f:
+            f.write(_p11_content)
+        print("convert.py Patch 11C UPGRADED: fixed Orthanc query + PatientID sync")
+        patches_applied = True
+
     elif PATCH11_MARKER not in _p11_content:
         # Find: the latency log line in nifti_to_dicom_seg wrapper function
         _p11_old = '''    logger.info(f"nifti_to_dicom_seg latency : {time.time() - start} (sec)")
@@ -1054,31 +1307,73 @@ if os.path.exists(PATCH11_CONVERT):
             # Query Orthanc for the actual SOPInstanceUID in this series
             _p11_expected = None
             _p11_series_uid = _p11_pl.Path(series_dir).name
+            # Read both SOPInstanceUID and StudyInstanceUID from cached source DICOM
+            _p11_src_dir = _p11_pl.Path(series_dir)
+            _p11_dcm_files = sorted(_p11_src_dir.glob("*.dcm"))
+            _p11_file_sop = None
+            _p11_study_uid = None
+            if _p11_dcm_files:
+                _p11_src = _p11_dr(str(_p11_dcm_files[0]), stop_before_pixels=True)
+                if hasattr(_p11_src, "SOPInstanceUID"):
+                    _p11_file_sop = str(_p11_src.SOPInstanceUID)
+                if hasattr(_p11_src, "StudyInstanceUID"):
+                    _p11_study_uid = str(_p11_src.StudyInstanceUID)
             try:
-                _p11_q = _p11_json.dumps({"Level": "series", "Query": {"SeriesInstanceUID": _p11_series_uid}}).encode()
-                _p11_req = _p11_urlreq.Request("http://orthanc-container:8042/tools/find", data=_p11_q, headers={"Content-Type": "application/json"})
-                _p11_resp = _p11_urlreq.urlopen(_p11_req, timeout=10)
-                _p11_sids = _p11_json.loads(_p11_resp.read())
-                if _p11_sids:
-                    _p11_resp2 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/series/{_p11_sids[0]}/instances", timeout=10)
-                    _p11_insts = _p11_json.loads(_p11_resp2.read())
-                    if _p11_insts:
-                        _p11_resp3 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/instances/{_p11_insts[0]}/simplified-tags", timeout=10)
-                        _p11_tags = _p11_json.loads(_p11_resp3.read())
-                        _p11_expected = _p11_tags.get("SOPInstanceUID")
+                if _p11_study_uid:
+                    # Query Orthanc at instance level with BOTH Study+Series UIDs for precise filtering
+                    _p11_q = _p11_json.dumps({"Level": "instance", "Query": {"StudyInstanceUID": _p11_study_uid, "SeriesInstanceUID": _p11_series_uid}}).encode()
+                    _p11_req = _p11_urlreq.Request("http://orthanc-container:8042/tools/find", data=_p11_q, headers={"Content-Type": "application/json"})
+                    _p11_resp = _p11_urlreq.urlopen(_p11_req, timeout=10)
+                    _p11_data = _p11_json.loads(_p11_resp.read())
+                    if isinstance(_p11_data, dict):
+                        _p11_first_key = next(iter(_p11_data), None)
+                        if _p11_first_key is not None:
+                            _p11_entry = _p11_data[_p11_first_key]
+                            if isinstance(_p11_entry, dict):
+                                _p11_expected = _p11_entry.get("MainDicomTags", {}).get("SOPInstanceUID")
+                            if not _p11_expected:
+                                _p11_expected = _p11_entry.get("SOPInstanceUID")
+                    elif isinstance(_p11_data, list) and _p11_data:
+                        _p11_first = _p11_data[0]
+                        if isinstance(_p11_first, dict):
+                            _p11_expected = _p11_first.get("MainDicomTags", {}).get("SOPInstanceUID")
+                            if not _p11_expected:
+                                _p11_expected = _p11_first.get("SOPInstanceUID")
+                        elif isinstance(_p11_first, str):
+                            _p11_resp2 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/instances/{_p11_first}/simplified-tags", timeout=10)
+                            _p11_tags = _p11_json.loads(_p11_resp2.read())
+                            _p11_expected = _p11_tags.get("SOPInstanceUID")
+                    if _p11_expected:
                         logger.info(f"Patch 11: Orthanc SOPInstanceUID: {_p11_expected}")
+                        # Also sync PatientID from Orthanc to prevent "Multiple Patients"
+                        _p11_opa = None
+                        if isinstance(_p11_data, dict):
+                            _p11_fk = next(iter(_p11_data), None)
+                            if _p11_fk is not None:
+                                _p11_en = _p11_data[_p11_fk]
+                                if isinstance(_p11_en, dict):
+                                    _p11_opa = _p11_en.get("MainDicomTags", {}).get("PatientID")
+                        elif isinstance(_p11_data, list) and _p11_data:
+                            _p11_fi = _p11_data[0]
+                            if isinstance(_p11_fi, dict):
+                                _p11_opa = _p11_fi.get("MainDicomTags", {}).get("PatientID")
+                            elif isinstance(_p11_fi, str):
+                                try:
+                                    _p11_r3 = _p11_urlreq.urlopen(f"http://orthanc-container:8042/instances/{_p11_fi}/simplified-tags", timeout=10)
+                                    _p11_opa = _p11_json.loads(_p11_r3.read()).get("PatientID")
+                                except Exception:
+                                    pass
+                        if _p11_opa:
+                            _p11_seg.PatientID = str(_p11_opa)
+                            logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_opa}")
             except Exception as _p11_oe:
                 logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")
 
             if _p11_expected is None:
                 logger.warning("Patch 11: Orthanc query returned no result, falling back to file")
-                _p11_src_dir = _p11_pl.Path(series_dir)
-                _p11_dcm_files = sorted(_p11_src_dir.glob("*.dcm"))
-                if _p11_dcm_files:
-                    _p11_src = _p11_dr(str(_p11_dcm_files[0]), stop_before_pixels=True)
-                    if hasattr(_p11_src, "SOPInstanceUID"):
-                        _p11_expected = str(_p11_src.SOPInstanceUID)
-                        logger.info(f"Patch 11: Fallback SOPInstanceUID from file: {_p11_expected}")
+                _p11_expected = _p11_file_sop
+                if _p11_expected:
+                    logger.info(f"Patch 11: Fallback SOPInstanceUID from file: {_p11_expected}")
 
             if _p11_expected is None:
                 _p11_expected = _p11_pl.Path(series_dir).name

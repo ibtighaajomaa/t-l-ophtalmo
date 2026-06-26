@@ -48,33 +48,33 @@
                 "optic_cup": 2
               },
               "latencies": {
-                "pre": 0.01,
-                "infer": 2.14,
+                "pre": 0.03,
+                "infer": 0.66,
                 "invert": 0.01,
                 "post": 0.01,
-                "write": 1.84,
-                "total": 4.01,
+                "write": 0.0,
+                "total": 0.72,
                 "transform": {
                   "pre": {
-                    "LoadImaged": 0.0038,
-                    "EnsureTyped": 0.0002,
-                    "EnsureChannelFirstd": 0.0002,
+                    "LoadImaged": 0.003,
+                    "EnsureTyped": 0.0001,
+                    "EnsureChannelFirstd": 0.0001,
                     "Ensure3ChannelRGBd": 0.0,
                     "SqueezeDepthd": 0.0001,
-                    "Resized": 0.0031,
-                    "ScaleIntensityRanged": 0.0019,
+                    "Resized": 0.0096,
+                    "ScaleIntensityRanged": 0.0157,
                     "ImageNetNormalized": 0.0008
                   },
                   "post": {
                     "EnsureTyped": 0.0001,
-                    "AsDiscreted": 0.0079,
+                    "AsDiscreted": 0.0069,
                     "Restored": 0.0001
                   }
                 }
               },
               "centroids": {}
             },
-            "ts": 1782435118,
+            "ts": 1782435703,
             "name": "1.2.826.0.1.3680043.10.14693038617622535132311656803458854870001.nii.gz"
           }
         }
