@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import date, datetime
 from django.db.models import Q, Max
@@ -330,6 +331,13 @@ def orthanc_webhook(request):
         from .distribution import distribuer_examens
         distribuer_examens()
 
+    # Déclencher la segmentation automatique via MONAI Label
+    try:
+        from .tasks import tache_auto_segmentation
+        tache_auto_segmentation.delay()
+    except Exception:
+        pass
+
     return Response({
         'status': 'created',
         'exam_id': exam.id,
@@ -387,6 +395,76 @@ def monai_inference_webhook(request):
         'status': 'updated',
         'exam_id': exam.id,
         'study_instance_uid': study_uid,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def request_composite_segmentation(request):
+    """
+    Appelle MONAI Label pour la segmentation composite (OD/OC + lésions + vaisseaux)
+    et retourne l'overlay + résultats d'analyse.
+    Body: { "study_instance_uid": "...", "image_id": "..." }
+    """
+    study_uid = request.data.get('study_instance_uid')
+    image_id = request.data.get('image_id') or study_uid
+    if not study_uid:
+        return Response({'error': 'study_instance_uid is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    monai_url = "http://monai-label:8000/infer/composite_seg?output=json"
+    monai_params = {"device": "cuda" if os.environ.get("USE_CUDA", "false") == "true" else "cpu"}
+    try:
+        resp = requests.post(
+            monai_url,
+            data={"image": image_id, "params": json.dumps(monai_params)},
+            timeout=120,
+        )
+        if resp.status_code != 200:
+            return Response(
+                {'error': f'MONAI Label inference failed: {resp.status_code}', 'detail': resp.text},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        result = resp.json()
+    except requests.exceptions.ConnectionError:
+        return Response(
+            {'error': 'MONAI Label server unreachable at monai-label:8000'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    except requests.exceptions.Timeout:
+        return Response(
+            {'error': 'MONAI Label inference timed out after 120s'},
+            status=status.HTTP_504_GATEWAY_TIMEOUT,
+        )
+
+    overlay_base64 = result.get("overlay_base64") or result.get("params", {}).get("overlay_base64")
+    payload = result if "overlay_base64" in result else result.get("params", {})
+    overlay_base64 = payload.get("overlay_base64")
+    analysis = {
+        k: v for k, v in payload.items() if k != "overlay_base64"
+    }
+
+    AnalysisReport.objects.create(
+        series_instance_uid=study_uid,
+        user=None,
+        report_json={
+            "source": "monai_label_composite",
+            "status": "AI_ANALYZED",
+            "data": analysis,
+        },
+    )
+
+    exam = Exam.objects.filter(study_instance_uid=study_uid).first()
+    if exam and exam.status == "En attente":
+        exam.status = "En cours"
+        exam.save(update_fields=["status"])
+
+    return Response({
+        "status": "completed",
+        "overlay_base64": overlay_base64,
+        "overlay_format": result_json.get("overlay_format", "png"),
+        "overlay_width": result_json.get("overlay_width"),
+        "overlay_height": result_json.get("overlay_height"),
+        "analysis": analysis,
     })
 
 

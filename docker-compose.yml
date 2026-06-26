@@ -318,7 +318,7 @@ services:
       monailabel start_server
       --app /opt/monai/apps/radiology
       --studies http://orthanc-container:8042/dicom-web
-      --conf models optic_disc_cup,vessel_seg,lesion_seg,dr_classification
+      --conf models optic_disc_cup,vessel_seg,lesion_seg,dr_classification,composite_seg
       --conf sam2 false
       --host 0.0.0.0
       --port 8000

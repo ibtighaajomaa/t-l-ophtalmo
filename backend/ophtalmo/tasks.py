@@ -4,6 +4,7 @@ Tâches Celery pour le système de distribution des examens.
 - tache_verification_24h : vérification périodique des examens en retard (toutes les 24h)
 - tache_recalcul_charges : recalcul de sécurité des charges médecins
 - tache_sync_orthanc_incremental : synchronisation incrémentale depuis Orthanc (toutes les 60s)
+- tache_auto_segmentation : segmentation automatique des nouvelles études OP par MONAI Label
 """
 import os
 import logging
@@ -170,6 +171,10 @@ def tache_sync_orthanc_incremental():
             from .distribution import distribuer_examens
             distribuer_examens()
 
+    if created > 0:
+        # Déclencher la segmentation automatique pour les nouvelles études
+        tache_auto_segmentation.delay()
+
     logger.info(
         f"[OrthancSync] created={created} skipped={skipped} "
         f"seq={last_seq}->{new_seq}"
@@ -180,3 +185,99 @@ def tache_sync_orthanc_incremental():
         'skipped': skipped,
         'seq': new_seq,
     }
+
+
+@shared_task(name='ophtalmo.tasks.tache_auto_segmentation')
+def tache_auto_segmentation():
+    """
+    Parcourt les examens OP en attente dans la worklist et déclenche
+    la segmentation MONAI Label (OD/OC, vaisseaux, lésions) pour chacun.
+    Les résultats DICOM-SEG sont automatiquement poussés dans Orthanc
+    via le pipeline patché de MONAI Label.
+    """
+    from .models import Exam
+
+    exams = Exam.objects.filter(
+        status='En attente',
+        exam_type='Rétinographie',
+    )[:5]
+
+    MONAI_URL = "http://monai-label:8000/infer/analyze"
+
+    for exam in exams:
+        study_uid = exam.study_instance_uid
+        if not study_uid:
+            continue
+
+        # Vérifier si l'étude a déjà été segmentée
+        from .models import AnalysisReport
+        if AnalysisReport.objects.filter(
+            series_instance_uid=study_uid,
+            report_json__source='monai_label',
+        ).exists():
+            continue
+
+        # Vérifier via Orthanc que l'étude a bien une série OP (pas déjà SEG-only)
+        try:
+            orthanc_resp = requests.get(
+                f'{ORTHANC_URL}/studies/{study_uid}',
+                timeout=10,
+            )
+            if orthanc_resp.status_code != 200:
+                continue
+            orthanc_meta = orthanc_resp.json()
+            series_ids = orthanc_meta.get('Series', [])
+            has_op = False
+            for sid in series_ids:
+                sr = requests.get(f'{ORTHANC_URL}/series/{sid}', timeout=10)
+                if sr.status_code == 200:
+                    mod = sr.json().get('MainDicomTags', {}).get('Modality', '')
+                    if mod == 'OP':
+                        has_op = True
+                        break
+            if not has_op:
+                continue
+        except Exception as e:
+            logger.warning(f"[AutoSeg] Orthanc check failed for {study_uid}: {e}")
+            continue
+
+        # Récupérer le StudyInstanceUID DICOM depuis Orthanc
+        try:
+            suid_resp = requests.get(
+                f'{ORTHANC_URL}/studies/{study_uid}',
+                timeout=10,
+            )
+            if suid_resp.status_code == 200:
+                study_data = suid_resp.json()
+                study_instance_uid = study_data.get('MainDicomTags', {}).get('StudyInstanceUID')
+                if not study_instance_uid:
+                    continue
+            else:
+                continue
+        except Exception as e:
+            logger.warning(f"[AutoSeg] Cannot get StudyInstanceUID: {e}")
+            continue
+
+        # Lancer l'analyse MONAI Label
+        try:
+            logger.info(f"[AutoSeg] Launching MONAI analyze for study {study_instance_uid}")
+            resp = requests.post(
+                MONAI_URL,
+                json={
+                    "image_uid": study_instance_uid,
+                    "run_segmentation": True,
+                    "device": "cuda" if os.environ.get("USE_CUDA", "false") == "true" else "cpu",
+                },
+                timeout=600,  # 10 minutes max (3 models × ~2 min each on CPU)
+            )
+            if resp.status_code == 200:
+                logger.info(f"[AutoSeg] MONAI analyze succeeded for {study_instance_uid}")
+                exam.status = 'En cours'
+                exam.save(update_fields=['status'])
+            else:
+                logger.warning(
+                    f"[AutoSeg] MONAI analyze returned {resp.status_code} "
+                    f"for {study_instance_uid}"
+                )
+        except Exception as e:
+            logger.error(f"[AutoSeg] MONAI analyze failed for {study_instance_uid}: {e}")

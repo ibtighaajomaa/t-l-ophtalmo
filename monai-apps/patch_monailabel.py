@@ -1419,6 +1419,34 @@ if os.path.exists(PATCH11_CONVERT):
         patches_applied = True
         print("convert.py: Patch 11 already applied")
 
+# Patch 12: Inject model_name into label_info so SEG SeriesDescription reflects the model name
+# This makes each SEG series distinguishable (instead of all showing "AIName")
+if os.path.exists(INFER):
+    with open(INFER) as f:
+        _p12_content = f.read()
+    _p12_marker = "### MONAI_P12_MODEL_NAME ###"
+    if _p12_marker not in _p12_content:
+        _p12_old = '''label_info = p.get("label_info") or result.get("params", {}).get("label_info")\n            if res_img and os.path.exists(res_img) and label_info:'''
+        _p12_new = '''label_info = p.get("label_info") or result.get("params", {}).get("label_info")\n            if label_info and isinstance(label_info, list) and len(label_info) > 0 and isinstance(label_info[0], dict):\n                label_info[0]["model_name"] = model\n            ### MONAI_P12_MODEL_NAME ###\n            if res_img and os.path.exists(res_img) and label_info:'''
+        if _p12_old in _p12_content:
+            _p12_content = _p12_content.replace(_p12_old, _p12_new)
+            # Also fix the second nifti_to_dicom_seg call in the dicom_seg output path
+            _p12_old2 = '''dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, p.get("label_info") or result.get("params", {}).get("label_info") or result.get("params", {}).get("label_info"), use_itk=False)'''
+            _p12_new2 = '''_li3 = p.get("label_info") or result.get("params", {}).get("label_info") or result.get("params", {}).get("label_info")\n        if _li3 and isinstance(_li3, list) and len(_li3) > 0 and isinstance(_li3[0], dict):\n            _li3[0]["model_name"] = model\n        dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, _li3, use_itk=False)'''
+            if _p12_old2 in _p12_content:
+                _p12_content = _p12_content.replace(_p12_old2, _p12_new2)
+            with open(INFER, "w") as f:
+                f.write(_p12_content)
+            print("infer.py Patch 12: model_name injected into label_info for SEG SeriesDescription")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 12 — label_info pattern not found in infer.py")
+    else:
+        patches_applied = True
+        print("infer.py: Patch 12 already applied")
+else:
+    patches_applied = True
+
 if not patches_applied:
     print("No patches needed (already applied or versions mismatch)")
 else:

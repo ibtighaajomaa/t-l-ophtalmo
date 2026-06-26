@@ -106,8 +106,10 @@ function SegIcon({ type, color }: { type: string; color: string }) {
   // lesion
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <circle cx="7" cy="7" r="4" fill={color} fillOpacity="0.25" />
-      <circle cx="7" cy="7" r="2" fill={color} />
+      <circle cx="5" cy="5" r="2.5" fill="#ff6b6b" fillOpacity="0.45" stroke="#ff6b6b" strokeWidth="0.6" />
+      <circle cx="10" cy="4" r="1.5" fill="#ffd93d" fillOpacity="0.5" stroke="#ffd93d" strokeWidth="0.5" />
+      <circle cx="8" cy="9" r="1.2" fill="#a855f7" fillOpacity="0.6" stroke="#a855f7" strokeWidth="0.5" />
+      <circle cx="4" cy="10" r="1" fill="#ff6b6b" fillOpacity="0.5" stroke="#ff6b6b" strokeWidth="0.4" />
     </svg>
   );
 }
@@ -168,14 +170,16 @@ function useScreenshot(targetRef: React.RefObject<HTMLElement | null>) {
       const legends = [
         { label: "Vessel Segmentation", color: "#00bcd4" },
         { label: "Optic Disc", color: "#4caf50" },
-        { label: "Lesion", color: "#ff6b6b" },
+        { label: "Lesion — Hemorrhage", color: "#ff6b6b" },
+        { label: "Lesion — Exudate", color: "#ffd93d" },
+        { label: "Lesion — Microaneurysm", color: "#a855f7" },
       ];
       legends.forEach((l, i) => {
         ctx.fillStyle = l.color;
-        ctx.fillRect(20, 90 + i * 24, 14, 14);
+        ctx.fillRect(20, 90 + i * 20, 12, 12);
         ctx.fillStyle = "#e2e8f0";
-        ctx.font = "12px system-ui";
-        ctx.fillText(l.label, 42, 102 + i * 24);
+        ctx.font = "11px system-ui";
+        ctx.fillText(l.label, 38, 100 + i * 20);
       });
 
       const dataUrl = canvas.toDataURL("image/png");
@@ -531,58 +535,37 @@ function ExamDetail() {
                         filter: "blur(1.5px)",
                       }}
                     />
-                    {/* Vessel overlay — active */}
+                    {/* Vessel overlay — thin cyan lines with realistic branching */}
                     {(activeSegSeries === "vessel" || activeSegSeries === "all") && (
                       <svg
                         className="absolute inset-0 w-full h-full"
                         viewBox="0 0 420 420"
-                        style={{ opacity: 0.85 }}
+                        style={{ opacity: 0.8 }}
                       >
-                        <path
-                          d="M210 200 Q240 160 270 120 Q300 80 320 60"
-                          stroke="#00bcd4"
-                          strokeWidth="2.5"
-                          fill="none"
-                          strokeLinecap="round"
-                        />
-                        <path
-                          d="M210 200 Q180 170 160 140 Q140 110 130 80"
-                          stroke="#00bcd4"
-                          strokeWidth="2"
-                          fill="none"
-                          strokeLinecap="round"
-                        />
-                        <path
-                          d="M210 200 Q250 230 280 260 Q310 290 330 310"
-                          stroke="#00bcd4"
-                          strokeWidth="2"
-                          fill="none"
-                          strokeLinecap="round"
-                        />
-                        <path
-                          d="M210 200 Q175 225 155 255 Q135 285 120 310"
-                          stroke="#00bcd4"
-                          strokeWidth="1.8"
-                          fill="none"
-                          strokeLinecap="round"
-                        />
-                        <path
-                          d="M270 120 Q290 100 310 85"
-                          stroke="#00bcd4"
-                          strokeWidth="1.5"
-                          fill="none"
-                          strokeLinecap="round"
-                        />
-                        <path
-                          d="M160 140 Q145 120 135 100"
-                          stroke="#00bcd4"
-                          strokeWidth="1.5"
-                          fill="none"
-                          strokeLinecap="round"
-                        />
+                        {/* Superior temporal arcade */}
+                        <path d="M170 205 Q200 175 250 145 Q290 120 330 95" stroke="#00bcd4" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+                        <path d="M250 145 Q270 130 280 110" stroke="#00bcd4" strokeWidth="0.9" fill="none" strokeLinecap="round" />
+                        <path d="M250 145 Q260 140 275 155" stroke="#00bcd4" strokeWidth="0.8" fill="none" strokeLinecap="round" />
+                        <path d="M290 120 Q310 110 340 115" stroke="#00bcd4" strokeWidth="1" fill="none" strokeLinecap="round" />
+                        {/* Superior nasal arcade */}
+                        <path d="M170 205 Q145 180 120 155 Q90 130 65 110" stroke="#00bcd4" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+                        <path d="M120 155 Q105 140 85 145" stroke="#00bcd4" strokeWidth="0.8" fill="none" strokeLinecap="round" />
+                        <path d="M90 130 Q75 115 50 120" stroke="#00bcd4" strokeWidth="0.9" fill="none" strokeLinecap="round" />
+                        {/* Inferior temporal arcade */}
+                        <path d="M170 205 Q205 235 255 265 Q300 290 335 320" stroke="#00bcd4" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+                        <path d="M255 265 Q275 280 270 305" stroke="#00bcd4" strokeWidth="0.8" fill="none" strokeLinecap="round" />
+                        <path d="M300 290 Q320 305 350 295" stroke="#00bcd4" strokeWidth="0.9" fill="none" strokeLinecap="round" />
+                        {/* Inferior nasal arcade */}
+                        <path d="M170 205 Q140 230 110 260 Q80 290 55 310" stroke="#00bcd4" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+                        <path d="M110 260 Q95 275 75 270" stroke="#00bcd4" strokeWidth="0.8" fill="none" strokeLinecap="round" />
+                        <path d="M80 290 Q65 305 45 295" stroke="#00bcd4" strokeWidth="0.8" fill="none" strokeLinecap="round" />
+                        {/* Small macular branches */}
+                        <path d="M170 205 Q195 195 220 195 Q245 195 260 205" stroke="#00bcd4" strokeWidth="0.7" fill="none" strokeLinecap="round" />
+                        <path d="M220 195 Q225 180 235 170" stroke="#00bcd4" strokeWidth="0.6" fill="none" strokeLinecap="round" />
+                        <path d="M170 205 Q180 215 195 225" stroke="#00bcd4" strokeWidth="0.6" fill="none" strokeLinecap="round" />
                       </svg>
                     )}
-                    {/* Optic disc segmentation overlay */}
+                    {/* Optic disc segmentation overlay — green contour with transparent mask */}
                     {(activeSegSeries === "optic-disc" ||
                       activeSegSeries === "all") && (
                       <svg
@@ -590,6 +573,9 @@ function ExamDetail() {
                         viewBox="0 0 420 420"
                         style={{ opacity: 0.9 }}
                       >
+                        {/* Outer glow */}
+                        <circle cx="168" cy="207" r="42" stroke="none" fill="rgba(76,175,80,0.06)" />
+                        {/* Disc contour */}
                         <circle
                           cx="168"
                           cy="207"
@@ -598,6 +584,9 @@ function ExamDetail() {
                           strokeWidth="2.5"
                           fill="rgba(76,175,80,0.12)"
                         />
+                        {/* Disc inner highlight */}
+                        <circle cx="168" cy="207" r="38" stroke="none" fill="rgba(76,175,80,0.04)" />
+                        {/* Cup contour */}
                         <circle
                           cx="168"
                           cy="207"
@@ -608,39 +597,39 @@ function ExamDetail() {
                         />
                       </svg>
                     )}
-                    {/* Lesion segmentation overlay */}
+                    {/* Lesion segmentation overlay — red/yellow/purple pixel-level masks */}
                     {(activeSegSeries === "lesion" || activeSegSeries === "all") && (
                       <svg
                         className="absolute inset-0 w-full h-full"
                         viewBox="0 0 420 420"
-                        style={{ opacity: 0.85 }}
+                        style={{ opacity: 0.8 }}
                       >
-                        <ellipse
-                          cx="290"
-                          cy="190"
-                          rx="12"
-                          ry="10"
-                          fill="rgba(255,107,107,0.4)"
-                          stroke="#ff6b6b"
-                          strokeWidth="1.5"
-                        />
-                        <ellipse
-                          cx="240"
-                          cy="280"
-                          rx="8"
-                          ry="7"
-                          fill="rgba(255,107,107,0.35)"
-                          stroke="#ff6b6b"
-                          strokeWidth="1.5"
-                        />
-                        <circle
-                          cx="320"
-                          cy="250"
-                          r="5"
-                          fill="rgba(255,107,107,0.45)"
-                          stroke="#ff6b6b"
-                          strokeWidth="1.5"
-                        />
+                        {/* — Hemorrhages (red, irregular blobs) — */}
+                        <path d="M285 185 Q292 178 298 186 Q305 195 296 198 Q288 200 283 192 Z" fill="rgba(255,70,70,0.5)" stroke="#ff4646" strokeWidth="1" />
+                        <path d="M275 192 Q280 186 288 190 Q295 195 290 201 Q283 206 276 200 Z" fill="rgba(255,70,70,0.4)" stroke="#ff4646" strokeWidth="0.8" />
+                        <path d="M230 275 Q236 268 244 273 Q250 280 242 285 Q234 288 228 282 Z" fill="rgba(255,70,70,0.55)" stroke="#ff4646" strokeWidth="1" />
+                        <path d="M225 282 Q230 276 238 280 Q243 286 236 290 Q229 292 224 287 Z" fill="rgba(255,70,70,0.35)" stroke="#ff4646" strokeWidth="0.8" />
+                        <path d="M310 245 Q318 238 325 246 Q330 254 322 258 Q314 260 308 253 Z" fill="rgba(255,70,70,0.45)" stroke="#ff4646" strokeWidth="0.8" />
+
+                        {/* — Exudates (yellow, clustered irregular patches) — */}
+                        <path d="M140 130 Q146 122 153 128 Q158 135 152 140 Q145 143 139 137 Z" fill="rgba(255,217,61,0.55)" stroke="#ffd93d" strokeWidth="0.8" />
+                        <path d="M148 122 Q154 116 161 120 Q166 127 159 132 Q152 135 147 129 Z" fill="rgba(255,217,61,0.45)" stroke="#ffd93d" strokeWidth="0.7" />
+                        <path d="M135 138 Q140 132 147 136 Q151 142 145 146 Q139 148 134 143 Z" fill="rgba(255,217,61,0.4)" stroke="#ffd93d" strokeWidth="0.7" />
+                        <path d="M155 115 Q160 108 168 112 Q173 119 166 124 Q159 127 154 121 Z" fill="rgba(255,217,61,0.5)" stroke="#ffd93d" strokeWidth="0.8" />
+                        <path d="M300 170 Q306 163 313 167 Q318 174 311 179 Q304 181 299 176 Z" fill="rgba(255,217,61,0.5)" stroke="#ffd93d" strokeWidth="0.8" />
+                        <path d="M308 164 Q314 158 320 162 Q325 169 318 173 Q312 175 307 170 Z" fill="rgba(255,217,61,0.4)" stroke="#ffd93d" strokeWidth="0.7" />
+                        <path d="M295 178 Q300 172 306 176 Q310 182 304 185 Q298 187 294 182 Z" fill="rgba(255,217,61,0.35)" stroke="#ffd93d" strokeWidth="0.7" />
+
+                        {/* — Microaneurysms (purple, tiny pinpoint dots) — */}
+                        <circle cx="260" cy="150" r="2.5" fill="rgba(168,85,247,0.7)" stroke="#a855f7" strokeWidth="0.6" />
+                        <circle cx="268" cy="155" r="2" fill="rgba(168,85,247,0.65)" stroke="#a855f7" strokeWidth="0.6" />
+                        <circle cx="255" cy="158" r="1.8" fill="rgba(168,85,247,0.6)" stroke="#a855f7" strokeWidth="0.5" />
+                        <circle cx="265" cy="145" r="2.2" fill="rgba(168,85,247,0.7)" stroke="#a855f7" strokeWidth="0.6" />
+                        <circle cx="190" cy="260" r="2" fill="rgba(168,85,247,0.65)" stroke="#a855f7" strokeWidth="0.6" />
+                        <circle cx="196" cy="265" r="1.5" fill="rgba(168,85,247,0.55)" stroke="#a855f7" strokeWidth="0.5" />
+                        <circle cx="185" cy="268" r="1.8" fill="rgba(168,85,247,0.6)" stroke="#a855f7" strokeWidth="0.5" />
+                        <circle cx="340" cy="200" r="2" fill="rgba(168,85,247,0.65)" stroke="#a855f7" strokeWidth="0.6" />
+                        <circle cx="348" cy="205" r="1.5" fill="rgba(168,85,247,0.55)" stroke="#a855f7" strokeWidth="0.5" />
                       </svg>
                     )}
                   </div>
@@ -668,10 +657,23 @@ function ExamDetail() {
                       </div>
                     )}
                     {(activeSegSeries === "lesion" || activeSegSeries === "all") && (
-                      <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 rounded-full border border-red-400 bg-red-400/30" />
-                        <span>Lésions détectées</span>
-                      </div>
+                      <>
+                        <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold mt-1 mb-0.5">
+                          Lésions
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full border border-red-400 bg-red-400/40" />
+                          <span>Hémorragies</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full border border-yellow-400 bg-yellow-400/40" />
+                          <span>Exsudats</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full border border-purple-400 bg-purple-400/40" />
+                          <span>Microanévrismes</span>
+                        </div>
+                      </>
                     )}
                   </div>
                 )}
@@ -761,7 +763,9 @@ function ExamDetail() {
                   </h3>
                   <div className="space-y-2">
                     {[
-                      { label: "Lésions", type: "lesion", color: "#ff6b6b", count: 3 },
+                      { label: "Hémorragies", type: "lesion", color: "#ff6b6b", count: 5 },
+                      { label: "Exsudats", type: "lesion", color: "#ffd93d", count: 7 },
+                      { label: "Microanévrismes", type: "lesion", color: "#a855f7", count: 9 },
                       { label: "Vaisseaux", type: "vessel", color: "#00bcd4", count: 1 },
                       { label: "Disque optique", type: "optic-disc", color: "#4caf50", count: 1 },
                     ].map((seg) => (

@@ -121,7 +121,7 @@ function LoginPage() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    placeholder="vous@hopital.dz"
+                    placeholder="vous@hopital.rns"
                     autoComplete="off"
                     name="email_nofill"
                   />
