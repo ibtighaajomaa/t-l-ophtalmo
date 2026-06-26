@@ -253,7 +253,7 @@ def recalculer_charges():
 
 
 @transaction.atomic
-def assigner_examens_nouveau_medecin(profil):
+def assigner_examens_nouveau_medecin(profil, max_examens=None):
     """
     Assigne immédiatement jusqu'à MAX_CHARGE_PAR_MEDECIN examens 
     les plus prioritaires à un nouveau médecin dès la création de son compte.
@@ -263,6 +263,9 @@ def assigner_examens_nouveau_medecin(profil):
 
     # Ne distribuer que la capacité restante (normalement MAX_CHARGE_PAR_MEDECIN si nouveau)
     capacite = max(0, MAX_CHARGE_PAR_MEDECIN - profil.charge_actuelle)
+    if max_examens is not None:
+        capacite = min(capacite, max_examens)
+        
     if capacite <= 0:
         return {'distribues': 0}
 

@@ -315,7 +315,8 @@ function AdminDashboard() {
                       </td>
                       {user?.role === "Admin" && <td className="py-3 pr-4 text-slate-600">{u.createdBy || "—"}</td>}
                     <td className="py-3 pr-4 text-right space-x-2">
-                      {user?.role === "Admin" && (u.role === "Medecin" || u.role === "Resident" || u.role === "Chef") && (
+                      {((user?.role === "Admin" && (u.role === "Medecin" || u.role === "Resident" || u.role === "Chef")) ||
+                        (user?.role === "Chef" && (u.role === "Medecin" || u.role === "Resident"))) && (
                         <button
                           onClick={() => handleToggleAvailability(u.email)}
                           className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${

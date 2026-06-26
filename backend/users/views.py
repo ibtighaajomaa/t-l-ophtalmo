@@ -71,11 +71,37 @@ class CreerUtilisateurView(APIView):
             )
 
             # 5. Créer ou mettre à jour le Profil
+            role_map = {
+                'ADMIN_SYSTEME': 'Admin',
+                'CHEF_SERVICE': 'Chef',
+                'OPHTALMOLOGUE': 'Medecin',
+                'RESIDENT': 'Resident'
+            }
+            mapped_role = role_map.get(data['role'], data['role'])
+
+            profil_defaults = {'role': mapped_role}
             if 'telephone' in data:
-                Profil.objects.update_or_create(
-                    user=user,
-                    defaults={'telephone': data['telephone'], 'role': data['role']}
-                )
+                profil_defaults['telephone'] = data['telephone']
+
+            profil, _ = Profil.objects.update_or_create(
+                user=user,
+                defaults=profil_defaults
+            )
+
+            creator_role = data.get('creatorRole')
+            if creator_role == 'Chef' and mapped_role in ['Resident', 'Medecin']:
+                try:
+                    from ophtalmo.distribution import assigner_examens_nouveau_medecin
+                    assigner_examens_nouveau_medecin(profil, max_examens=3)
+                except Exception as e:
+                    pass
+            else:
+                try:
+                    from ophtalmo.distribution import distribuer_examens
+                    distribuer_examens()
+                except Exception as e:
+                    pass
+
 
             # 6. Envoyer l'email de bienvenue avec les identifiants
             from django.core.mail import send_mail

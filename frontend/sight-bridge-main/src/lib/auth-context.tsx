@@ -346,7 +346,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             role: data.role === "Admin" ? "ADMIN_SYSTEME" : data.role === "Chef" ? "CHEF_SERVICE" : data.role === "Resident" ? "RESIDENT" : "OPHTALMOLOGUE",
             password_provisoire: data.password,
             telephone: data.phone,
-            createdBy: user ? `${user.firstName} ${user.lastName}` : ""
+            createdBy: user ? `${user.firstName} ${user.lastName}` : "",
+            creatorRole: user?.role
           };
 
           const token = localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
