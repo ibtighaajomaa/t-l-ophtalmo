@@ -1167,3 +1167,162 @@
 [2026-06-26 15:38:46,042] [11] [MainThread] [INFO] (monailabel.datastore.utils.convert:379) - nifti_to_dicom_seg latency : 0.03762316703796387 (sec)
 [2026-06-26 15:38:46,060] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1590) - Pushed DICOM-SEG to Orthanc: 200
 [2026-06-26 15:38:46,071] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1596) - Notified Django worklist: 404
+[2026-06-26 18:05:12,157] [11] [MainThread] [WARNING] (python_multipart.multipart:1401) - Skipping data after last boundary
+[2026-06-26 18:05:12,157] [11] [MainThread] [INFO] (dicomweb_client.web:2128) - search for series
+[2026-06-26 18:05:13,416] [11] [MainThread] [INFO] (dicomweb_client.web:2128) - search for series
+[2026-06-26 18:05:13,461] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.61849682159751642141449932402321095587" of study "1.2.826.0.1.3680043.10.58532033903053821336159041062519092077776"
+[2026-06-26 18:05:13,472] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.11511573824222558992162316896389082718" of study "1.2.826.0.1.3680043.10.25362032962649609527426047215112453522767"
+[2026-06-26 18:05:13,482] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.63324133034286027581743160293817830025" of study "1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726"
+[2026-06-26 18:05:13,492] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.34178504779392075761145774220420253629" of study "1.2.826.0.1.3680043.10.31446411188333166469450661635976490172063"
+[2026-06-26 18:05:13,503] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.42450891805897691969311326669828476323" of study "1.2.826.0.1.3680043.10.44871876904305139559864264473950195659282"
+[2026-06-26 18:05:13,513] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.12774197663539867180171683547148432182" of study "1.2.826.0.1.3680043.10.46078130208941843694086933330008226416161"
+[2026-06-26 18:05:13,524] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.38698059055854597632209229334455645862" of study "1.2.826.0.1.3680043.10.46779115774602555656270283658139298666018"
+[2026-06-26 18:05:13,534] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.11379533955545141687501095519604731301" of study "1.2.826.0.1.3680043.10.46779115774602555656270283658139298666018"
+[2026-06-26 18:05:13,544] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.55988999416622958331794866720137844552" of study "1.2.826.0.1.3680043.10.25362032962649609527426047215112453522767"
+[2026-06-26 18:05:13,553] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.32155338670815110237593080752059300541" of study "1.2.826.0.1.3680043.10.16769043123850192215547312926764801286794"
+[2026-06-26 18:05:13,563] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.11862508056131343146341821491290766766" of study "1.2.826.0.1.3680043.10.58532033903053821336159041062519092077776"
+[2026-06-26 18:05:13,573] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.59063435949670402273595731831010883611" of study "1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726"
+[2026-06-26 18:05:13,582] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.21446977142917593297429420840577193934" of study "1.2.826.0.1.3680043.10.31446411188333166469450661635976490172063"
+[2026-06-26 18:05:13,591] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.27036866131327390093100509336405752322" of study "1.2.826.0.1.3680043.10.91345883325381272976345224605358943271189"
+[2026-06-26 18:05:13,601] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.29121504784648836147607480810328581300" of study "1.2.826.0.1.3680043.10.16769043123850192215547312926764801286794"
+[2026-06-26 18:05:13,610] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.12533154672196454841055327181461231563" of study "1.2.826.0.1.3680043.10.91345883325381272976345224605358943271189"
+[2026-06-26 18:05:13,634] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.53120780719113700537525840873331541949" of study "1.2.826.0.1.3680043.10.13424951080878069938119192197008756317875"
+[2026-06-26 18:05:13,643] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.58649643319258053896903581774345507975" of study "1.2.826.0.1.3680043.10.91345883325381272976345224605358943271189"
+[2026-06-26 18:05:13,663] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.10616499350477752705963021963560967229" of study "1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726"
+[2026-06-26 18:05:13,672] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.14721640616440794465173737319040151947" of study "1.2.826.0.1.3680043.10.44871876904305139559864264473950195659282"
+[2026-06-26 18:05:13,682] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.98361400677339252115911983519662586901" of study "1.2.826.0.1.3680043.10.14508562012144794830957054311768790617583"
+[2026-06-26 18:05:13,692] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.10390525776680538364354291011178365849" of study "1.2.826.0.1.3680043.10.36105522259595314774054361902012810640491"
+[2026-06-26 18:05:13,702] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.98792952669315161368227420113648674753" of study "1.2.826.0.1.3680043.10.91345883325381272976345224605358943271189"
+[2026-06-26 18:05:13,726] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.11939895709761283814853091572488110991" of study "1.2.826.0.1.3680043.10.13424951080878069938119192197008756317875"
+[2026-06-26 18:05:13,735] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.77027278445484207804839639977554392267" of study "1.2.826.0.1.3680043.10.44871876904305139559864264473950195659282"
+[2026-06-26 18:05:13,745] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.37238532435130033129912052053689339732" of study "1.2.826.0.1.3680043.10.16769043123850192215547312926764801286794"
+[2026-06-26 18:05:13,755] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.11110120530371564307507148697189597909" of study "1.2.826.0.1.3680043.10.58532033903053821336159041062519092077776"
+[2026-06-26 18:05:13,764] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.53896469759765666513868960399361010147" of study "1.2.826.0.1.3680043.10.14508562012144794830957054311768790617583"
+[2026-06-26 18:05:13,775] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.10031849707791441011384830047895809528" of study "1.2.826.0.1.3680043.10.13424951080878069938119192197008756317875"
+[2026-06-26 18:05:13,786] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.12838928474484803857652042965739939841" of study "1.2.826.0.1.3680043.10.16769043123850192215547312926764801286794"
+[2026-06-26 18:05:13,796] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.94629762594075160461462096878123654919" of study "1.2.826.0.1.3680043.10.64900137786892723036354486945601700747164"
+[2026-06-26 18:05:13,819] [11] [MainThread] [INFO] (dicomweb_client.web:2332) - retrieve metadata of series "1.2.826.0.1.3680043.8.498.43669216339064846117499993953269151669" of study "1.2.826.0.1.3680043.10.14508562012144794830957054311768790617583"
+[2026-06-26 18:05:13,829] [11] [MainThread] [INFO] (monailabel.endpoints.infer:170) - Infer Request: {'model': 'vessel_seg', 'image': '1.2.826.0.1.3680043.10.14693038617622535132311656803458854870001', 'label_info': [{'name': 'Vessel', 'description': 'vessel segmentation'}], 'study_uid': '1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726', 'result_extension': '.nrrd', 'result_dtype': 'uint8', 'result_compress': False, 'restore_label_idx': False}
+[2026-06-26 18:05:13,830] [11] [MainThread] [INFO] (monailabel.datastore.dicom:78) - Image ID: 1.2.826.0.1.3680043.10.14693038617622535132311656803458854870001
+[2026-06-26 18:05:13,830] [11] [MainThread] [INFO] (monailabel.datastore.dicom:80) - Image Dir (cache): /root/.cache/monailabel/dicom/78ad577454ac2e62eb87966c66fcd9b9/1.2.826.0.1.3680043.10.14693038617622535132311656803458854870001
+[2026-06-26 18:05:13,831] [11] [MainThread] [INFO] (monailabel.tasks.infer.basic_infer:280) - Infer Request (final): {'device': 'cpu', 'model': 'vessel_seg', 'image': '/root/.cache/monailabel/dicom/78ad577454ac2e62eb87966c66fcd9b9/1.2.826.0.1.3680043.10.14693038617622535132311656803458854870001.nii.gz', 'label_info': [{'name': 'Vessel', 'description': 'vessel segmentation'}], 'study_uid': '1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726', 'result_extension': '.nrrd', 'result_dtype': 'uint8', 'result_compress': False, 'restore_label_idx': False, 'description': 'U-Net++ based retinal vessel segmentation (CHASE_DB1)'}
+[2026-06-26 18:05:13,832] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:76) - PRE - Run Transform(s)
+[2026-06-26 18:05:13,832] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:77) - PRE - Input Keys: ['device', 'model', 'image', 'label_info', 'study_uid', 'result_extension', 'result_dtype', 'result_compress', 'restore_label_idx', 'description', 'image_path']
+[2026-06-26 18:05:13,835] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:122) - PRE - Transform (LoadImaged): Time: 0.003; image: torch.Size([224, 224, 1, 1, 3])(torch.float32)
+[2026-06-26 18:05:13,835] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:122) - PRE - Transform (EnsureTyped): Time: 0.0001; image: torch.Size([224, 224, 1, 1, 3])(torch.float32)
+[2026-06-26 18:05:13,835] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:122) - PRE - Transform (EnsureChannelFirstd): Time: 0.0001; image: torch.Size([3, 224, 224, 1, 1])(torch.float32)
+[2026-06-26 18:05:13,836] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:122) - PRE - Transform (Ensure3ChannelRGBd): Time: 0.0; image: torch.Size([3, 224, 224, 1, 1])(torch.float32)
+[2026-06-26 18:05:13,836] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:122) - PRE - Transform (SqueezeDepthd): Time: 0.0001; image: torch.Size([3, 224, 224])(torch.float32)
+[2026-06-26 18:05:13,846] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:122) - PRE - Transform (Resized): Time: 0.0096; image: torch.Size([3, 512, 512])(torch.float32)
+[2026-06-26 18:05:13,887] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:122) - PRE - Transform (ScaleIntensityRanged): Time: 0.0416; image: torch.Size([3, 512, 512])(torch.float32)
+[2026-06-26 18:05:13,888] [11] [MainThread] [INFO] (monailabel.tasks.infer.basic_infer:432) - Infer model path: /opt/monai/apps/radiology/model/vessel_seg.pt
+[2026-06-26 18:05:14,096] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:76) - INV - Run Transform(s)
+[2026-06-26 18:05:14,096] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:77) - INV - Input Keys: ['device', 'model', 'image', 'label_info', 'study_uid', 'result_extension', 'result_dtype', 'result_compress', 'restore_label_idx', 'description', 'image_path', 'latencies', 'pred', 'result']
+[2026-06-26 18:05:14,097] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:122) - INV - Transform (Resized): Time: 0.0009; image: torch.Size([1, 224, 224])(torch.float32); pred: torch.Size([1, 512, 512])(torch.float32)
+[2026-06-26 18:05:14,098] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:76) - POST - Run Transform(s)
+[2026-06-26 18:05:14,098] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:77) - POST - Input Keys: ['device', 'model', 'image', 'label_info', 'study_uid', 'result_extension', 'result_dtype', 'result_compress', 'restore_label_idx', 'description', 'image_path', 'latencies', 'pred', 'result']
+[2026-06-26 18:05:14,099] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:122) - POST - Transform (EnsureTyped): Time: 0.0001; image: torch.Size([3, 512, 512])(torch.float32); pred: torch.Size([1, 224, 224])(torch.float32)
+[2026-06-26 18:05:14,099] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:122) - POST - Transform (Activationsd): Time: 0.0002; image: torch.Size([3, 512, 512])(torch.float32); pred: torch.Size([1, 224, 224])(torch.float32)
+[2026-06-26 18:05:14,099] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:122) - POST - Transform (AsDiscreted): Time: 0.0003; image: torch.Size([3, 512, 512])(torch.float32); pred: torch.Size([1, 224, 224])(torch.float32)
+[2026-06-26 18:05:14,100] [11] [MainThread] [INFO] (monailabel.interfaces.utils.transform:122) - POST - Transform (Restored): Time: 0.0001; image: torch.Size([3, 512, 512])(torch.float32); pred: torch.Size([1, 224, 224])(torch.float32)
+[2026-06-26 18:05:14,100] [11] [MainThread] [INFO] (monailabel.tasks.infer.basic_infer:603) - Writing Result...
+[2026-06-26 18:05:14,100] [11] [MainThread] [INFO] (monailabel.transform.writer:196) - Result ext: .nrrd; write_to_file: True; dtype: uint8
+[2026-06-26 18:05:14,102] [11] [MainThread] [INFO] (monailabel.tasks.infer.basic_infer:335) - ++ Latencies => Total: 0.2723; Pre: 0.0565; Inferer: 0.2069; Invert: 0.0032; Post: 0.0020; Write: 0.0026
+[2026-06-26 18:05:14,102] [11] [MainThread] [INFO] (monailabel.tasks.infer.basic_infer:370) - Result File: /tmp/tmpeq0m0epl.nrrd
+[2026-06-26 18:05:14,102] [11] [MainThread] [INFO] (monailabel.tasks.infer.basic_infer:371) - Result Json Keys: ['label_info', 'label_names', 'latencies', 'centroids']
+[2026-06-26 18:05:14,103] [11] [MainThread] [INFO] (monailabel.datastore.dicom:78) - Image ID: 1.2.826.0.1.3680043.10.14693038617622535132311656803458854870001
+[2026-06-26 18:05:14,103] [11] [MainThread] [INFO] (monailabel.datastore.dicom:80) - Image Dir (cache): /root/.cache/monailabel/dicom/78ad577454ac2e62eb87966c66fcd9b9/1.2.826.0.1.3680043.10.14693038617622535132311656803458854870001
+[2026-06-26 18:05:14,104] [11] [MainThread] [INFO] (monailabel.endpoints.infer:241) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,105] [11] [MainThread] [INFO] (monailabel.endpoints.infer:277) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,105] [11] [MainThread] [INFO] (monailabel.endpoints.infer:313) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,106] [11] [MainThread] [INFO] (monailabel.endpoints.infer:349) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,106] [11] [MainThread] [INFO] (monailabel.endpoints.infer:385) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,107] [11] [MainThread] [INFO] (monailabel.endpoints.infer:421) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,107] [11] [MainThread] [INFO] (monailabel.endpoints.infer:457) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,108] [11] [MainThread] [INFO] (monailabel.endpoints.infer:493) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,109] [11] [MainThread] [INFO] (monailabel.endpoints.infer:529) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,109] [11] [MainThread] [INFO] (monailabel.endpoints.infer:565) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,110] [11] [MainThread] [INFO] (monailabel.endpoints.infer:601) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,110] [11] [MainThread] [INFO] (monailabel.endpoints.infer:637) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,111] [11] [MainThread] [INFO] (monailabel.endpoints.infer:673) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,111] [11] [MainThread] [INFO] (monailabel.endpoints.infer:709) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,112] [11] [MainThread] [INFO] (monailabel.endpoints.infer:745) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,112] [11] [MainThread] [INFO] (monailabel.endpoints.infer:781) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,113] [11] [MainThread] [INFO] (monailabel.endpoints.infer:817) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,113] [11] [MainThread] [INFO] (monailabel.endpoints.infer:853) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,114] [11] [MainThread] [INFO] (monailabel.endpoints.infer:889) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,114] [11] [MainThread] [INFO] (monailabel.endpoints.infer:925) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,115] [11] [MainThread] [INFO] (monailabel.endpoints.infer:961) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,115] [11] [MainThread] [INFO] (monailabel.endpoints.infer:997) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,116] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1033) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,117] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1069) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,117] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1105) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,118] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1141) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,118] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1177) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,119] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1213) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,119] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1249) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,120] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1285) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,120] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1321) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,121] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1352) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,121] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1381) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,122] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1410) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,122] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1439) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,123] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1468) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,123] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1497) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,124] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1526) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,124] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1555) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,125] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1584) - Source StudyInstanceUID: 1.2.826.0.1.3680043.10.12563347014261332239210341308134876945726
+[2026-06-26 18:05:14,127] [11] [MainThread] [INFO] (monailabel.datastore.utils.convert:101) - 0 => 1 => Vessel
+[2026-06-26 18:05:14,127] [11] [MainThread] [INFO] (monailabel.datastore.utils.convert:140) - {
+  "ContentCreatorName": "Reader1",
+  "ClinicalTrialSeriesID": "Session1",
+  "ClinicalTrialTimePointID": "1",
+  "SeriesDescription": "AIName",
+  "SeriesNumber": "300",
+  "InstanceNumber": "1",
+  "segmentAttributes": [
+    [
+      {
+        "labelID": 1,
+        "SegmentLabel": "Vessel",
+        "SegmentDescription": "vessel segmentation",
+        "SegmentAlgorithmType": "AUTOMATIC",
+        "SegmentAlgorithmName": "MONAILABEL",
+        "SegmentedPropertyCategoryCodeSequence": {
+          "CodeValue": "123037004",
+          "CodingSchemeDesignator": "SCT",
+          "CodeMeaning": "Anatomical Structure"
+        },
+        "SegmentedPropertyTypeCodeSequence": {
+          "CodeValue": "78961009",
+          "CodingSchemeDesignator": "SCT",
+          "CodeMeaning": "Vessel"
+        },
+        "recommendedDisplayRGBValue": [
+          255,
+          0,
+          0
+        ]
+      }
+    ]
+  ],
+  "ContentLabel": "SEGMENTATION",
+  "ContentDescription": "MONAI Label - Image segmentation",
+  "ClinicalTrialCoordinatingCenterName": "MONAI",
+  "BodyPartExamined": ""
+}
+[2026-06-26 18:05:14,129] [11] [MainThread] [INFO] (monailabel.datastore.utils.convert:160) - Total Source Images: 1
+[2026-06-26 18:05:14,132] [11] [MainThread] [INFO] (monailabel.datastore.utils.convert:199) - Reshaped mask (224, 224, 1) -> (1, 224, 224) via perm (2, 0, 1)
+[2026-06-26 18:05:14,132] [11] [MainThread] [INFO] (pydicom_seg.writer:296) - 1 of 1 slicesmapped to source DICOM images
+[2026-06-26 18:05:14,135] [11] [MainThread] [INFO] (pydicom_seg.writer:148) - Serializing image planes at full size (224, 224)
+[2026-06-26 18:05:14,137] [11] [MainThread] [INFO] (pydicom_seg.writer:177) - Processing segment 1
+[2026-06-26 18:05:14,137] [11] [MainThread] [INFO] (pydicom_seg.writer:184) - Total number of slices that will be processed for segment 1 is 1 (inclusive from 0 to 1)
+[2026-06-26 18:05:14,138] [11] [MainThread] [INFO] (monailabel.datastore.utils.convert:208) - Set SEG FRUID: 2.25.201226639366066124488411738925460045265
+[2026-06-26 18:05:14,138] [11] [MainThread] [INFO] (monailabel.datastore.utils.convert:226) - Fixed SEG ReferencedSeriesSequence SeriesUID: 1.2.826.0.1.3680043.10.14693038617622535132311656803458854870001
+[2026-06-26 18:05:14,142] [11] [MainThread] [INFO] (monailabel.datastore.utils.convert:271) - Patch 11: Source SOPInstanceUID from file: 1.2.826.0.1.3680043.10.99536044805193102263881551734304074003047
+[2026-06-26 18:05:14,153] [11] [MainThread] [INFO] (monailabel.datastore.utils.convert:312) - Patch 11: Orthanc SOPInstanceUID: 1.2.826.0.1.3680043.10.47137764133315709821923991209502200217052
+[2026-06-26 18:05:14,156] [11] [MainThread] [INFO] (monailabel.datastore.utils.convert:334) - Patch 11: Set SEG PatientID from Orthanc: PAT_e6a6acf7fca1
+[2026-06-26 18:05:14,159] [11] [MainThread] [INFO] (monailabel.datastore.utils.convert:374) - Patch 11: Forced 1 ReferencedSOPInstanceUID -> 1.2.826.0.1.3680043.10.47137764133315709821923991209502200217052
+[2026-06-26 18:05:14,159] [11] [MainThread] [INFO] (monailabel.datastore.utils.convert:379) - nifti_to_dicom_seg latency : 0.03447723388671875 (sec)
+[2026-06-26 18:05:14,177] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1590) - Pushed DICOM-SEG to Orthanc: 200
+[2026-06-26 18:05:14,188] [11] [MainThread] [INFO] (monailabel.endpoints.infer:1596) - Notified Django worklist: 404
