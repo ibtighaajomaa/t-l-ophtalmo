@@ -8,7 +8,23 @@ interface PaginationProps {
 
 export function Pagination({ currentPage, totalPages, onPageChange }: PaginationProps) {
   const totalPagesCount = Math.max(totalPages, 1);
-  const pages = Array.from({ length: totalPagesCount }, (_, i) => i + 1);
+  const getVisiblePages = (current: number, total: number) => {
+    if (total <= 7) {
+      return Array.from({ length: total }, (_, i) => i + 1);
+    }
+
+    if (current <= 4) {
+      return [1, 2, 3, 4, 5, '...', total];
+    }
+
+    if (current >= total - 3) {
+      return [1, '...', total - 4, total - 3, total - 2, total - 1, total];
+    }
+
+    return [1, '...', current - 1, current, current + 1, '...', total];
+  };
+
+  const visiblePages = getVisiblePages(currentPage, totalPagesCount);
 
   return (
     <div className="flex items-center justify-between border-t border-slate-100 bg-white px-4 py-3 sm:px-6 mt-4">
@@ -48,18 +64,27 @@ export function Pagination({ currentPage, totalPages, onPageChange }: Pagination
               <span className="sr-only">Précédent</span>
               <ChevronLeft className="h-4 w-4" />
             </button>
-            {pages.map((p) => (
-              <button
-                key={p}
-                onClick={() => onPageChange(p)}
-                className={`relative inline-flex items-center rounded-md px-3 py-1.5 text-sm font-semibold transition-all duration-150 mx-0.5 ${
-                  currentPage === p
-                    ? "bg-blue-600 text-white shadow-sm"
-                    : "text-slate-600 hover:bg-white hover:text-slate-800"
-                }`}
-              >
-                {p}
-              </button>
+            {visiblePages.map((p, idx) => (
+              p === '...' ? (
+                <span
+                  key={`ellipsis-${idx}`}
+                  className="relative inline-flex items-center px-3 py-1.5 text-sm font-semibold text-slate-600 mx-0.5"
+                >
+                  ...
+                </span>
+              ) : (
+                <button
+                  key={p}
+                  onClick={() => onPageChange(p as number)}
+                  className={`relative inline-flex items-center rounded-md px-3 py-1.5 text-sm font-semibold transition-all duration-150 mx-0.5 ${
+                    currentPage === p
+                      ? "bg-blue-600 text-white shadow-sm"
+                      : "text-slate-600 hover:bg-white hover:text-slate-800"
+                  }`}
+                >
+                  {p}
+                </button>
+              )
             ))}
             <button
               disabled={currentPage === totalPagesCount}

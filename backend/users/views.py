@@ -811,18 +811,92 @@ def get_paginated_users(request):
 @permission_classes([permissions.AllowAny])
 def get_user_stats(request):
     try:
-        # Pour les statistiques, la base de données locale synchronisée est parfaite
-        total = User.objects.count()
-        chefs = Profil.objects.filter(role="Chef").count()
-        medecins = Profil.objects.filter(role="Medecin").count()
-        residents = Profil.objects.filter(role="Resident").count()
+        created_by = request.GET.get('createdBy', '').strip()
         
-        return JsonResponse({
-            "total": total,
-            "chefs": chefs,
-            "medecins": medecins,
-            "residents": residents
-        })
+        if created_by:
+            # Si le paramètre createdBy est fourni, on interroge Keycloak pour avoir les statistiques exactes de ce Chef
+            keycloak_admin = KeycloakAdmin(
+                server_url=settings.KEYCLOAK_SERVER_URL,
+                username=settings.KEYCLOAK_ADMIN_USER,
+                password=settings.KEYCLOAK_ADMIN_PASSWORD,
+                realm_name=settings.KEYCLOAK_REALM,
+                user_realm_name="master",
+                verify=True
+            )
+            admin_token = keycloak_admin.token['access_token']
+            headers = {'Authorization': f'Bearer {admin_token}'}
+            base_url = settings.KEYCLOAK_SERVER_URL.rstrip('/')
+            realm = settings.KEYCLOAK_REALM
+            
+            users_url = f"{base_url}/admin/realms/{realm}/users?q=createdBy:\"{created_by}\"&max=1000"
+            all_chef_users = requests.get(users_url, headers=headers).json()
+            if not isinstance(all_chef_users, list): all_chef_users = []
+            
+            # Pour récupérer les rôles locaux
+            profiles = {
+                p.user.username.lower(): p 
+                for p in Profil.objects.select_related('user').all() 
+                if p.user and p.user.username
+            }
+            
+            chefs = 0
+            medecins = 0
+            residents = 0
+            
+            for u in all_chef_users:
+                username = u.get('username', u.get('email', '')).lower()
+                prof = profiles.get(username)
+                if prof:
+                    if prof.role == "Chef": chefs += 1
+                    elif prof.role == "Medecin": medecins += 1
+                    elif prof.role == "Resident": residents += 1
+                    
+            total = len(all_chef_users)
+            
+            return JsonResponse({
+                "total": total,
+                "chefs": chefs,
+                "medecins": medecins,
+                "residents": residents
+            })
+            
+        else:
+            # Pour les statistiques globales (Admin), on interroge Keycloak pour avoir les bons chiffres
+            keycloak_admin = KeycloakAdmin(
+                server_url=settings.KEYCLOAK_SERVER_URL,
+                username=settings.KEYCLOAK_ADMIN_USER,
+                password=settings.KEYCLOAK_ADMIN_PASSWORD,
+                realm_name=settings.KEYCLOAK_REALM,
+                user_realm_name="master",
+                verify=True
+            )
+            admin_token = keycloak_admin.token['access_token']
+            headers = {'Authorization': f'Bearer {admin_token}'}
+            base_url = settings.KEYCLOAK_SERVER_URL.rstrip('/')
+            realm = settings.KEYCLOAK_REALM
+            
+            # Nombre total
+            count_url = f"{base_url}/admin/realms/{realm}/users/count"
+            total = requests.get(count_url, headers=headers).json()
+            
+            # Pour les rôles, Keycloak n'a pas de /count sur les rôles, on récupère la liste (sans limite de pagination pour avoir le compte)
+            def count_role(role_name):
+                url = f"{base_url}/admin/realms/{realm}/roles/{role_name}/users?max=10000"
+                res = requests.get(url, headers=headers)
+                if res.status_code == 200:
+                    return len(res.json())
+                return 0
+                
+            chefs = count_role("CHEF_SERVICE")
+            medecins = count_role("OPHTALMOLOGUE")
+            residents = count_role("RESIDENT")
+            
+            return JsonResponse({
+                "total": total,
+                "chefs": chefs,
+                "medecins": medecins,
+                "residents": residents
+            })
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 

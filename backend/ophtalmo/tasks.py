@@ -78,7 +78,7 @@ def tache_sync_orthanc_incremental():
     et crée les examens manquants dans la worklist.
     Complète le Lua webhook OnStableStudy en cas d'échec ou de redémarrage.
     """
-    from .models import Exam
+    from .models import Exam, AnalysisReport
 
     last_seq = cache.get('orthanc_changes_seq', 0)
 
@@ -99,6 +99,7 @@ def tache_sync_orthanc_incremental():
         return {'status': 'ok', 'processed': 0}
 
     created = 0
+    deleted = 0
     skipped = 0
     new_seq = last_seq
 
@@ -106,7 +107,17 @@ def tache_sync_orthanc_incremental():
         seq = change.get('Seq', 0)
         new_seq = max(new_seq, seq)
 
-        if change.get('ChangeType') != 'NewStudy':
+        change_type = change.get('ChangeType')
+
+        if change_type == 'DeletedStudy':
+            study_id = change.get('ID')
+            if study_id:
+                AnalysisReport.objects.filter(series_instance_uid=study_id).delete()
+                Exam.objects.filter(study_instance_uid=study_id).delete()
+                deleted += 1
+            continue
+
+        if change_type != 'NewStudy':
             continue
 
         study_id = change.get('ID')
@@ -176,12 +187,13 @@ def tache_sync_orthanc_incremental():
         tache_auto_segmentation.delay()
 
     logger.info(
-        f"[OrthancSync] created={created} skipped={skipped} "
+        f"[OrthancSync] created={created} deleted={deleted} skipped={skipped} "
         f"seq={last_seq}->{new_seq}"
     )
     return {
         'status': 'ok',
         'created': created,
+        'deleted': deleted,
         'skipped': skipped,
         'seq': new_seq,
     }
@@ -202,82 +214,58 @@ def tache_auto_segmentation():
         exam_type='Rétinographie',
     )[:5]
 
-    MONAI_URL = "http://monai-label:8000/infer/analyze"
+    SEG_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
+    MONAI_LABEL = "http://monai-label:8000"
 
     for exam in exams:
-        study_uid = exam.study_instance_uid
-        if not study_uid:
+        study_id = exam.study_instance_uid
+        if not study_id:
             continue
 
-        # Vérifier si l'étude a déjà été segmentée
-        from .models import AnalysisReport
-        if AnalysisReport.objects.filter(
-            series_instance_uid=study_uid,
-            report_json__source='monai_label',
-        ).exists():
-            continue
-
-        # Vérifier via Orthanc que l'étude a bien une série OP (pas déjà SEG-only)
+        # Vérifier via Orthanc que l'étude a une série OP et récupérer son SeriesInstanceUID
+        op_series_uid = None
         try:
             orthanc_resp = requests.get(
-                f'{ORTHANC_URL}/studies/{study_uid}',
+                f'{ORTHANC_URL}/studies/{study_id}',
                 timeout=10,
             )
             if orthanc_resp.status_code != 200:
                 continue
             orthanc_meta = orthanc_resp.json()
-            series_ids = orthanc_meta.get('Series', [])
-            has_op = False
-            for sid in series_ids:
+            for sid in orthanc_meta.get('Series', []):
                 sr = requests.get(f'{ORTHANC_URL}/series/{sid}', timeout=10)
                 if sr.status_code == 200:
-                    mod = sr.json().get('MainDicomTags', {}).get('Modality', '')
-                    if mod == 'OP':
-                        has_op = True
+                    s = sr.json()
+                    if s.get('MainDicomTags', {}).get('Modality') == 'OP':
+                        op_series_uid = s.get('MainDicomTags', {}).get('SeriesInstanceUID')
                         break
-            if not has_op:
+            if not op_series_uid:
                 continue
         except Exception as e:
-            logger.warning(f"[AutoSeg] Orthanc check failed for {study_uid}: {e}")
+            logger.warning(f"[AutoSeg] Orthanc check failed for {study_id}: {e}")
             continue
 
-        # Récupérer le StudyInstanceUID DICOM depuis Orthanc
-        try:
-            suid_resp = requests.get(
-                f'{ORTHANC_URL}/studies/{study_uid}',
-                timeout=10,
-            )
-            if suid_resp.status_code == 200:
-                study_data = suid_resp.json()
-                study_instance_uid = study_data.get('MainDicomTags', {}).get('StudyInstanceUID')
-                if not study_instance_uid:
-                    continue
-            else:
-                continue
-        except Exception as e:
-            logger.warning(f"[AutoSeg] Cannot get StudyInstanceUID: {e}")
-            continue
+        # Lancer les 3 segmentations via MONAI Label
+        device = "cuda" if os.environ.get("USE_CUDA", "false") == "true" else "cpu"
+        all_ok = True
 
-        # Lancer l'analyse MONAI Label
-        try:
-            logger.info(f"[AutoSeg] Launching MONAI analyze for study {study_instance_uid}")
-            resp = requests.post(
-                MONAI_URL,
-                json={
-                    "image_uid": study_instance_uid,
-                    "run_segmentation": True,
-                    "device": "cuda" if os.environ.get("USE_CUDA", "false") == "true" else "cpu",
-                },
-                timeout=600,  # 10 minutes max (3 models × ~2 min each on CPU)
-            )
-            if resp.status_code == 200:
-                logger.info(f"[AutoSeg] MONAI analyze succeeded for {study_instance_uid}")
-                exam.status = 'En cours'
-                exam.save(update_fields=['status'])
-            else:
-                logger.warning(
-                    f"[AutoSeg] MONAI analyze returned {resp.status_code} "
-                    f"for {study_instance_uid}"
+        for model in SEG_MODELS:
+            try:
+                logger.info(f"[AutoSeg] Running {model} on series {op_series_uid[:50]}...")
+                resp = requests.post(
+                    f"{MONAI_LABEL}/infer/{model}",
+                    params={"image": op_series_uid},
+                    data={"params": f'{{"device": "{device}"}}'},
+                    timeout=300,
                 )
-        except Exception as e:
-            logger.error(f"[AutoSeg] MONAI analyze failed for {study_instance_uid}: {e}")
+                if resp.status_code == 200:
+                    logger.info(f"[AutoSeg] {model} succeeded")
+                else:
+                    logger.warning(f"[AutoSeg] {model} returned {resp.status_code}")
+                    all_ok = False
+            except Exception as e:
+                logger.error(f"[AutoSeg] {model} failed: {e}")
+                all_ok = False
+
+        if all_ok:
+            logger.info(f"[AutoSeg] All segmentations completed for study {study_id}")

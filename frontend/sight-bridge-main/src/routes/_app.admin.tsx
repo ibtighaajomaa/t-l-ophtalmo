@@ -85,11 +85,15 @@ function AdminDashboard() {
 
   // Fetch stats on mount
   useEffect(() => {
-    fetch("/api/users/stats/")
+    let url = "/api/users/stats/";
+    if (user?.role === "Chef") {
+      url += `?createdBy=${encodeURIComponent(`${user.firstName} ${user.lastName}`)}`;
+    }
+    fetch(url)
       .then(r => r.json())
       .then(d => setStats(d))
       .catch(console.error);
-  }, []);
+  }, [user?.role, user?.firstName, user?.lastName]);
 
   // Fetch paginated users
   useEffect(() => {

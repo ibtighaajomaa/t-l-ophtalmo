@@ -51,6 +51,11 @@ function getHeaders(): Record<string, string> {
 }
 
 function toFrontendExam(api: ApiExam): Exam {
+  let status = api.status as ExamStatus;
+  if (!api.assigned_to_name && status === "En cours") {
+    status = "En attente";
+  }
+
   return {
     id: `EX-${api.id}`,
     patientName: api.patient_name,
@@ -58,7 +63,7 @@ function toFrontendExam(api: ApiExam): Exam {
     type: api.exam_type as Exam["type"],
     date: api.date,
     priority: api.priority as Exam["priority"],
-    status: api.status as ExamStatus,
+    status: status,
     assignedTo: api.assigned_to_name,
     notes: api.notes || undefined,
     region: api.region,
@@ -72,7 +77,7 @@ export async function fetchExams(params?: {
   q?: string;
   region?: string;
   doctor?: string;
-  today_only?: boolean;
+  date?: string;
   page?: number;
   page_size?: number;
 }): Promise<{ exams: Exam[]; total: number }> {
@@ -81,7 +86,7 @@ export async function fetchExams(params?: {
   if (params?.q) searchParams.set("q", params.q);
   if (params?.region) searchParams.set("region", params.region);
   if (params?.doctor) searchParams.set("doctor", params.doctor);
-  if (params?.today_only) searchParams.set("today_only", "true");
+  if (params?.date) searchParams.set("date", params.date);
   if (params?.page) searchParams.set("page", String(params.page));
   if (params?.page_size) searchParams.set("page_size", String(params.page_size));
 
@@ -156,8 +161,19 @@ export async function deleteExam(id: string): Promise<void> {
   if (!res.ok) throw new Error("Failed to delete exam");
 }
 
-export async function getExamStats(): Promise<ExamStats> {
-  const res = await fetch(`${BASE}/stats/`, { headers: getHeaders() });
+export async function getExamStats(params?: {
+  q?: string;
+  region?: string;
+  doctor?: string;
+  date?: string;
+}): Promise<ExamStats> {
+  const searchParams = new URLSearchParams();
+  if (params?.q) searchParams.set("q", params.q);
+  if (params?.region) searchParams.set("region", params.region);
+  if (params?.doctor) searchParams.set("doctor", params.doctor);
+  if (params?.date) searchParams.set("date", params.date);
+
+  const res = await fetch(`${BASE}/stats/?${searchParams.toString()}`, { headers: getHeaders() });
   if (!res.ok) throw new Error("Failed to fetch exam stats");
   return res.json();
 }

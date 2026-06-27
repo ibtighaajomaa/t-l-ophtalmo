@@ -224,7 +224,7 @@ function ExamDetail() {
       onReady: () => setBridgeReady(true),
       onStudyOpened: (studyInstanceUid) => {
         setBridgeReady(true);
-        if (exam && exam.status === "En attente") {
+        if (exam && exam.status === "En attente" && exam.assignedTo) {
           updateExam(exam.id, { status: "En cours" }).catch(() => {});
         }
       },

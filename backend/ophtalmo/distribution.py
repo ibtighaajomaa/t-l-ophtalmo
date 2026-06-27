@@ -89,7 +89,7 @@ def trier_avec_equite_regionale(examens):
         temps_score = exam.date.toordinal() if exam.date else 0
         # Score régional : régions moins servies = score plus bas = priorité
         region_score = region_scores.get(exam.region, 0)
-        return (urgence_score, region_score, temps_score)
+        return (urgence_score, temps_score, region_score)
 
     return sorted(examens, key=score_examen)
 
@@ -100,7 +100,7 @@ def distribuer_examens():
     Algorithme principal de distribution des examens.
 
     1. Récupère les examens 'En attente'
-    2. Les trie par urgence > équité régionale > ancienneté
+    2. Les trie par urgence > ancienneté > équité régionale
     3. Les distribue aux médecins disponibles (round-robin pondéré par charge)
     4. Max 30 examens par médecin
     """

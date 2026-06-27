@@ -14,12 +14,17 @@ import {
   Menu, 
   Plus, 
   Calendar as CalendarIcon,
-  ChevronDown
+  ChevronDown,
+  MapPin
 } from "lucide-react";
 import { Calendar } from "@/components/ui/calendar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { fr } from "date-fns/locale";
 import { 
   format, 
@@ -60,6 +65,11 @@ function CalendrierPage() {
   const [currentDate, setCurrentDate] = useState(defaultDate);
   const [exams, setExams] = useState<Exam[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [selectedSlot, setSelectedSlot] = useState<{ day: Date, hour: number } | null>(null);
+  const [newSessionDoctor, setNewSessionDoctor] = useState<string>("");
+  const [newSessionCount, setNewSessionCount] = useState<number>(1);
 
   useEffect(() => {
     fetchExams({ page_size: 100 })
@@ -120,7 +130,7 @@ function CalendrierPage() {
 
   const nextWeek = () => setCurrentDate(addWeeks(currentDate, 1));
   const prevWeek = () => setCurrentDate(subWeeks(currentDate, 1));
-  const goToday = () => setCurrentDate(defaultDate); // Ou new Date()
+  const goToday = () => setCurrentDate(new Date());
 
   const formatHour = (hour: number) => {
     if (hour === 12) return "12 PM";
@@ -129,69 +139,59 @@ function CalendrierPage() {
   };
 
   const getEventColor = (affiliation: string) => {
-    if (affiliation.includes("Razi")) return "bg-yellow-100 text-yellow-800 border-yellow-300 hover:bg-yellow-200";
-    if (affiliation.includes("libre pratique")) return "bg-blue-100 text-blue-800 border-blue-300 hover:bg-blue-200";
-    if (affiliation.includes("Mongi Slim")) return "bg-purple-100 text-purple-800 border-purple-300 hover:bg-purple-200";
-    return "bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200";
+    if (affiliation.includes("Razi")) return "bg-gradient-to-br from-amber-50/90 to-orange-100/90 text-orange-950 border border-orange-200/80 border-l-[5px] border-l-orange-400 shadow-sm shadow-orange-500/5";
+    if (affiliation.includes("libre pratique")) return "bg-gradient-to-br from-blue-50/90 to-indigo-100/90 text-indigo-950 border border-indigo-200/80 border-l-[5px] border-l-indigo-400 shadow-sm shadow-indigo-500/5";
+    if (affiliation.includes("Mongi Slim")) return "bg-gradient-to-br from-purple-50/90 to-fuchsia-100/90 text-fuchsia-950 border border-fuchsia-200/80 border-l-[5px] border-l-fuchsia-400 shadow-sm shadow-fuchsia-500/5";
+    return "bg-gradient-to-br from-slate-50/90 to-slate-100/90 text-slate-900 border border-slate-200/80 border-l-[5px] border-l-slate-400 shadow-sm shadow-slate-500/5";
   };
 
   return (
-    <div className="flex h-[calc(100vh-2rem)] flex-col bg-white overflow-hidden text-slate-900 font-sans -m-6 rounded-tl-xl border border-slate-200 shadow-sm relative z-10">
+    <div className="flex h-screen flex-col bg-gradient-to-br from-slate-50 via-white to-slate-50/80 overflow-hidden text-slate-900 font-sans relative z-10">
       {/* HEADER */}
-      <header className="flex h-16 flex-none items-center justify-between border-b border-slate-200 px-4 py-2 bg-white">
+      <header className="flex h-16 flex-none items-center justify-between border-b border-slate-200/60 bg-white/70 backdrop-blur-xl px-4 py-2 relative z-50 shadow-[0_1px_3px_0_rgba(0,0,0,0.02)]">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)} className="text-slate-600 rounded-full h-10 w-10 hover:bg-slate-100">
+          <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)} className="text-slate-500 rounded-full h-10 w-10 hover:bg-slate-100/80 hover:text-slate-800 transition-all duration-200 active:scale-95">
             <Menu className="h-5 w-5" />
           </Button>
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-blue-600 text-white font-bold text-lg shadow-sm">
-              {format(defaultDate, 'dd')}
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white font-bold text-lg shadow-lg shadow-blue-600/20 ring-2 ring-white transform transition-transform hover:rotate-3 cursor-default">
+              {format(new Date(), 'dd')}
             </div>
-            <span className="text-xl font-normal text-slate-700 hidden sm:block">Agenda</span>
+            <span className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-indigo-700 hidden sm:block tracking-tight drop-shadow-sm">Agenda</span>
           </div>
-          <div className="ml-6 flex items-center gap-2">
-            <Button variant="outline" onClick={goToday} className="rounded-full px-4 h-9 text-sm font-medium border-slate-300 hover:bg-slate-50 text-slate-700">
+          <div className="ml-8 flex items-center gap-3">
+            <Button variant="outline" onClick={goToday} className="rounded-full px-5 h-9 text-sm font-semibold border-slate-200 hover:bg-blue-50/80 hover:border-blue-200 hover:text-blue-700 text-slate-700 transition-all duration-200 shadow-sm active:scale-95">
               Aujourd'hui
             </Button>
-            <div className="flex items-center gap-1 ml-2">
-              <Button variant="ghost" size="icon" onClick={prevWeek} className="h-8 w-8 rounded-full text-slate-600 hover:bg-slate-100">
-                <ChevronLeft className="h-5 w-5" />
+            <div className="flex items-center gap-1 ml-2 bg-slate-100/50 rounded-full p-0.5 border border-slate-200/50">
+              <Button variant="ghost" size="icon" onClick={prevWeek} className="h-8 w-8 rounded-full text-slate-600 hover:bg-white hover:shadow-sm transition-all duration-200 active:scale-95">
+                <ChevronLeft className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="icon" onClick={nextWeek} className="h-8 w-8 rounded-full text-slate-600 hover:bg-slate-100">
-                <ChevronRight className="h-5 w-5" />
+              <Button variant="ghost" size="icon" onClick={nextWeek} className="h-8 w-8 rounded-full text-slate-600 hover:bg-white hover:shadow-sm transition-all duration-200 active:scale-95">
+                <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
-            <h2 className="ml-4 text-[22px] font-normal capitalize text-slate-700">
+            <h2 className="ml-4 text-xl font-semibold capitalize text-slate-800 tracking-tight w-48">
               {format(currentDate, "MMMM yyyy", { locale: fr })}
             </h2>
           </div>
         </div>
 
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-600 hover:bg-slate-100">
-            <Search className="h-5 w-5" />
-          </Button>
-          <Button variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-600 hover:bg-slate-100">
-            <HelpCircle className="h-5 w-5" />
-          </Button>
-          <Button variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-600 hover:bg-slate-100">
-            <Settings className="h-5 w-5" />
-          </Button>
+        <div className="flex items-center gap-2">
+
+
+
           
-          <Button variant="outline" className="ml-2 gap-2 h-9 rounded-md px-3 hidden sm:flex font-medium border-slate-300 hover:bg-slate-50 text-slate-700">
-            Semaine <ChevronDown className="h-4 w-4 text-slate-500" />
-          </Button>
-          
-          <div className="ml-4 hidden sm:flex h-9 items-center gap-2">
-             <Button variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-600 hover:bg-slate-100">
-                <div className="grid grid-cols-3 gap-0.5 p-1">
+          <div className="ml-2 hidden sm:flex h-9 items-center gap-3">
+             <Button variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors">
+                <div className="grid grid-cols-3 gap-[3px] p-1">
                   {Array.from({length: 9}).map((_, i) => (
-                    <div key={i} className="h-[3px] w-[3px] bg-slate-600 rounded-full" />
+                    <div key={i} className="h-1 w-1 bg-current rounded-full" />
                   ))}
                 </div>
              </Button>
-             <Avatar className="h-8 w-8 border border-slate-200 cursor-pointer">
-              <AvatarFallback className="bg-purple-600 text-white text-xs font-medium">
+             <Avatar className="h-9 w-9 border-2 border-white shadow-sm cursor-pointer hover:scale-105 transition-transform ring-2 ring-slate-100">
+              <AvatarFallback className="bg-gradient-to-br from-purple-500 to-indigo-500 text-white text-sm font-medium">
                 {user?.firstName?.[0] || 'A'}{user?.lastName?.[0] || 'U'}
               </AvatarFallback>
             </Avatar>
@@ -200,104 +200,69 @@ function CalendrierPage() {
       </header>
 
       {/* BODY */}
-      <div className="flex flex-1 overflow-hidden bg-white">
+      <div className="flex flex-1 overflow-hidden bg-transparent">
         {/* SIDEBAR */}
         {sidebarOpen && (
-          <aside className="w-64 flex-none border-r border-slate-200 bg-white flex flex-col overflow-y-auto hidden md:block">
-            <div className="p-4 pt-5 pb-3">
-              <Button className="h-[48px] rounded-full px-4 gap-3 bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 hover:text-slate-800 hover:shadow-md transition-all shadow-sm w-fit justify-start text-sm font-medium">
-                <Plus className="h-6 w-6 text-slate-600" />
+          <aside className="w-[280px] flex-none border-r border-slate-200/60 bg-white/40 backdrop-blur-2xl flex flex-col overflow-y-auto hidden md:block relative z-20">
+            <div className="p-5">
+              <Button className="h-12 w-full rounded-2xl px-4 gap-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-0 hover:from-blue-500 hover:to-indigo-500 hover:shadow-xl hover:shadow-indigo-500/30 transition-all duration-300 shadow-md justify-center text-[15px] font-semibold group active:scale-[0.98]">
+                <div className="bg-white/20 rounded-full p-0.5 group-hover:bg-white/30 transition-colors">
+                  <Plus className="h-4 w-4 group-hover:rotate-90 transition-transform duration-300" />
+                </div>
                 Créer
-                <ChevronDown className="h-4 w-4 text-slate-500 ml-1" />
+                <ChevronDown className="h-4 w-4 ml-1 opacity-70 group-hover:opacity-100 transition-opacity" />
               </Button>
             </div>
-            <div className="px-4 pb-2">
+            <div className="px-5 pb-4 border-b border-slate-100/60">
               <Calendar
                 mode="single"
                 selected={currentDate}
                 onSelect={(date) => date && setCurrentDate(date)}
-                className="w-full rounded-md border-none p-0 [&_.rdp-day]:h-8 [&_.rdp-day]:w-8 [&_.rdp-caption]:h-8"
+                className="w-full rounded-2xl border-none p-0 [&_.rdp-day]:h-8 [&_.rdp-day]:w-8 [&_.rdp-caption]:h-8 [&_.rdp-day_button:hover]:bg-blue-50/80 [&_.rdp-day_button:hover]:text-blue-700 [&_.rdp-day.rdp-day_selected]:bg-blue-600 [&_.rdp-day.rdp-day_selected]:text-white [&_.rdp-day.rdp-day_selected]:shadow-md [&_.rdp-day.rdp-day_selected]:shadow-blue-600/30 font-medium"
                 locale={fr}
               />
             </div>
-            <div className="mt-2 px-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+            
+            <div className="flex-1 px-5 py-6 space-y-8 overflow-y-auto custom-scrollbar">
+              <div className="relative group">
+                <Search className="absolute left-3.5 top-2.5 h-4 w-4 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
                 <input 
                   type="text" 
                   placeholder="Rechercher des médecins..." 
-                  className="h-9 w-full rounded-md border-none bg-slate-100 pl-9 pr-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 text-sm focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-sm placeholder:text-slate-400"
                 />
-              </div>
-            </div>
-
-            <div className="mt-6 flex-1 px-4 space-y-6 pb-6">
-              <div>
-                <h3 className="mb-2 text-sm font-medium text-slate-800 flex items-center justify-between cursor-pointer hover:bg-slate-50 p-1 -ml-1 rounded">
-                  Pages de réservation
-                  <Plus className="h-4 w-4 text-slate-500" />
-                </h3>
-              </div>
-
-              <div>
-                <h3 className="mb-3 text-sm font-medium text-slate-800 flex items-center justify-between cursor-pointer hover:bg-slate-50 p-1 -ml-1 rounded">
-                  Mes agendas
-                  <ChevronDown className="h-4 w-4 text-slate-500" />
-                </h3>
-                <div className="space-y-2 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
-                  {doctors.map((doc, idx) => {
-                    const colors = [
-                      "data-[state=checked]:bg-blue-500 data-[state=checked]:border-blue-500",
-                      "data-[state=checked]:bg-green-500 data-[state=checked]:border-green-500",
-                      "data-[state=checked]:bg-purple-500 data-[state=checked]:border-purple-500",
-                      "data-[state=checked]:bg-orange-500 data-[state=checked]:border-orange-500"
-                    ];
-                    return (
-                      <label key={doc} className="flex items-center gap-3 text-sm text-slate-700 cursor-pointer hover:bg-slate-50 p-1 rounded -ml-1">
-                        <Checkbox 
-                          checked={selectedDoctors.has(doc)} 
-                          onCheckedChange={() => toggleDoctor(doc)}
-                          className={cn("rounded border-slate-300", colors[idx % colors.length])}
-                        />
-                        <span className="truncate" title={doc}>{doc}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-              
-              <div>
-                <h3 className="mb-3 text-sm font-medium text-slate-800 flex items-center justify-between cursor-pointer hover:bg-slate-50 p-1 -ml-1 rounded">
-                  Autres agendas
-                  <Plus className="h-4 w-4 text-slate-500" />
-                </h3>
-                <label className="flex items-center gap-3 text-sm text-slate-700 cursor-pointer p-1 -ml-1 hover:bg-slate-50 rounded">
-                  <Checkbox className="rounded border-slate-300 data-[state=checked]:bg-slate-700 data-[state=checked]:border-slate-700" defaultChecked />
-                  <span className="truncate">Jours fériés en Tunisie</span>
-                </label>
               </div>
             </div>
           </aside>
         )}
 
         {/* MAIN CALENDAR GRID */}
-        <main className="flex flex-1 flex-col overflow-hidden bg-white">
+        <main className="flex flex-1 flex-col overflow-hidden bg-transparent relative z-0">
           {/* Days Header */}
-          <div className="flex flex-none border-b border-slate-200">
-            <div className="w-[50px] flex-none text-[10px] text-slate-500 flex items-end justify-center pb-2 border-r border-slate-200 bg-white z-10">
+          <div className="flex flex-none border-b border-slate-200/60 bg-white/60 backdrop-blur-xl z-30 shadow-[0_1px_2px_0_rgba(0,0,0,0.01)]">
+            <div className="w-[60px] flex-none text-[10px] font-semibold text-slate-400 flex items-end justify-center pb-3 border-r border-slate-200/60">
               GMT+01
             </div>
             <div className="flex flex-1">
               {weekDays.map((day) => {
-                const today = isSameDay(day, defaultDate); // Simulate today as defaultDate
+                const isSelected = isSameDay(day, currentDate);
+                const isActualToday = isSameDay(day, new Date());
                 return (
-                  <div key={day.toString()} className="flex-1 flex flex-col items-center py-2 border-r border-slate-200 last:border-r-0 min-w-[60px]">
-                    <span className={cn("text-[11px] font-medium uppercase tracking-wider mb-1", today ? "text-blue-600" : "text-slate-500")}>
+                  <div 
+                    key={day.toString()} 
+                    onClick={() => setCurrentDate(day)}
+                    className="flex-1 flex flex-col items-center py-3 border-r border-slate-200/60 last:border-r-0 min-w-[60px] group cursor-pointer hover:bg-slate-50/50 transition-colors"
+                  >
+                    <span className={cn("text-[11px] font-bold uppercase tracking-wider mb-1.5 transition-colors duration-200", isSelected ? "text-blue-600" : isActualToday ? "text-slate-800" : "text-slate-500 group-hover:text-slate-700")}>
                       {format(day, 'EEE', { locale: fr }).replace('.', '')}
                     </span>
                     <div className={cn(
-                      "flex h-11 w-11 items-center justify-center rounded-full text-2xl font-normal transition-colors",
-                      today ? "bg-blue-600 text-white" : "text-slate-700 hover:bg-slate-100 cursor-pointer"
+                      "flex h-11 w-11 items-center justify-center rounded-full text-xl font-medium transition-all duration-300",
+                      isSelected 
+                        ? "bg-blue-600 text-white shadow-lg shadow-blue-500/30 ring-2 ring-blue-600 ring-offset-2 ring-offset-white/50" 
+                        : isActualToday 
+                          ? "text-slate-900 bg-slate-200/60 hover:bg-slate-200" 
+                          : "text-slate-700 group-hover:bg-slate-100 group-hover:text-slate-900"
                     )}>
                       {format(day, 'd')}
                     </div>
@@ -308,12 +273,12 @@ function CalendrierPage() {
           </div>
 
           {/* Scrollable Hours Grid */}
-          <div className="flex flex-1 overflow-y-auto relative">
+          <div className="flex flex-1 overflow-y-auto relative bg-white/20 custom-scrollbar backdrop-blur-[2px]">
             {/* Time labels axis */}
-            <div className="w-[50px] flex-none bg-white border-r border-slate-200 relative z-20 pt-4">
+            <div className="w-[60px] flex-none bg-white/60 backdrop-blur-md border-r border-slate-200/60 relative z-20 pt-4">
               {HOURS.map((hour) => (
-                <div key={hour} className="h-16 relative">
-                  <span className="absolute -top-2.5 right-2 text-[10px] text-slate-500 font-medium">
+                <div key={hour} className="h-20 relative">
+                  <span className="absolute -top-2.5 right-3 text-[11px] text-slate-500 font-medium tracking-tight">
                     {formatHour(hour)}
                   </span>
                 </div>
@@ -322,12 +287,28 @@ function CalendrierPage() {
 
             {/* Grid Cells */}
             <div className="flex flex-1 relative pt-4">
+              {/* Background horizontal lines */}
+              <div className="absolute inset-0 pointer-events-none z-0 pt-4">
+                {HOURS.map((hour) => (
+                  <div key={`line-${hour}`} className="h-20 border-b border-slate-200/40 w-full" />
+                ))}
+              </div>
+
               {weekDays.map((day, dayIdx) => (
-                <div key={dayIdx} className="flex-1 border-r border-slate-200 last:border-r-0 relative min-w-[60px]">
-                  {/* Grid lines */}
-                  {HOURS.map((hour) => (
-                    <div key={hour} className="h-16 border-b border-slate-100 w-full" />
-                  ))}
+                <div key={dayIdx} className="flex-1 border-r border-slate-200/60 last:border-r-0 relative min-w-[60px] z-10 group/col">
+                  {/* Empty cells for hover effect to invite creation */}
+                  <div className="absolute inset-0 flex flex-col z-0 pointer-events-auto mt-4">
+                    {HOURS.map((hour) => (
+                      <div 
+                        key={`slot-${hour}`} 
+                        className="h-20 w-full hover:bg-blue-50/40 transition-colors duration-200 cursor-pointer border border-transparent hover:border-blue-100" 
+                        onClick={() => {
+                          setSelectedSlot({ day, hour });
+                          setIsCreateDialogOpen(true);
+                        }}
+                      />
+                    ))}
+                  </div>
 
                   {/* Events for this day */}
                   {filteredPlanning.filter(p => isSameDay(p.parsedDate, day)).map((session, i) => {
@@ -336,31 +317,34 @@ function CalendrierPage() {
                     
                     if (startHour > 22) return null;
                     
-                    const topPos = (startHour - 8) * 64; 
-                    const height = duration * 64;
+                    const topPos = (startHour - 8) * 80; 
+                    const height = duration * 80;
 
                     return (
                       <div 
                         key={session.id}
                         className={cn(
-                          "absolute left-0.5 right-1.5 rounded-[4px] border p-1.5 text-xs shadow-sm overflow-hidden flex flex-col transition-all cursor-pointer z-10 hover:z-20 hover:shadow-md",
+                          "absolute left-1 right-2 rounded-xl p-3 text-sm overflow-hidden flex flex-col transition-all duration-300 cursor-pointer z-20 hover:z-30 hover:-translate-y-0.5 hover:shadow-xl backdrop-blur-md ring-1 ring-white/60",
                           getEventColor(session.affiliation)
                         )}
-                        style={{ top: `${topPos}px`, height: `${height - 2}px` }}
+                        style={{ top: `${topPos + 2}px`, height: `${height - 4}px` }}
                       >
-                        <span className="font-semibold block truncate leading-tight text-slate-900">{session.doctorName}</span>
-                        <span className="block truncate text-[10px] opacity-90 mt-0.5 text-slate-700">{session.hospital}</span>
+                        <span className="font-semibold block truncate leading-snug tracking-tight mb-1">{session.doctorName}</span>
+                        <span className="block truncate text-[11px] font-medium opacity-90 flex items-center gap-1.5 mt-auto bg-white/30 w-fit px-1.5 py-0.5 rounded-md">
+                          <MapPin className="h-3 w-3 flex-none" />
+                          <span className="truncate">{session.hospital}</span>
+                        </span>
                       </div>
                     );
                   })}
                   
-                  {/* Current Time Line (Red) - Mocked to 10 PM for Friday Jun 26 2026 */}
-                  {isSameDay(day, defaultDate) && (
+                  {/* Current Time Indicator for Today */}
+                  {isSameDay(day, new Date()) && (
                     <div 
-                      className="absolute left-0 right-0 border-t-2 border-red-500 z-30 pointer-events-none" 
-                      style={{ top: `${(22 - 8) * 64}px` }}
+                      className="absolute left-0 right-0 border-t-2 border-rose-500 z-30 pointer-events-none shadow-[0_1px_5px_rgba(244,63,94,0.5)]" 
+                      style={{ top: `${(22 - 8) * 80 + 16}px` }}
                     >
-                      <div className="absolute -left-1.5 -top-[5px] h-[10px] w-[10px] rounded-full bg-red-500" />
+                      <div className="absolute -left-1.5 -top-[5px] h-3 w-3 rounded-full bg-rose-500 shadow-md ring-2 ring-white" />
                     </div>
                   )}
                 </div>
@@ -369,6 +353,61 @@ function CalendrierPage() {
           </div>
         </main>
       </div>
+
+      {/* DIALOG CREATION SESSION */}
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent className="sm:max-w-[425px] rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold text-slate-800">Nouvelle session d'examen</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-5 py-4">
+            {selectedSlot && (
+              <div className="text-sm text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-100 flex items-center gap-2">
+                <CalendarIcon className="h-4 w-4 text-blue-500" />
+                <span>
+                  <span className="font-semibold text-slate-700 capitalize">{format(selectedSlot.day, 'eeee dd MMMM yyyy', { locale: fr })}</span> à <span className="font-semibold text-slate-700">{formatHour(selectedSlot.hour)}</span>
+                </span>
+              </div>
+            )}
+            
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="doctor" className="text-right text-slate-600 font-medium">Médecin</Label>
+              <div className="col-span-3">
+                <Select value={newSessionDoctor} onValueChange={setNewSessionDoctor}>
+                  <SelectTrigger id="doctor" className="rounded-xl border-slate-200 focus:ring-blue-500">
+                    <SelectValue placeholder="Sélectionner un médecin" />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-xl">
+                    {doctors.map(doc => (
+                      <SelectItem key={doc} value={doc}>{doc}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="count" className="text-right text-slate-600 font-medium">Nb. examens</Label>
+              <Input 
+                id="count" 
+                type="number" 
+                min="1"
+                className="col-span-3 rounded-xl border-slate-200 focus:ring-blue-500"
+                value={newSessionCount}
+                onChange={(e) => setNewSessionCount(parseInt(e.target.value) || 1)}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0 mt-2">
+            <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)} className="rounded-xl">Annuler</Button>
+            <Button onClick={() => {
+              setIsCreateDialogOpen(false);
+              setNewSessionDoctor("");
+              setNewSessionCount(1);
+            }} className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/20 transition-all">Assigner</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

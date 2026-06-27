@@ -50,9 +50,12 @@ def exam_list(request):
                 Q(assigned_to__last_name__icontains=doctor)
             )
 
-        today_only = request.query_params.get('today_only')
-        if today_only and today_only.lower() in ('true', '1'):
-            exams = exams.filter(date=date.today())
+        date_param = request.query_params.get('date')
+        if date_param:
+            try:
+                exams = exams.filter(date=date_param)
+            except ValueError:
+                pass
 
         if request.user.is_authenticated:
             try:
@@ -116,11 +119,48 @@ def exam_detail(request, pk):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def exam_stats(request):
-    total = Exam.objects.count()
-    attente = Exam.objects.filter(status='En attente').count()
-    cours = Exam.objects.filter(status='En cours').count()
-    interprete = Exam.objects.filter(status='Interprété').count()
-    urgent = Exam.objects.filter(priority='Urgent').count()
+    exams = Exam.objects.all()
+    if request.user.is_authenticated:
+        try:
+            profil = request.user.profil
+            if profil.role in ('Medecin', 'Resident', 'RESIDENT', 'OPHTALMOLOGUE', 'CHEF_SERVICE', 'Chef'):
+                exams = exams.filter(assigned_to=request.user)
+        except Exception:
+            pass
+
+    study_uid = request.query_params.get('study_instance_uid')
+    if study_uid:
+        exams = exams.filter(study_instance_uid=study_uid)
+
+    q = request.query_params.get('q', '')
+    if q:
+        exams = exams.filter(
+            Q(patient_name__icontains=q) | Q(id__icontains=q)
+        )
+
+    region = request.query_params.get('region', '')
+    if region:
+        exams = exams.filter(region__icontains=region)
+
+    doctor = request.query_params.get('doctor', '')
+    if doctor:
+        exams = exams.filter(
+            Q(assigned_to__first_name__icontains=doctor) |
+            Q(assigned_to__last_name__icontains=doctor)
+        )
+
+    date_param = request.query_params.get('date')
+    if date_param:
+        try:
+            exams = exams.filter(date=date_param)
+        except ValueError:
+            pass
+
+    total = exams.count()
+    attente = exams.filter(status='En attente').count()
+    cours = exams.filter(status='En cours').count()
+    interprete = exams.filter(status='Interprété').count()
+    urgent = exams.filter(priority='Urgent').count()
     return Response({
         'total': total,
         'En attente': attente,
@@ -249,9 +289,23 @@ def sync_orthanc(request):
             from .distribution import distribuer_examens
             distribuer_examens()
 
+    # Nettoyage : supprimer les Exam dont l'étude n'existe plus dans Orthanc
+    orthanc_study_ids = set(study_ids)
+    db_study_uids = set(
+        Exam.objects.filter(study_instance_uid__isnull=False)
+        .exclude(study_instance_uid='')
+        .values_list('study_instance_uid', flat=True)
+    )
+    stale_uids = db_study_uids - orthanc_study_ids
+    deleted_count = 0
+    if stale_uids:
+        AnalysisReport.objects.filter(series_instance_uid__in=stale_uids).delete()
+        deleted_count = Exam.objects.filter(study_instance_uid__in=stale_uids).delete()[0]
+
     return Response({
         'created': created,
         'updated': updated,
+        'deleted': deleted_count,
         'errors': errors,
         'total': len(study_ids),
         'force_refresh': force_refresh,
@@ -376,9 +430,7 @@ def monai_inference_webhook(request):
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    if exam.status == 'En attente':
-        exam.status = 'En cours'
-        exam.save(update_fields=['status'])
+    # On ne passe plus le statut à 'En cours' ici, l'examen reste 'En attente' jusqu'à son assignation.
 
     if analysis_data:
         AnalysisReport.objects.create(
@@ -454,9 +506,7 @@ def request_composite_segmentation(request):
     )
 
     exam = Exam.objects.filter(study_instance_uid=study_uid).first()
-    if exam and exam.status == "En attente":
-        exam.status = "En cours"
-        exam.save(update_fields=["status"])
+    # On ne passe plus le statut à 'En cours' ici. L'assignation gère le passage à 'En cours'.
 
     return Response({
         "status": "completed",

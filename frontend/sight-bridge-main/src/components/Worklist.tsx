@@ -30,45 +30,50 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
   const [doctorFilter, setDoctorFilter] = useState("");
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
-  const [showTodayOnly, setShowTodayOnly] = useState(todayOnly);
+  const [filterDate, setFilterDate] = useState<string>("");
+
+  const [stats, setStats] = useState({ attente: 0, cours: 0, interprete: 0 });
 
   const loadExams = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      console.log("[Worklist] Fetching exams...", { statusFilter, query, regionFilter, doctorFilter, showTodayOnly, page });
+      console.log("[Worklist] Fetching exams...", { statusFilter, query, regionFilter, doctorFilter, filterDate, page });
       const result = await fetchExams({
         status: statusFilter === "Tous" ? undefined : statusFilter,
         q: query || undefined,
         region: regionFilter || undefined,
         doctor: doctorFilter || undefined,
-        today_only: showTodayOnly || undefined,
+        date: filterDate || undefined,
         page,
         page_size: 10,
       });
       console.log("[Worklist] Exams received:", result);
       setExams(result.exams);
       setTotal(result.total);
+      
+      const statsData = await getExamStats({
+        q: query || undefined,
+        region: regionFilter || undefined,
+        doctor: doctorFilter || undefined,
+        date: filterDate || undefined,
+      });
+      setStats({
+        attente: statsData["En attente"],
+        cours: statsData["En cours"],
+        interprete: statsData["Interprété"],
+      });
     } catch (err) {
       console.error("[Worklist] Failed to load exams:", err);
       setError("Impossible de charger les examens.");
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, query, regionFilter, doctorFilter, showTodayOnly, page]);
+  }, [statusFilter, query, regionFilter, doctorFilter, filterDate, page]);
 
   useEffect(() => {
     loadExams();
   }, [loadExams]);
-
-  const stats = useMemo(
-    () => ({
-      attente: exams.filter((e) => e.status === "En attente").length,
-      cours: exams.filter((e) => e.status === "En cours").length,
-      interprete: exams.filter((e) => e.status === "Interprété").length,
-    }),
-    [exams],
-  );
 
   // On affiche la colonne "Assigné à" uniquement pour les admins (les autres médecins ne voient que leurs propres examens)
   const showAssignedTo = user?.role === "Admin";
@@ -182,17 +187,15 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
             </button>
           ))}
         </div>
-        <button
-          onClick={() => { setShowTodayOnly((v) => !v); setPage(1); }}
-          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition ${
-            showTodayOnly
-              ? "bg-blue-600 text-white"
-              : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
-          }`}
-        >
-          <Calendar className="h-3.5 w-3.5" />
-          Aujourd'hui
-        </button>
+        <div className="flex items-center gap-2">
+          <Calendar className="h-4 w-4 text-slate-400" />
+          <input
+            type="date"
+            value={filterDate}
+            onChange={(e) => { setFilterDate(e.target.value); setPage(1); }}
+            className="rounded-lg border border-slate-200 bg-white py-1.5 px-3 text-sm text-slate-600 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-100"
+          />
+        </div>
         <button
           onClick={handleSync}
           disabled={syncing}

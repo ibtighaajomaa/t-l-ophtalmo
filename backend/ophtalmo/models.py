@@ -47,6 +47,11 @@ class Exam(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def save(self, *args, **kwargs):
+        if not self.assigned_to and self.status == self.Status.EN_COURS:
+            self.status = self.Status.EN_ATTENTE
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.patient_name} — {self.exam_type} ({self.date})"
 
