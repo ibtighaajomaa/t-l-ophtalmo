@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 ORTHANC_URL = os.environ.get('ORTHANC_URL', 'http://orthanc-container:8042')
 
 
-def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None):
+def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None, orthanc_study_id=None):
     """
     Inject synthetic spatial geometry tags into all DICOM instances of an OP
     (fundus photography) series directly in Orthanc, and make the SeriesInstanceUID
@@ -34,7 +34,7 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None):
     happens when the same fundus template is uploaded for multiple patients), MONAI
     Label's DICOMweb search by SeriesInstanceUID may return the wrong patient's
     DICOM — causing the SEG to be generated for the wrong patient.  To fix this,
-    we append a short hash of the StudyInstanceUID to the SeriesInstanceUID, making
+    we append a short hash of the Orthanc study ID to the SeriesInstanceUID, making
     it unique per study.
 
     Uses Orthanc's /instances/{id}/modify endpoint to avoid changing the
@@ -47,6 +47,7 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None):
         orthanc_url: Orthanc base URL (e.g. http://orthanc-container:8042)
         orthanc_series_id: Orthanc internal series ID (from /series endpoint)
         monai_cache_dir: Path to MONAI Label DICOM cache (optional, for clearing)
+        orthanc_study_id: Orthanc internal study ID (optional, for unique hash)
 
     Returns:
         tuple: (num_modified, new_series_instance_uid) or (0, original_uid) if
@@ -60,6 +61,14 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None):
     except requests.RequestException as e:
         logger.warning(f"[GeometryInject] Could not list instances for series {orthanc_series_id}: {e}")
         return 0, None
+
+    # If orthanc_study_id not provided, try to get it from the series metadata
+    if not orthanc_study_id:
+        try:
+            series_meta = requests.get(f'{orthanc_url}/series/{orthanc_series_id}', timeout=10).json()
+            orthanc_study_id = series_meta.get('ParentStudy')
+        except Exception:
+            pass
 
     modified = 0
     original_series_uid = None
@@ -94,10 +103,11 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None):
             study_instance_uid = tags.get('StudyInstanceUID')
         synthetic_fruid = "2.25." + str(int(hashlib.md5((study_instance_uid or sop_uid).encode()).hexdigest(), 16))[:39]
 
-        # Generate a unique SeriesInstanceUID by appending a hash of the StudyInstanceUID.
+        # Generate a unique SeriesInstanceUID by appending a hash of the Orthanc study ID.
         # This prevents cross-patient collisions when MONAI Label searches by SeriesInstanceUID.
+        # Orthanc study ID is guaranteed unique, unlike DICOM StudyInstanceUID which can collide.
         if original_series_uid and not new_series_uid:
-            uid_for_hash = study_instance_uid or sop_uid
+            uid_for_hash = orthanc_study_id or study_instance_uid or sop_uid
             uid_hash = hashlib.md5(uid_for_hash.encode()).hexdigest()[:8]
             # Only modify if the SeriesInstanceUID doesn't already have the hash suffix
             if not original_series_uid.endswith(uid_hash):
@@ -118,6 +128,7 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None):
             modify_body["Replace"]["PixelSpacing"] = "1\\1"
         if new_series_uid and new_series_uid != original_series_uid:
             modify_body["Replace"]["SeriesInstanceUID"] = new_series_uid
+            modify_body["Force"] = True
 
         if not modify_body["Replace"].get("SeriesInstanceUID") and has_fruid and has_ipp:
             # Already has geometry and no SeriesInstanceUID change needed
@@ -137,11 +148,12 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None):
                 )
                 continue
 
-            new_inst_id = mod_resp.json().get('ID')
+            # Orthanc returns the modified DICOM binary (not JSON), so check
+            # the status code alone — no need to parse the body.
             logger.info(
-                f"[GeometryInject] Instance {inst_id} -> {new_inst_id} "
+                f"[GeometryInject] Modified instance {inst_id} "
                 f"(SOP {sop_uid[:40]}...) FRUID={synthetic_fruid[:40]}... "
-                f"SeriesUID={new_series_uid or original_series_uid}"
+                f"SeriesUID={new_series_uid or original_series_uid} (HTTP {mod_resp.status_code})"
             )
 
             # Delete the original instance (the modified one is already in Orthanc)
@@ -155,8 +167,13 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None):
             logger.warning(f"[GeometryInject] Modify request failed for instance {inst_id}: {e}")
             continue
 
-    # Determine the final SeriesInstanceUID to return
-    final_series_uid = new_series_uid or original_series_uid
+    # Determine the final SeriesInstanceUID to return.
+    # Only return the new UID if at least one instance was actually modified,
+    # otherwise MONAI Label would try to download a non-existent series.
+    if modified > 0 and new_series_uid:
+        final_series_uid = new_series_uid
+    else:
+        final_series_uid = original_series_uid
 
     # Clear MONAI Label cache for BOTH the old and new series UIDs
     if modified > 0 and monai_cache_dir:
@@ -225,74 +242,65 @@ def _clear_monai_cache(monai_cache_dir, series_instance_uid, orthanc_url=None):
         logger.debug(f"[GeometryInject] No MONAI cache entries found for series {series_instance_uid}")
 
 
-def _fix_seg_association(orthanc_url, orthanc_study_id, expected_study_uid):
-    """
-    Post-processing safety net: enforce correct PatientID and StudyInstanceUID
-    on all SEG series within a study.  Catches cases where MONAI Label patches
-    fail and the SEG is pushed with wrong patient/study association.
+def _snapshot_seg_series(orthanc_url):
+    """Return the set of all Orthanc series IDs with Modality=SEG."""
+    seg_ids = set()
+    try:
+        for sid in requests.get(f'{orthanc_url}/series', timeout=30).json():
+            try:
+                sr = requests.get(f'{orthanc_url}/series/{sid}', timeout=10)
+                if sr.status_code == 200 and sr.json().get('MainDicomTags', {}).get('Modality') == 'SEG':
+                    seg_ids.add(sid)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"[SegFix] Snapshot error: {e}")
+    return seg_ids
+
+
+def _fix_seg_association(orthanc_url, candidate_ids, expected_patient_id, expected_study_uid):
+    """Enforce correct PatientID and StudyInstanceUID on candidate SEG series.
 
     Uses Orthanc /series/{id}/modify (creates corrected copy), then removes
     the original incorrect series to avoid duplicates in OHIF.
     """
-    try:
-        study_resp = requests.get(f'{orthanc_url}/studies/{orthanc_study_id}', timeout=15)
-        if study_resp.status_code != 200:
-            return
+    if not expected_patient_id and not expected_study_uid:
+        return
+    for sid in candidate_ids:
+        try:
+            sr = requests.get(f'{orthanc_url}/series/{sid}', timeout=10)
+            if sr.status_code != 200:
+                continue
+            s = sr.json()
+            if s.get('MainDicomTags', {}).get('Modality') != 'SEG':
+                continue
 
-        study_meta = study_resp.json()
-        expected_patient_id = study_meta.get('PatientMainDicomTags', {}).get('PatientID', '')
-        expected_study_uid = expected_study_uid or study_meta.get('MainDicomTags', {}).get('StudyInstanceUID', '')
+            dt = s.get('MainDicomTags', {})
+            replace = {}
+            if expected_patient_id and dt.get('PatientID') != expected_patient_id:
+                replace['PatientID'] = expected_patient_id
+            if expected_study_uid and dt.get('StudyInstanceUID') != expected_study_uid:
+                replace['StudyInstanceUID'] = expected_study_uid
 
-        if not expected_patient_id and not expected_study_uid:
-            return
+            if not replace:
+                continue
 
-        for sid in study_meta.get('Series', []):
-            try:
-                sr = requests.get(f'{orthanc_url}/series/{sid}', timeout=10)
-                if sr.status_code != 200:
-                    continue
-                s = sr.json()
-                if s.get('MainDicomTags', {}).get('Modality') != 'SEG':
-                    continue
+            mod = requests.post(
+                f'{orthanc_url}/series/{sid}/modify',
+                json={'Replace': replace},
+                timeout=60,
+            )
+            if mod.status_code != 200:
+                logger.warning(f"[SegFix] Modify failed for SEG series {sid}: {mod.status_code}")
+                continue
 
-                dt = s.get('MainDicomTags', {})
-                seg_pid = dt.get('PatientID', '')
-                seg_study = dt.get('StudyInstanceUID', '')
-
-                replace = {}
-                if expected_patient_id and seg_pid != expected_patient_id:
-                    replace['PatientID'] = expected_patient_id
-                if expected_study_uid and seg_study != expected_study_uid:
-                    replace['StudyInstanceUID'] = expected_study_uid
-
-                if not replace:
-                    continue
-
-                # Create corrected copy
-                mod = requests.post(
-                    f'{orthanc_url}/series/{sid}/modify',
-                    json={'Replace': replace},
-                    timeout=60,
-                )
-                if mod.status_code != 200:
-                    logger.warning(f"[SegFix] Modify failed for SEG series {sid}: {mod.status_code}")
-                    continue
-
-                # Remove the original incorrect series to avoid duplicates
-                del_resp = requests.delete(f'{orthanc_url}/series/{sid}', timeout=30)
-                if del_resp.status_code in (200, 204):
-                    logger.info(
-                        f"[SegFix] Fixed SEG series {sid}: replaced Tags={replace}, removed old series"
-                    )
-                else:
-                    logger.warning(
-                        f"[SegFix] Modified SEG series {sid} but could not remove original: "
-                        f"{del_resp.status_code}"
-                    )
-            except Exception as e:
-                logger.warning(f"[SegFix] Error checking series {sid}: {e}")
-    except Exception as e:
-        logger.warning(f"[SegFix] Error for study {orthanc_study_id}: {e}")
+            del_resp = requests.delete(f'{orthanc_url}/series/{sid}', timeout=30)
+            if del_resp.status_code in (200, 204):
+                logger.info(f"[SegFix] Fixed SEG series {sid}: {replace}")
+            else:
+                logger.warning(f"[SegFix] Modified SEG {sid} but could not remove original: {del_resp.status_code}")
+        except Exception as e:
+            logger.warning(f"[SegFix] Error checking series {sid}: {e}")
 
 
 @shared_task(name='ophtalmo.tasks.tache_distribution')
@@ -569,7 +577,7 @@ def tache_auto_segmentation():
         if op_orthanc_series_id:
             monai_cache = os.environ.get('MONAI_CACHE_DIR', '/root/.cache/monailabel')
             try:
-                _, new_series_uid = inject_op_geometry(ORTHANC_URL, op_orthanc_series_id, monai_cache)
+                _, new_series_uid = inject_op_geometry(ORTHANC_URL, op_orthanc_series_id, monai_cache, study_id)
             except Exception as e:
                 logger.error(f"[AutoSeg] Geometry injection exception for study {study_id}: {e}")
                 exam.segmentation_status = 'failed'
@@ -584,11 +592,26 @@ def tache_auto_segmentation():
                 continue
             op_series_uid = new_series_uid
 
+            # Nuclear option: blow away the entire MONAI Label DICOM cache so it
+            # MUST re-download the geometry-injected instances fresh.
+            try:
+                import shutil
+                dicom_root = os.path.join(monai_cache, 'dicom')
+                if os.path.isdir(dicom_root):
+                    shutil.rmtree(dicom_root, ignore_errors=True)
+                    logger.info(f"[AutoSeg] Cleared entire MONAI DICOM cache: {dicom_root}")
+            except Exception as e:
+                logger.warning(f"[AutoSeg] Could not clear DICOM cache: {e}")
+
         # Get the DICOM StudyInstanceUID to ensure SEG lands in the same study
         op_study_uid = orthanc_meta.get('MainDicomTags', {}).get('StudyInstanceUID', '')
+        expected_patient_id = orthanc_meta.get('PatientMainDicomTags', {}).get('PatientID', '')
         base_params = {"device": device}
         if op_study_uid:
             base_params["study_uid"] = op_study_uid
+
+        # Snapshot existing SEG series so we can find only the new one after inference
+        seg_ids_before = _snapshot_seg_series(ORTHANC_URL)
 
         # Run all segmentation models
         models_status = {}
@@ -635,11 +658,14 @@ def tache_auto_segmentation():
             logger.error(f"[AutoSeg] dr_classification failed for study {study_id}: {e}")
 
         # Fix SEG patient/study association in Orthanc — safety net for any patch failures
-        if op_study_uid and op_series_uid:
-            try:
-                _fix_seg_association(ORTHANC_URL, study_id, op_study_uid)
-            except Exception as e:
-                logger.warning(f"[AutoSeg] SEG association fix failed for study {study_id}: {e}")
+        try:
+            seg_ids_after = _snapshot_seg_series(ORTHANC_URL)
+            new_seg_ids = seg_ids_after - seg_ids_before
+            if new_seg_ids:
+                _fix_seg_association(ORTHANC_URL, new_seg_ids, expected_patient_id, op_study_uid)
+                logger.info(f"[AutoSeg] Checked {len(new_seg_ids)} new SEG series for study {study_id}")
+        except Exception as e:
+            logger.warning(f"[AutoSeg] SEG association fix failed for study {study_id}: {e}")
 
         # Update exam based on results
         exam.segmentation_models_status = models_status
