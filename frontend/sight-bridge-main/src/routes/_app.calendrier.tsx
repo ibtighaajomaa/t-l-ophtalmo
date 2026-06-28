@@ -56,13 +56,13 @@ function parseFrenchDate(dateStr: string): Date | null {
   }
 }
 
-const HOURS = Array.from({ length: 16 }, (_, i) => i + 8); // 8 AM to 11 PM
+const HOURS = Array.from({ length: 24 }, (_, i) => i); // 0 to 23
 
 function CalendrierPage() {
   const { user } = useAuth();
 
-  // Date de référence pour correspondre aux mocks (Juin 2026)
-  const defaultDate = new Date(2026, 5, 26);
+  // Date de référence : on utilise la date d'aujourd'hui par défaut
+  const defaultDate = new Date();
   const [currentDate, setCurrentDate] = useState(defaultDate);
   const [exams, setExams] = useState<Exam[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -179,6 +179,7 @@ function CalendrierPage() {
   const goToday = () => setCurrentDate(new Date());
 
   const formatHour = (hour: number) => {
+    if (hour === 0) return "12 AM";
     if (hour === 12) return "12 PM";
     if (hour > 12) return `${hour - 12} PM`;
     return `${hour} AM`;
@@ -201,7 +202,7 @@ function CalendrierPage() {
           </Button>
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white font-bold text-lg shadow-lg shadow-blue-600/20 ring-2 ring-white transform transition-transform hover:rotate-3 cursor-default">
-              {format(new Date(), 'dd')}
+              {format(currentDate, 'dd')}
             </div>
             <span className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-indigo-700 hidden sm:block tracking-tight drop-shadow-sm">Agenda</span>
           </div>
@@ -331,16 +332,16 @@ function CalendrierPage() {
               {weekDays.map((day, dayIdx) => (
                 <div key={dayIdx} className="flex-1 border-r border-slate-200/60 last:border-r-0 relative min-w-[60px] z-10 group/col">
                   {/* Empty cells for hover effect to invite creation */}
-                  <div className="absolute inset-0 flex flex-col z-0 pointer-events-auto mt-4">
+                  <div className="flex flex-col z-0 pointer-events-auto">
                     {HOURS.map((hour) => (
                       <div
                         key={`slot-${hour}`}
-                        className="h-20 w-full hover:bg-blue-50/40 transition-colors duration-200 cursor-pointer border border-transparent hover:border-blue-100"
+                        className="h-20 shrink-0 w-full hover:bg-blue-50/40 transition-colors duration-200 cursor-pointer border border-transparent hover:border-blue-100"
                         onClick={() => {
                           setEditingSessionId(null);
                           setSelectedSlot({ day, hour });
                           setNewSessionStartHour(hour);
-                          setNewSessionEndHour(Math.min(22, hour + 2));
+                          setNewSessionEndHour(Math.min(24, hour + 2));
                           const currentUserTitle = user?.role === "Chef" ? "Pr" : "Dr";
                           const currentUserFullName = user ? `${currentUserTitle} ${user.firstName} ${user.lastName}` : "";
                           setNewSessionDoctor(user?.role !== "Admin" ? currentUserFullName : "");
@@ -391,9 +392,9 @@ function CalendrierPage() {
 
                     return renderedSessions.map((session) => {
                       const duration = Math.max(0.5, session._end - session._start);
-                      if (session._start > 22) return null;
+                      if (session._start >= 24) return null;
 
-                      const topPos = (session._start - 8) * 80;
+                      const topPos = session._start * 80;
                       const height = duration * 80;
                       // Use 85% of total width to always leave a 15% clickable area on the right
                       const widthPct = 85 / session._overlapCount;

@@ -999,33 +999,37 @@ def assign_session(request):
         from django.db.models import Count
         from django.utils import timezone
         
-        region_counts_qs = Exam.objects.filter(status='En cours').values('region').annotate(count=Count('id'))
-        region_counts = {item['region']: item['count'] for item in region_counts_qs if item['region']}
-        
-        exams_attente = list(Exam.objects.filter(status='En attente', assigned_to__isnull=True))
-        if not exams_attente:
-            return Response({'error': 'Aucun examen en attente disponible.'}, status=400)
-            
-        def sort_key(exam):
-            prio = 0 if exam.priority == 'Urgent' else 1
-            age = exam.date
-            region_count = region_counts.get(exam.region, 0)
-            return (prio, age, region_count, exam.id)
-            
-        exams_attente.sort(key=sort_key)
-        
-        exams_to_assign = exams_attente[:a_assigner]
-        actual_assigned = len(exams_to_assign)
-        
+        actual_assigned = 0
         now = timezone.now()
-        for exam in exams_to_assign:
-            exam.assigned_to = user
-            exam.status = 'En cours'
-            exam.date_assignation = now
-            exam.save(update_fields=['assigned_to', 'status', 'date_assignation'])
+        today = now.date()
+        
+        # On n'assigne immédiatement que si la session est pour aujourd'hui
+        if session_date == today:
+            region_counts_qs = Exam.objects.filter(status='En cours').values('region').annotate(count=Count('id'))
+            region_counts = {item['region']: item['count'] for item in region_counts_qs if item['region']}
             
-        profil.charge_actuelle += actual_assigned
-        profil.save(update_fields=['charge_actuelle'])
+            exams_attente = list(Exam.objects.filter(status='En attente', assigned_to__isnull=True))
+            
+            if exams_attente:
+                def sort_key(exam):
+                    prio = 0 if exam.priority == 'Urgent' else 1
+                    age = exam.date
+                    region_count = region_counts.get(exam.region, 0)
+                    return (prio, age, region_count, exam.id)
+                    
+                exams_attente.sort(key=sort_key)
+                
+                exams_to_assign = exams_attente[:a_assigner]
+                actual_assigned = len(exams_to_assign)
+                
+                for exam in exams_to_assign:
+                    exam.assigned_to = user
+                    exam.status = 'En cours'
+                    exam.date_assignation = now
+                    exam.save(update_fields=['assigned_to', 'status', 'date_assignation'])
+                    
+                profil.charge_actuelle += actual_assigned
+                profil.save(update_fields=['charge_actuelle'])
         
         session_obj = CalendarSession.objects.create(
             doctor=user,
@@ -1088,14 +1092,91 @@ def get_sessions(request):
         })
     return Response({'sessions': data})
 
+def fill_incomplete_sessions(target_date):
+    """
+    Parcourt toutes les sessions du jour 'target_date' et tente d'assigner
+    des examens aux sessions incomplètes (dont le quota n'est pas atteint).
+    """
+    from ophtalmo.models import CalendarSession, Exam
+    from django.db.models import Count
+    from django.utils import timezone
+    
+    sessions_today = CalendarSession.objects.filter(date=target_date)
+    
+    doctor_requests = {}
+    for session in sessions_today:
+        if session.doctor_id not in doctor_requests:
+            doctor_requests[session.doctor_id] = {'doctor': session.doctor, 'requested': 0}
+        doctor_requests[session.doctor_id]['requested'] += session.count
+        
+    for doc_id, data in doctor_requests.items():
+        doctor = data['doctor']
+        current_assigned = Exam.objects.filter(assigned_to=doctor, status='En cours').count()
+        shortage = data['requested'] - current_assigned
+        
+        if shortage > 0:
+            region_counts_qs = Exam.objects.filter(status='En cours').values('region').annotate(count=Count('id'))
+            region_counts = {item['region']: item['count'] for item in region_counts_qs if item['region']}
+            
+            exams_attente = list(Exam.objects.filter(status='En attente', assigned_to__isnull=True))
+            if not exams_attente:
+                break
+                
+            def sort_key(exam):
+                prio = 0 if exam.priority == 'Urgent' else 1
+                age = exam.date.toordinal() if exam.date else 0
+                region_count = region_counts.get(exam.region, 0)
+                return (prio, age, region_count, exam.id)
+                
+            exams_attente.sort(key=sort_key)
+            exams_to_assign = exams_attente[:shortage]
+            
+            now = timezone.now()
+            actual_assigned = 0
+            for exam in exams_to_assign:
+                exam.assigned_to = doctor
+                exam.status = 'En cours'
+                exam.date_assignation = now
+                exam.save(update_fields=['assigned_to', 'status', 'date_assignation'])
+                actual_assigned += 1
+                
+            if hasattr(doctor, 'profil'):
+                profil = doctor.profil
+                profil.charge_actuelle += actual_assigned
+                profil.save(update_fields=['charge_actuelle'])
+
 @api_view(['DELETE'])
 @permission_classes([permissions.AllowAny])
 def delete_session(request, session_id):
     from ophtalmo.models import CalendarSession
     try:
         session_obj = CalendarSession.objects.get(id=session_id)
+        doctor = session_obj.doctor
+        count_to_remove = session_obj.count
+        session_date = session_obj.date
+        
+        from ophtalmo.models import Exam
+        exams_to_unassign = Exam.objects.filter(assigned_to=doctor, status='En cours')[:count_to_remove]
+        
+        unassigned_count = 0
+        for exam in exams_to_unassign:
+            exam.status = 'En attente'
+            exam.assigned_to = None
+            exam.date_assignation = None
+            exam.save(update_fields=['status', 'assigned_to', 'date_assignation'])
+            unassigned_count += 1
+            
+        if hasattr(doctor, 'profil'):
+            profil = doctor.profil
+            profil.charge_actuelle = max(0, profil.charge_actuelle - unassigned_count)
+            profil.save(update_fields=['charge_actuelle'])
+
         session_obj.delete()
-        return Response({'message': 'Session supprimée'})
+        
+        # Auto-fill other incomplete sessions for the same day
+        fill_incomplete_sessions(session_date)
+        
+        return Response({'message': f'Session supprimée et {unassigned_count} examens remis en attente (et potentiellement redistribués)'})
     except CalendarSession.DoesNotExist:
         return Response({'error': 'Session introuvable'}, status=404)
 
@@ -1202,6 +1283,11 @@ def update_session(request, session_id):
         session_obj.start_hour = int(request.data.get('startHour', session_obj.start_hour))
         session_obj.end_hour = int(request.data.get('endHour', session_obj.end_hour))
         session_obj.save()
+        
+        from django.utils import timezone
+        today = timezone.now().date()
+        if diff < 0 and session_obj.date == today:
+            fill_incomplete_sessions(session_obj.date)
         
         role = session_obj.doctor.profil.role if hasattr(session_obj.doctor, 'profil') else "Medecin"
         title = "Pr" if role == "Chef" else "Dr"

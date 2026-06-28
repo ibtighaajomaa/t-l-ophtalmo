@@ -45,16 +45,14 @@ def get_medecins_disponibles():
 
 def get_examens_en_attente():
     """
-    Récupère les examens en attente qui ont terminé leur segmentation,
+    Récupère les examens en attente,
     triés par priorité :
     1. Urgent d'abord
     2. Puis le plus ancien (created_at)
-    Seuls les examens avec segmentation terminée (ou échouée après retries)
-    sont éligibles à la distribution.
+    Tous les examens 'En attente' sont éligibles à la distribution, même si l'IA n'a pas terminé.
     """
     return Exam.objects.filter(
         status='En attente',
-        segmentation_status__in=['completed', 'failed'],
     ).order_by(
         '-priority',
         'date',
