@@ -1,18 +1,19 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, useEffect } from "react";
+import { toast } from "sonner";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { useAuth } from "@/lib/auth-context";
 import { MOCK_PLANNING, PlanningSession } from "@/lib/mock-planning";
 import { fetchExams } from "@/lib/exam-api";
 import type { Exam } from "@/lib/mock-worklist";
-import { 
-  ChevronLeft, 
-  ChevronRight, 
-  Search, 
-  Settings, 
-  HelpCircle, 
-  Menu, 
-  Plus, 
+import {
+  ChevronLeft,
+  ChevronRight,
+  Search,
+  Settings,
+  HelpCircle,
+  Menu,
+  Plus,
   Calendar as CalendarIcon,
   ChevronDown,
   MapPin
@@ -26,13 +27,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { fr } from "date-fns/locale";
-import { 
-  format, 
-  addDays, 
-  startOfWeek, 
-  addWeeks, 
-  subWeeks, 
-  isSameDay, 
+import {
+  format,
+  addDays,
+  startOfWeek,
+  addWeeks,
+  subWeeks,
+  isSameDay,
   parse,
   isToday
 } from "date-fns";
@@ -59,22 +60,25 @@ const HOURS = Array.from({ length: 16 }, (_, i) => i + 8); // 8 AM to 11 PM
 
 function CalendrierPage() {
   const { user } = useAuth();
-  
+
   // Date de référence pour correspondre aux mocks (Juin 2026)
   const defaultDate = new Date(2026, 5, 26);
   const [currentDate, setCurrentDate] = useState(defaultDate);
   const [exams, setExams] = useState<Exam[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  
+
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<{ day: Date, hour: number } | null>(null);
   const [newSessionDoctor, setNewSessionDoctor] = useState<string>("");
   const [newSessionCount, setNewSessionCount] = useState<number>(1);
+  const [newSessionStartHour, setNewSessionStartHour] = useState<number>(8);
+  const [newSessionEndHour, setNewSessionEndHour] = useState<number>(10);
+  const [editingSessionId, setEditingSessionId] = useState<number | null>(null);
 
   useEffect(() => {
     fetchExams({ page_size: 100 })
       .then((r) => setExams(r.exams))
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   const normalize = (name: string) => name.toLowerCase().replace(/^(dr\.|pr|dr)\s+/i, '').trim();
@@ -93,22 +97,64 @@ function CalendrierPage() {
     }).filter(s => s.parsedDate !== null);
   }, []);
 
-  const doctors = useMemo(() => {
-    const docs = new Set<string>();
-    parsedPlanning.forEach(p => docs.add(p.doctorName));
-    return Array.from(docs).sort();
-  }, [parsedPlanning]);
+  const [planning, setPlanning] = useState<any[]>([]);
+
+  const fetchSessions = () => {
+    fetch('/api/users/sessions/')
+      .then(r => r.json())
+      .then(data => {
+        if (data.sessions) {
+          setPlanning(data.sessions.map((s: any) => ({
+            ...s,
+            parsedDate: new Date(s.parsedDate)
+          })));
+        }
+      })
+      .catch(e => console.error(e));
+  };
+
+  useEffect(() => {
+    fetchSessions();
+  }, []);
+  const [doctors, setDoctors] = useState<string[]>([]);
+  const [doctorEmails, setDoctorEmails] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const fetchDoctors = async () => {
+      try {
+        const res = await fetch('/api/users/paginated/?page=1&size=100');
+        const data = await res.json();
+        if (data.users) {
+          const docs = new Set<string>();
+          const emails: Record<string, string> = {};
+          data.users.forEach((u: any) => {
+            if ((u.role === "Medecin" || u.role === "Resident" || u.role === "Chef") && u.is_disponible) {
+              const title = u.role === "Chef" ? "Pr" : "Dr";
+              const fullName = `${title} ${u.firstName} ${u.lastName}`;
+              docs.add(fullName);
+              emails[fullName] = u.email;
+            }
+          });
+          setDoctors(Array.from(docs).sort());
+          setDoctorEmails(emails);
+        }
+      } catch (err) {
+        console.error("Erreur de chargement des médecins", err);
+      }
+    };
+    fetchDoctors();
+  }, []);
 
   const [selectedDoctors, setSelectedDoctors] = useState<Set<string>>(new Set(doctors));
 
   useEffect(() => {
-     if (user?.role === "Admin") {
-       setSelectedDoctors(new Set(doctors));
-     } else if (user?.firstName) {
-       setSelectedDoctors(new Set([`Dr ${user.firstName} ${user.lastName}`]));
-     } else {
-       setSelectedDoctors(new Set(doctors));
-     }
+    if (user?.role === "Admin") {
+      setSelectedDoctors(new Set(doctors));
+    } else if (user?.firstName) {
+      setSelectedDoctors(new Set([`Dr ${user.firstName} ${user.lastName}`]));
+    } else {
+      setSelectedDoctors(new Set(doctors));
+    }
   }, [doctors, user]);
 
   const toggleDoctor = (doc: string) => {
@@ -119,8 +165,8 @@ function CalendrierPage() {
   };
 
   const filteredPlanning = useMemo(() => {
-    return parsedPlanning.filter(p => selectedDoctors.has(p.doctorName));
-  }, [parsedPlanning, selectedDoctors]);
+    return planning.filter(p => selectedDoctors.has(p.doctorName));
+  }, [planning, selectedDoctors]);
 
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 0 }); // Sunday as start
 
@@ -181,21 +227,8 @@ function CalendrierPage() {
 
 
 
-          
-          <div className="ml-2 hidden sm:flex h-9 items-center gap-3">
-             <Button variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors">
-                <div className="grid grid-cols-3 gap-[3px] p-1">
-                  {Array.from({length: 9}).map((_, i) => (
-                    <div key={i} className="h-1 w-1 bg-current rounded-full" />
-                  ))}
-                </div>
-             </Button>
-             <Avatar className="h-9 w-9 border-2 border-white shadow-sm cursor-pointer hover:scale-105 transition-transform ring-2 ring-slate-100">
-              <AvatarFallback className="bg-gradient-to-br from-purple-500 to-indigo-500 text-white text-sm font-medium">
-                {user?.firstName?.[0] || 'A'}{user?.lastName?.[0] || 'U'}
-              </AvatarFallback>
-            </Avatar>
-          </div>
+
+
         </div>
       </header>
 
@@ -204,16 +237,17 @@ function CalendrierPage() {
         {/* SIDEBAR */}
         {sidebarOpen && (
           <aside className="w-[280px] flex-none border-r border-slate-200/60 bg-white/40 backdrop-blur-2xl flex flex-col overflow-y-auto hidden md:block relative z-20">
-            <div className="p-5">
-              <Button className="h-12 w-full rounded-2xl px-4 gap-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-0 hover:from-blue-500 hover:to-indigo-500 hover:shadow-xl hover:shadow-indigo-500/30 transition-all duration-300 shadow-md justify-center text-[15px] font-semibold group active:scale-[0.98]">
-                <div className="bg-white/20 rounded-full p-0.5 group-hover:bg-white/30 transition-colors">
-                  <Plus className="h-4 w-4 group-hover:rotate-90 transition-transform duration-300" />
-                </div>
-                Créer
-                <ChevronDown className="h-4 w-4 ml-1 opacity-70 group-hover:opacity-100 transition-opacity" />
-              </Button>
-            </div>
-            <div className="px-5 pb-4 border-b border-slate-100/60">
+            <div className="px-5 py-5 border-b border-slate-100/60 flex flex-col gap-4">
+              <input
+                type="date"
+                value={format(currentDate, 'yyyy-MM-dd')}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setCurrentDate(parse(e.target.value, 'yyyy-MM-dd', new Date()));
+                  }
+                }}
+                className="w-full h-10 px-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all text-slate-700 bg-white shadow-sm"
+              />
               <Calendar
                 mode="single"
                 selected={currentDate}
@@ -222,13 +256,13 @@ function CalendrierPage() {
                 locale={fr}
               />
             </div>
-            
+
             <div className="flex-1 px-5 py-6 space-y-8 overflow-y-auto custom-scrollbar">
               <div className="relative group">
                 <Search className="absolute left-3.5 top-2.5 h-4 w-4 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
-                <input 
-                  type="text" 
-                  placeholder="Rechercher des médecins..." 
+                <input
+                  type="text"
+                  placeholder="Rechercher des médecins..."
                   className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 text-sm focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-sm placeholder:text-slate-400"
                 />
               </div>
@@ -248,8 +282,8 @@ function CalendrierPage() {
                 const isSelected = isSameDay(day, currentDate);
                 const isActualToday = isSameDay(day, new Date());
                 return (
-                  <div 
-                    key={day.toString()} 
+                  <div
+                    key={day.toString()}
                     onClick={() => setCurrentDate(day)}
                     className="flex-1 flex flex-col items-center py-3 border-r border-slate-200/60 last:border-r-0 min-w-[60px] group cursor-pointer hover:bg-slate-50/50 transition-colors"
                   >
@@ -258,10 +292,10 @@ function CalendrierPage() {
                     </span>
                     <div className={cn(
                       "flex h-11 w-11 items-center justify-center rounded-full text-xl font-medium transition-all duration-300",
-                      isSelected 
-                        ? "bg-blue-600 text-white shadow-lg shadow-blue-500/30 ring-2 ring-blue-600 ring-offset-2 ring-offset-white/50" 
-                        : isActualToday 
-                          ? "text-slate-900 bg-slate-200/60 hover:bg-slate-200" 
+                      isSelected
+                        ? "bg-blue-600 text-white shadow-lg shadow-blue-500/30 ring-2 ring-blue-600 ring-offset-2 ring-offset-white/50"
+                        : isActualToday
+                          ? "text-slate-900 bg-slate-200/60 hover:bg-slate-200"
                           : "text-slate-700 group-hover:bg-slate-100 group-hover:text-slate-900"
                     )}>
                       {format(day, 'd')}
@@ -299,11 +333,18 @@ function CalendrierPage() {
                   {/* Empty cells for hover effect to invite creation */}
                   <div className="absolute inset-0 flex flex-col z-0 pointer-events-auto mt-4">
                     {HOURS.map((hour) => (
-                      <div 
-                        key={`slot-${hour}`} 
-                        className="h-20 w-full hover:bg-blue-50/40 transition-colors duration-200 cursor-pointer border border-transparent hover:border-blue-100" 
+                      <div
+                        key={`slot-${hour}`}
+                        className="h-20 w-full hover:bg-blue-50/40 transition-colors duration-200 cursor-pointer border border-transparent hover:border-blue-100"
                         onClick={() => {
+                          setEditingSessionId(null);
                           setSelectedSlot({ day, hour });
+                          setNewSessionStartHour(hour);
+                          setNewSessionEndHour(Math.min(22, hour + 2));
+                          const currentUserTitle = user?.role === "Chef" ? "Pr" : "Dr";
+                          const currentUserFullName = user ? `${currentUserTitle} ${user.firstName} ${user.lastName}` : "";
+                          setNewSessionDoctor(user?.role !== "Admin" ? currentUserFullName : "");
+                          setNewSessionCount(1);
                           setIsCreateDialogOpen(true);
                         }}
                       />
@@ -311,42 +352,89 @@ function CalendrierPage() {
                   </div>
 
                   {/* Events for this day */}
-                  {filteredPlanning.filter(p => isSameDay(p.parsedDate, day)).map((session, i) => {
-                    const startHour = 8 + (i * 1.5);
-                    const duration = 1.5; 
-                    
-                    if (startHour > 22) return null;
-                    
-                    const topPos = (startHour - 8) * 80; 
-                    const height = duration * 80;
+                  {(() => {
+                    const daySessions = filteredPlanning
+                      .filter(p => isSameDay(p.parsedDate, day))
+                      .map((session, i) => {
+                        const startHour = session.startHour !== undefined ? session.startHour : (8 + (i * 1.5));
+                        const endHour = session.endHour !== undefined ? session.endHour : (startHour + 1.5);
+                        return { ...session, _start: startHour, _end: endHour };
+                      })
+                      .sort((a, b) => a._start - b._start);
 
-                    return (
-                      <div 
-                        key={session.id}
-                        className={cn(
-                          "absolute left-1 right-2 rounded-xl p-3 text-sm overflow-hidden flex flex-col transition-all duration-300 cursor-pointer z-20 hover:z-30 hover:-translate-y-0.5 hover:shadow-xl backdrop-blur-md ring-1 ring-white/60",
-                          getEventColor(session.affiliation)
-                        )}
-                        style={{ top: `${topPos + 2}px`, height: `${height - 4}px` }}
-                      >
-                        <span className="font-semibold block truncate leading-snug tracking-tight mb-1">{session.doctorName}</span>
-                        <span className="block truncate text-[11px] font-medium opacity-90 flex items-center gap-1.5 mt-auto bg-white/30 w-fit px-1.5 py-0.5 rounded-md">
-                          <MapPin className="h-3 w-3 flex-none" />
-                          <span className="truncate">{session.hospital}</span>
-                        </span>
-                      </div>
-                    );
-                  })}
-                  
-                  {/* Current Time Indicator for Today */}
-                  {isSameDay(day, new Date()) && (
-                    <div 
-                      className="absolute left-0 right-0 border-t-2 border-rose-500 z-30 pointer-events-none shadow-[0_1px_5px_rgba(244,63,94,0.5)]" 
-                      style={{ top: `${(22 - 8) * 80 + 16}px` }}
-                    >
-                      <div className="absolute -left-1.5 -top-[5px] h-3 w-3 rounded-full bg-rose-500 shadow-md ring-2 ring-white" />
-                    </div>
-                  )}
+                    const clusters: any[][] = [];
+                    let currentCluster: any[] = [];
+                    let clusterEnd = -1;
+
+                    daySessions.forEach(session => {
+                      if (session._start >= clusterEnd) {
+                        if (currentCluster.length > 0) clusters.push(currentCluster);
+                        currentCluster = [session];
+                        clusterEnd = session._end;
+                      } else {
+                        currentCluster.push(session);
+                        clusterEnd = Math.max(clusterEnd, session._end);
+                      }
+                    });
+                    if (currentCluster.length > 0) clusters.push(currentCluster);
+
+                    const renderedSessions: any[] = [];
+                    clusters.forEach(cluster => {
+                      cluster.forEach((session, idx) => {
+                        renderedSessions.push({
+                          ...session,
+                          _overlapIndex: idx,
+                          _overlapCount: cluster.length
+                        });
+                      });
+                    });
+
+                    return renderedSessions.map((session) => {
+                      const duration = Math.max(0.5, session._end - session._start);
+                      if (session._start > 22) return null;
+
+                      const topPos = (session._start - 8) * 80;
+                      const height = duration * 80;
+                      // Use 85% of total width to always leave a 15% clickable area on the right
+                      const widthPct = 85 / session._overlapCount;
+                      const leftPct = (session._overlapIndex / session._overlapCount) * 85;
+
+                      return (
+                        <div
+                          key={session.id}
+                          className={cn(
+                            "absolute rounded-xl p-1.5 sm:p-2 text-xs overflow-hidden flex flex-col transition-all duration-300 cursor-pointer z-20 hover:z-30 hover:-translate-y-0.5 hover:shadow-xl backdrop-blur-md ring-1 ring-white/60",
+                            getEventColor(session.affiliation)
+                          )}
+                          style={{
+                            top: `${topPos + 2}px`,
+                            height: `${height - 4}px`,
+                            left: `calc(${leftPct}% + 4px)`,
+                            width: `calc(${widthPct}% - 8px)`
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const currentUserTitle = user?.role === "Chef" ? "Pr" : "Dr";
+                            const currentUserFullName = user ? `${currentUserTitle} ${user.firstName} ${user.lastName}` : "";
+                            if (user?.role !== "Admin" && session.doctorName !== currentUserFullName) return;
+                            setEditingSessionId(session.id);
+                            setSelectedSlot({ day: session.parsedDate, hour: session.startHour || 8 });
+                            setNewSessionStartHour(session.startHour || 8);
+                            setNewSessionEndHour(session.endHour || 10);
+                            setNewSessionDoctor(session.doctorName);
+                            setNewSessionCount(session.count || 1);
+                            setIsCreateDialogOpen(true);
+                          }}
+                        >
+                          <span className="font-semibold block leading-tight tracking-tight break-words">
+                            {session.doctorName}
+                          </span>
+                        </div>
+                      );
+                    });
+                  })()}
+
+
                 </div>
               ))}
             </div>
@@ -358,23 +446,53 @@ function CalendrierPage() {
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
         <DialogContent className="sm:max-w-[425px] rounded-2xl">
           <DialogHeader>
-            <DialogTitle className="text-xl font-bold text-slate-800">Nouvelle session d'examen</DialogTitle>
+            <DialogTitle className="text-xl font-bold text-slate-800">
+              {editingSessionId ? "Modifier la session d'examen" : "Nouvelle session d'examen"}
+            </DialogTitle>
           </DialogHeader>
           <div className="grid gap-5 py-4">
             {selectedSlot && (
               <div className="text-sm text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-100 flex items-center gap-2">
                 <CalendarIcon className="h-4 w-4 text-blue-500" />
                 <span>
-                  <span className="font-semibold text-slate-700 capitalize">{format(selectedSlot.day, 'eeee dd MMMM yyyy', { locale: fr })}</span> à <span className="font-semibold text-slate-700">{formatHour(selectedSlot.hour)}</span>
+                  <span className="font-semibold text-slate-700 capitalize">{format(selectedSlot.day, 'eeee dd MMMM yyyy', { locale: fr })}</span>
                 </span>
               </div>
             )}
-            
+
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="startHour" className="text-right text-slate-600 font-medium">De</Label>
+              <Select value={newSessionStartHour.toString()} onValueChange={(val) => setNewSessionStartHour(parseInt(val))}>
+                <SelectTrigger id="startHour" className="col-span-3 rounded-xl border-slate-200 focus:ring-blue-500">
+                  <SelectValue placeholder="Heure de début" />
+                </SelectTrigger>
+                <SelectContent className="rounded-xl">
+                  {HOURS.map(h => (
+                    <SelectItem key={h} value={h.toString()}>{formatHour(h)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="endHour" className="text-right text-slate-600 font-medium">À</Label>
+              <Select value={newSessionEndHour.toString()} onValueChange={(val) => setNewSessionEndHour(parseInt(val))}>
+                <SelectTrigger id="endHour" className="col-span-3 rounded-xl border-slate-200 focus:ring-blue-500">
+                  <SelectValue placeholder="Heure de fin" />
+                </SelectTrigger>
+                <SelectContent className="rounded-xl">
+                  {HOURS.filter(h => h > newSessionStartHour).map(h => (
+                    <SelectItem key={h} value={h.toString()}>{formatHour(h)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="grid grid-cols-4 items-center gap-4">
               <Label htmlFor="doctor" className="text-right text-slate-600 font-medium">Médecin</Label>
               <div className="col-span-3">
-                <Select value={newSessionDoctor} onValueChange={setNewSessionDoctor}>
-                  <SelectTrigger id="doctor" className="rounded-xl border-slate-200 focus:ring-blue-500">
+                <Select value={newSessionDoctor} onValueChange={setNewSessionDoctor} disabled={user?.role !== "Admin"}>
+                  <SelectTrigger id="doctor" className="rounded-xl border-slate-200 focus:ring-blue-500 disabled:opacity-100 disabled:cursor-not-allowed">
                     <SelectValue placeholder="Sélectionner un médecin" />
                   </SelectTrigger>
                   <SelectContent className="rounded-xl">
@@ -385,26 +503,98 @@ function CalendrierPage() {
                 </Select>
               </div>
             </div>
-            
+
             <div className="grid grid-cols-4 items-center gap-4">
               <Label htmlFor="count" className="text-right text-slate-600 font-medium">Nb. examens</Label>
-              <Input 
-                id="count" 
-                type="number" 
-                min="1"
+              <Input
+                id="count"
+                type="number"
+                min="0"
+                max="100"
                 className="col-span-3 rounded-xl border-slate-200 focus:ring-blue-500"
                 value={newSessionCount}
-                onChange={(e) => setNewSessionCount(parseInt(e.target.value) || 1)}
+                onChange={(e) => setNewSessionCount(Math.min(100, Math.max(0, parseInt(e.target.value) || 0)))}
               />
             </div>
           </div>
-          <DialogFooter className="gap-2 sm:gap-0 mt-2">
-            <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)} className="rounded-xl">Annuler</Button>
-            <Button onClick={() => {
-              setIsCreateDialogOpen(false);
-              setNewSessionDoctor("");
-              setNewSessionCount(1);
-            }} className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/20 transition-all">Assigner</Button>
+          <DialogFooter className="gap-2 sm:gap-0 mt-2 flex flex-row items-center w-full">
+            {editingSessionId && (
+              <Button 
+                variant="destructive" 
+                onClick={async () => {
+                  try {
+                    await fetch(`/api/users/delete-session/${editingSessionId}/`, { method: 'DELETE' });
+                    setPlanning(prev => prev.filter(s => s.id !== editingSessionId));
+                  } catch (e) {
+                    console.error("Erreur suppression", e);
+                  }
+                  setIsCreateDialogOpen(false);
+                  setEditingSessionId(null);
+                }} 
+                className="rounded-xl mr-auto"
+              >
+                Supprimer
+              </Button>
+            )}
+            <div className="flex gap-2 ml-auto">
+              <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)} className="rounded-xl">Annuler</Button>
+              <Button onClick={async () => {
+                if (newSessionDoctor && newSessionCount > 0) {
+                  const email = doctorEmails[newSessionDoctor];
+                  const sessionDate = selectedSlot ? selectedSlot.day : new Date();
+                  
+                  if (editingSessionId) {
+                    try {
+                      const r = await fetch(`/api/users/update-session/${editingSessionId}/`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email, count: newSessionCount, startHour: newSessionStartHour, endHour: newSessionEndHour })
+                      });
+                      const data = await r.json();
+                      if (data.message) {
+                        toast.info(data.message);
+                      }
+                      if (data.session) {
+                        const updated = { ...data.session, parsedDate: new Date(data.session.parsedDate) };
+                        setPlanning(prev => prev.map(s => s.id === editingSessionId ? updated : s));
+                      }
+                    } catch (e) {
+                      console.error("Erreur update", e);
+                    }
+                  } else {
+                    if (email) {
+                      try {
+                        const isoDate = new Date(sessionDate.getTime() - sessionDate.getTimezoneOffset() * 60000).toISOString().split('T')[0];
+                        const r = await fetch('/api/users/assign-session/', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ email, count: newSessionCount, startHour: newSessionStartHour, endHour: newSessionEndHour, date: isoDate })
+                        });
+                        const data = await r.json();
+                        if (data.message) {
+                          toast.info(data.message);
+                        }
+                        if (data.session) {
+                          const newS = { ...data.session, parsedDate: new Date(data.session.parsedDate) };
+                          setPlanning(prev => [...prev, newS]);
+                        } else if (data.error) {
+                          toast.error(`Erreur : ${data.error}`);
+                        }
+                      } catch (e) {
+                        console.error("Erreur assignation", e);
+                        toast.error("Erreur réseau ou serveur lors de l'assignation.");
+                      }
+                    }
+                  }
+                }
+                setIsCreateDialogOpen(false);
+                setNewSessionDoctor("");
+                setNewSessionCount(1);
+                setEditingSessionId(null);
+              }} className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/20 transition-all">
+                {editingSessionId ? "Enregistrer" : "Assigner"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

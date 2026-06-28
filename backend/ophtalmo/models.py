@@ -19,6 +19,12 @@ class Exam(models.Model):
         EN_COURS = "En cours", "En cours"
         INTERPRETE = "Interprété", "Interprété"
 
+    class SegmentationStatus(models.TextChoices):
+        PENDING = "pending", "En attente"
+        IN_PROGRESS = "in_progress", "En cours"
+        COMPLETED = "completed", "Terminé"
+        FAILED = "failed", "Échec"
+
     study_instance_uid = models.CharField(max_length=255, unique=True, blank=True, null=True)
     patient_name = models.CharField(max_length=255)
     patient_age = models.IntegerField(blank=True, null=True)
@@ -46,6 +52,15 @@ class Exam(models.Model):
     date_assignation = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    segmentation_status = models.CharField(
+        max_length=20,
+        choices=SegmentationStatus.choices,
+        default=SegmentationStatus.PENDING,
+    )
+    segmentation_retries = models.IntegerField(default=0)
+    segmentation_error = models.TextField(blank=True, default="")
+    segmentation_models_status = models.JSONField(null=True, blank=True)
 
     def save(self, *args, **kwargs):
         if not self.assigned_to and self.status == self.Status.EN_COURS:
@@ -153,3 +168,24 @@ class MedicalReportVersion(models.Model):
 
     def __str__(self):
         return f"v{self.version_number} ({self.version_type}) — {self.report}"
+
+class CalendarSession(models.Model):
+    doctor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="calendar_sessions",
+    )
+    date = models.DateField()
+    start_hour = models.IntegerField()
+    end_hour = models.IntegerField()
+    count = models.IntegerField(default=1)
+    affiliation = models.CharField(max_length=255, default="Assignation manuelle")
+    hospital = models.CharField(max_length=255, default="Cabinet")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['date', 'start_hour']
+
+    def __str__(self):
+        return f"Session {self.doctor} le {self.date} de {self.start_hour}h à {self.end_hour}h"

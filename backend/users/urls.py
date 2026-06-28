@@ -3,7 +3,8 @@ from .views import (
     CreerUtilisateurView, LoginView, ForcerNouveauMotPasseView,
     forgot_password_relay, request_password_reset, confirm_password_reset,
     get_keycloak_events, logout_relay, update_keycloak_user,
-    get_paginated_users, get_user_stats, toggle_medecin_status_admin
+    get_paginated_users, get_user_stats, toggle_medecin_status_admin,
+    assign_session, get_sessions, delete_session, update_session
 )
 
 urlpatterns = [
@@ -19,4 +20,8 @@ urlpatterns = [
     path('api/users/paginated/', get_paginated_users, name='paginated_users'),
     path('api/users/stats/', get_user_stats, name='user_stats'),
     path('api/users/toggle-status/', toggle_medecin_status_admin, name='toggle_medecin_status_admin'),
+    path('api/users/assign-session/', assign_session, name='assign_session'),
+    path('api/users/sessions/', get_sessions, name='get_sessions'),
+    path('api/users/delete-session/<int:session_id>/', delete_session, name='delete_session'),
+    path('api/users/update-session/<int:session_id>/', update_session, name='update_session'),
 ]

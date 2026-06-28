@@ -303,15 +303,6 @@ function AdminDashboard() {
                                 </span>
                               )}
                             </div>
-                            <div className="flex items-center gap-2">
-                              <div className="w-16 bg-slate-200 rounded-full h-1.5">
-                                <div 
-                                  className={`h-1.5 rounded-full ${(u.charge_actuelle || 0) >= 25 ? 'bg-orange-500' : 'bg-blue-500'}`} 
-                                  style={{width: `${Math.min(((u.charge_actuelle || 0)/30)*100, 100)}%`}}>
-                                </div>
-                              </div>
-                              <span className="text-[10px] text-slate-500 font-medium">{u.charge_actuelle || 0}/30</span>
-                            </div>
                           </div>
                         ) : (
                           <span className="text-slate-400 text-xs">—</span>

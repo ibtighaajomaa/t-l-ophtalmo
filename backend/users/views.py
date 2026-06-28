@@ -949,3 +949,274 @@ def toggle_medecin_status_admin(request):
         traceback.print_exc()
         return Response({"error": f"Erreur serveur : {str(e)}"}, status=500)
 
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def assign_session(request):
+    """
+    Crée N examens 'En cours' assignés au médecin ciblé,
+    et met à jour sa charge_actuelle.
+    """
+    email = request.data.get('email')
+    try:
+        count = int(request.data.get('count', 1))
+    except (ValueError, TypeError):
+        count = 1
+        
+    start_hour = int(request.data.get('startHour', 8))
+    end_hour = int(request.data.get('endHour', 10))
+    date_str = request.data.get('date')
+    
+    if not email:
+        return Response({'error': 'Email requis'}, status=400)
+        
+    try:
+        from django.contrib.auth.models import User
+        from ophtalmo.models import Exam, CalendarSession
+        from datetime import date, datetime
+        
+        try:
+            user = User.objects.get(username__iexact=email)
+        except User.DoesNotExist:
+            try:
+                user = User.objects.get(email__iexact=email)
+            except User.DoesNotExist:
+                return Response({'error': 'Utilisateur introuvable'}, status=404)
+
+        if date_str:
+            try:
+                session_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                session_date = date.today()
+        else:
+            session_date = date.today()
+
+        profil = user.profil
+        
+        a_assigner = count
+        if a_assigner <= 0:
+            return Response({'error': 'Le nombre d\'examens doit être supérieur à 0.'}, status=400)
+            
+        from django.db.models import Count
+        from django.utils import timezone
+        
+        region_counts_qs = Exam.objects.filter(status='En cours').values('region').annotate(count=Count('id'))
+        region_counts = {item['region']: item['count'] for item in region_counts_qs if item['region']}
+        
+        exams_attente = list(Exam.objects.filter(status='En attente', assigned_to__isnull=True))
+        if not exams_attente:
+            return Response({'error': 'Aucun examen en attente disponible.'}, status=400)
+            
+        def sort_key(exam):
+            prio = 0 if exam.priority == 'Urgent' else 1
+            age = exam.date
+            region_count = region_counts.get(exam.region, 0)
+            return (prio, age, region_count, exam.id)
+            
+        exams_attente.sort(key=sort_key)
+        
+        exams_to_assign = exams_attente[:a_assigner]
+        actual_assigned = len(exams_to_assign)
+        
+        now = timezone.now()
+        for exam in exams_to_assign:
+            exam.assigned_to = user
+            exam.status = 'En cours'
+            exam.date_assignation = now
+            exam.save(update_fields=['assigned_to', 'status', 'date_assignation'])
+            
+        profil.charge_actuelle += actual_assigned
+        profil.save(update_fields=['charge_actuelle'])
+        
+        session_obj = CalendarSession.objects.create(
+            doctor=user,
+            date=session_date,
+            start_hour=start_hour,
+            end_hour=end_hour,
+            count=count,
+            affiliation="Assignation manuelle",
+            hospital="Cabinet"
+        )
+        
+        role = user.profil.role if hasattr(user, 'profil') else "Medecin"
+        title = "Pr" if role == "Chef" else "Dr"
+        
+        msg = f'{actual_assigned} examens assignés au Dr {user.last_name}.'
+        if actual_assigned < a_assigner:
+            msg += f' (Il ne restait que {actual_assigned} examens disponibles sur les {a_assigner} demandés).'
+            
+        return Response({
+            'message': msg, 
+            'assigned': actual_assigned,
+            'session': {
+                'id': session_obj.id,
+                'doctorName': f"{title} {user.first_name} {user.last_name}".strip(),
+                'email': user.email,
+                'date': session_obj.date.isoformat(),
+                'startHour': session_obj.start_hour,
+                'endHour': session_obj.end_hour,
+                'count': session_obj.count,
+                'affiliation': session_obj.affiliation,
+                'hospital': session_obj.hospital,
+                'parsedDate': session_obj.date.isoformat()
+            }
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({'error': str(e)}, status=500)
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def get_sessions(request):
+    from ophtalmo.models import CalendarSession
+    sessions = CalendarSession.objects.all()
+    data = []
+    for s in sessions:
+        role = s.doctor.profil.role if hasattr(s.doctor, 'profil') else "Medecin"
+        title = "Pr" if role == "Chef" else "Dr"
+        data.append({
+            'id': s.id,
+            'doctorName': f"{title} {s.doctor.first_name} {s.doctor.last_name}".strip(),
+            'email': s.doctor.email,
+            'date': s.date.isoformat(),
+            'startHour': s.start_hour,
+            'endHour': s.end_hour,
+            'count': s.count,
+            'affiliation': s.affiliation,
+            'hospital': s.hospital,
+            'parsedDate': s.date.isoformat()
+        })
+    return Response({'sessions': data})
+
+@api_view(['DELETE'])
+@permission_classes([permissions.AllowAny])
+def delete_session(request, session_id):
+    from ophtalmo.models import CalendarSession
+    try:
+        session_obj = CalendarSession.objects.get(id=session_id)
+        session_obj.delete()
+        return Response({'message': 'Session supprimée'})
+    except CalendarSession.DoesNotExist:
+        return Response({'error': 'Session introuvable'}, status=404)
+
+@api_view(['PUT'])
+@permission_classes([permissions.AllowAny])
+def update_session(request, session_id):
+    from ophtalmo.models import CalendarSession
+    from django.contrib.auth.models import User
+    try:
+        session_obj = CalendarSession.objects.get(id=session_id)
+        email = request.data.get('email')
+        if email:
+            try:
+                user = User.objects.get(email__iexact=email)
+                session_obj.doctor = user
+            except User.DoesNotExist:
+                pass
+        
+        old_count = session_obj.count
+        new_count = int(request.data.get('count', session_obj.count))
+        
+        diff = new_count - old_count
+        
+        from django.utils import timezone
+        today = timezone.now().date()
+        
+        # N'assigner immédiatement des examens QUE si la session est pour aujourd'hui
+        if diff > 0 and session_obj.date == today:
+            from django.db.models import Count
+            from ophtalmo.models import Exam
+            
+            region_counts_qs = Exam.objects.filter(status='En cours').values('region').annotate(count=Count('id'))
+            region_counts = {item['region']: item['count'] for item in region_counts_qs if item['region']}
+            
+            exams_attente = list(Exam.objects.filter(status='En attente', assigned_to__isnull=True))
+            if exams_attente:
+                def sort_key(exam):
+                    prio = 0 if exam.priority == 'Urgent' else 1
+                    age = exam.date
+                    region_count = region_counts.get(exam.region, 0)
+                    return (prio, age, region_count, exam.id)
+                    
+                exams_attente.sort(key=sort_key)
+                exams_to_assign = exams_attente[:diff]
+                actual_assigned = len(exams_to_assign)
+                
+                now = timezone.now()
+                for exam in exams_to_assign:
+                    exam.assigned_to = session_obj.doctor
+                    exam.status = 'En cours'
+                    exam.date_assignation = now
+                    exam.save(update_fields=['assigned_to', 'status', 'date_assignation'])
+                
+                if hasattr(session_obj.doctor, 'profil'):
+                    profil = session_obj.doctor.profil
+                    profil.charge_actuelle += actual_assigned
+                    profil.save(update_fields=['charge_actuelle'])
+                session_obj.count = new_count
+                
+                if actual_assigned < diff:
+                    msg = f'Session modifiée : {actual_assigned} nouveaux examens assignés. (Seulement {actual_assigned} disponibles sur {diff} demandés).'
+                else:
+                    msg = 'Session modifiée avec succès.'
+            else:
+                session_obj.count = new_count
+                msg = f'Session modifiée. Aucun examen supplémentaire n\'est disponible actuellement.'
+        elif diff < 0 and session_obj.date == today:
+            from ophtalmo.models import Exam
+            if hasattr(session_obj.doctor, 'profil'):
+                profil = session_obj.doctor.profil
+                exams_en_cours = list(Exam.objects.filter(status='En cours', assigned_to=session_obj.doctor))
+                nb_a_retirer = max(0, len(exams_en_cours) - new_count)
+                
+                if nb_a_retirer > 0:
+                    def sort_key_unassign(exam):
+                        prio = 1 if exam.priority == 'Normal' else 0
+                        age = exam.date.toordinal() if exam.date else 0
+                        return (prio, age)
+                        
+                    exams_en_cours.sort(key=sort_key_unassign, reverse=True)
+                    exams_to_unassign = exams_en_cours[:nb_a_retirer]
+                    
+                    for exam in exams_to_unassign:
+                        exam.assigned_to = None
+                        exam.status = 'En attente'
+                        exam.date_assignation = None
+                        exam.save(update_fields=['assigned_to', 'status', 'date_assignation'])
+                        
+                    profil.charge_actuelle = max(0, profil.charge_actuelle - nb_a_retirer)
+                    profil.save(update_fields=['charge_actuelle'])
+                    
+                    session_obj.count = new_count
+                    msg = f'Session modifiée : {nb_a_retirer} examens retirés et remis en attente.'
+                else:
+                    session_obj.count = new_count
+                    msg = 'Session modifiée avec succès.'
+            else:
+                session_obj.count = new_count
+                msg = 'Session modifiée avec succès.'
+        else:
+            session_obj.count = new_count
+            msg = 'Session modifiée avec succès.'
+            
+        session_obj.start_hour = int(request.data.get('startHour', session_obj.start_hour))
+        session_obj.end_hour = int(request.data.get('endHour', session_obj.end_hour))
+        session_obj.save()
+        
+        role = session_obj.doctor.profil.role if hasattr(session_obj.doctor, 'profil') else "Medecin"
+        title = "Pr" if role == "Chef" else "Dr"
+        
+        return Response({'message': msg, 'session': {
+            'id': session_obj.id,
+            'doctorName': f"{title} {session_obj.doctor.first_name} {session_obj.doctor.last_name}".strip(),
+            'email': session_obj.doctor.email,
+            'date': session_obj.date.isoformat(),
+            'startHour': session_obj.start_hour,
+            'endHour': session_obj.end_hour,
+            'count': session_obj.count,
+            'affiliation': session_obj.affiliation,
+            'hospital': session_obj.hospital,
+            'parsedDate': session_obj.date.isoformat()
+        }})
+    except CalendarSession.DoesNotExist:
+        return Response({'error': 'Session introuvable'}, status=404)

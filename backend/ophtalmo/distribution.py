@@ -45,16 +45,18 @@ def get_medecins_disponibles():
 
 def get_examens_en_attente():
     """
-    Récupère les examens en attente, triés par priorité :
+    Récupère les examens en attente qui ont terminé leur segmentation,
+    triés par priorité :
     1. Urgent d'abord
     2. Puis le plus ancien (created_at)
+    Seuls les examens avec segmentation terminée (ou échouée après retries)
+    sont éligibles à la distribution.
     """
     return Exam.objects.filter(
         status='En attente',
+        segmentation_status__in=['completed', 'failed'],
     ).order_by(
-        # Urgent en premier (les valeurs "Urgent" sont triées avant "Normal" inversé)
         '-priority',
-        # Le plus ancien d'abord (date de l'examen)
         'date',
     )
 
@@ -101,8 +103,8 @@ def distribuer_examens():
 
     1. Récupère les examens 'En attente'
     2. Les trie par urgence > ancienneté > équité régionale
-    3. Les distribue aux médecins disponibles (round-robin pondéré par charge)
-    4. Max 30 examens par médecin
+    3. Les distribue en priorité aux médecins ayant demandé des examens via le calendrier (count > charge_actuelle)
+    4. S'il reste des examens, les distribue aux autres médecins disponibles
     """
     examens_attente = list(get_examens_en_attente())
     if not examens_attente:
@@ -116,42 +118,43 @@ def distribuer_examens():
 
     # Trier avec équité régionale
     examens_tries = trier_avec_equite_regionale(examens_attente)
-
     distribues = 0
-    medecin_index = 0
-
-    for examen in examens_tries:
-        # Trouver le prochain médecin avec de la capacité (round-robin)
-        tentatives = 0
-        while tentatives < len(medecins):
-            medecin = medecins[medecin_index % len(medecins)]
-            medecin_index += 1
-
-            if medecin.charge_actuelle < MAX_CHARGE_PAR_MEDECIN:
-                # Assigner l'examen
+    
+    from ophtalmo.models import CalendarSession
+    from django.utils import timezone
+    today = timezone.now().date()
+    sessions_aujourdhui = CalendarSession.objects.filter(date=today)
+    session_map = {s.doctor_id: s.count for s in sessions_aujourdhui}
+    
+    # 1. Phase Unique : Assigner UNIQUEMENT à ceux qui ont explicitement demandé via une session
+    medecins_prioritaires = []
+    for med in medecins:
+        demande = session_map.get(med.user_id, 0)
+        if demande > med.charge_actuelle:
+            medecins_prioritaires.append(med)
+            
+    # Distribuer aux prioritaires
+    if medecins_prioritaires:
+        med_idx = 0
+        while examens_tries and medecins_prioritaires:
+            medecin = medecins_prioritaires[med_idx % len(medecins_prioritaires)]
+            demande = session_map.get(medecin.user_id, 0)
+            
+            if medecin.charge_actuelle < demande:
+                examen = examens_tries.pop(0)
                 examen.assigned_to = medecin.user
                 examen.status = 'En cours'
                 examen.date_assignation = timezone.now()
                 examen.save(update_fields=['assigned_to', 'status', 'date_assignation'])
-
+                
                 medecin.charge_actuelle += 1
                 medecin.save(update_fields=['charge_actuelle'])
-
                 distribues += 1
-                logger.info(
-                    f"Examen #{examen.id} ({examen.patient_name}) "
-                    f"assigné à {medecin.user.get_full_name() or medecin.user.username} "
-                    f"(charge: {medecin.charge_actuelle}/{MAX_CHARGE_PAR_MEDECIN})"
-                )
-                break
+                med_idx += 1
+            else:
+                medecins_prioritaires.remove(medecin)
 
-            tentatives += 1
-
-        if tentatives >= len(medecins):
-            # Plus aucun médecin disponible avec de la capacité
-            logger.warning("Tous les médecins sont à pleine charge. Arrêt de la distribution.")
-            break
-
+    from ophtalmo.models import Exam
     restants = Exam.objects.filter(status='En attente').count()
     logger.info(f"Distribution terminée : {distribues} examens distribués, {restants} restants.")
     return {'distribues': distribues, 'restants': restants}

@@ -617,7 +617,6 @@ async def analyze(request: dict):
         file_meta.TransferSyntaxUID = "1.2.840.10008.1.2"
         file_meta.ImplementationClassUID = "1.2.826.0.1.3680043.10.1234"
         ds.file_meta = file_meta
-        # Use real PatientID/PatientName from source DICOM to prevent "Multiple Patients" in OHIF
         ds.PatientName = ""
         ds.PatientID = ""
         try:
@@ -1135,6 +1134,7 @@ PATCH11_NEW_ORTHANC = """            # Query Orthanc for the actual SOPInstanceU
                                     pass
                         if _p11_pid:
                             _p11_seg.PatientID = str(_p11_pid)
+                            _p11_mod = True
                             logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_pid}")
             except Exception as _p11_oe:
                 logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")
@@ -1190,6 +1190,7 @@ if os.path.exists(PATCH11_CONVERT):
                                     pass
                         if _p11_pid:
                             _p11_seg.PatientID = str(_p11_pid)
+                            _p11_mod = True
                             logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_pid}")
                 except Exception as _p11_oe:
                     logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")'''
@@ -1276,6 +1277,7 @@ if os.path.exists(PATCH11_CONVERT):
                                 _p11_orthanc_patient_id = _p11_tags2.get("PatientID")
                         if _p11_orthanc_patient_id:
                             _p11_seg.PatientID = str(_p11_orthanc_patient_id)
+                            _p11_mod = True
                             logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_orthanc_patient_id}")
                 except Exception as _p11_oe:
                     logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")"""
@@ -1365,6 +1367,7 @@ if os.path.exists(PATCH11_CONVERT):
                                     pass
                         if _p11_opa:
                             _p11_seg.PatientID = str(_p11_opa)
+                            _p11_mod = True
                             logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_opa}")
             except Exception as _p11_oe:
                 logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")
@@ -1398,7 +1401,7 @@ if os.path.exists(PATCH11_CONVERT):
             if hasattr(_p11_seg, "SharedFunctionalGroupsSequence"):
                 for sfg in _p11_seg.SharedFunctionalGroupsSequence:
                     _p11_total += _p11_force(sfg, _p11_expected)
-            if _p11_total > 0:
+            if _p11_total > 0 or _p11_mod:
                 _p11_seg.save_as(output_file)
                 logger.info(f"Patch 11: Forced {_p11_total} ReferencedSOPInstanceUID -> {_p11_expected}")
         except Exception as _p11_e:
@@ -1446,6 +1449,159 @@ if os.path.exists(INFER):
         print("infer.py: Patch 12 already applied")
 else:
     patches_applied = True
+
+# Patch 13: Remove all cache file modification from infer.py (prevents PatientID contamination)
+# Earlier patches (3, 4, 7) may have injected code that modifies cached DICOM files
+# on disk and re-uploads them to Orthanc with wrong PatientID/StudyInstanceUID.
+# This cleanup ensures cached files are NEVER modified on disk.
+PATCH13_MARKER = "### PATCH13_CACHE_CLEANUP ###"
+if os.path.exists(INFER):
+    with open(INFER) as f:
+        _p13_content = f.read()
+
+    if PATCH13_MARKER not in _p13_content:
+        _p13_changed = False
+
+        # Remove: pre-inject geometry + save_as(src_path) + re-upload to Orthanc
+        # Pattern 1: Patch 3/4 style full pre-inject block
+        _p13_old1 = '''                    # Pre-inject geometry into cached source BEFORE SEG generation
+                    try:
+                        dcm_files = list(pathlib.Path(image_path).glob("*"))
+                        if dcm_files:
+                            src_path = str(dcm_files[0])
+                            src_ds = dcmread(src_path, stop_before_pixels=True)
+                            needs_ipp = not hasattr(src_ds, 'ImagePositionPatient')
+                            if not hasattr(src_ds, 'FrameOfReferenceUID') or needs_ipp:
+                                src_full = dcmread(src_path)
+                                if not hasattr(src_full, 'FrameOfReferenceUID'):
+                                    src_full.FrameOfReferenceUID = "2.25." + str(int(hashlib.md5(str(src_full.SOPInstanceUID).encode()).hexdigest(), 16))[:39]
+                                if needs_ipp:
+                                    src_full.ImagePositionPatient = [0, 0, 0]
+                                    src_full.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
+                                    src_full.SliceThickness = 1.0
+                                src_full.save_as(src_path)
+                                with open(src_path, "rb") as f:
+                                    resp = requests.post("http://orthanc-container:8042/instances", data=f, headers={"Content-Type": "application/dicom"})
+                                logger.info(f"Pre-injected geometry into source (resp={resp.status_code})")
+                    except Exception as e2:
+                        logger.warning(f"Pre-inject geometry skipped: {e2}")'''
+        _p13_new1 = '''                    # Geometry injection is handled in-memory by convert.py (Patch 8A/9A).
+                    # Do NOT modify cached DICOM files on disk or re-upload to Orthanc.'''
+        if _p13_old1 in _p13_content:
+            _p13_content = _p13_content.replace(_p13_old1, _p13_new1)
+            _p13_changed = True
+            print("Patch 13: Removed pre-inject cache modification block")
+
+        # Pattern 2: StudyInstanceUID injection + save_as(fpath) (20-space indent)
+        _p13_old2 = '''                    # Inject study_uid into source DICOMs BEFORE SEG gen so highdicom inherits them
+                    if source_study_uid:
+                        try:
+                            dcm_files = list(pathlib.Path(image_path).glob("*"))
+                            for fpath in dcm_files:
+                                ds = dcmread(str(fpath))
+                                if str(ds.StudyInstanceUID) != source_study_uid:
+                                    ds.StudyInstanceUID = source_study_uid
+                                    ds.save_as(str(fpath))
+                                    logger.info(f"Injected StudyInstanceUID into source: {fpath.name}")
+                        except Exception as e:
+                            logger.warning(f"Could not inject StudyInstanceUID into sources: {e}")
+                        logger.info(f"Source StudyInstanceUID: {source_study_uid}")'''
+        _p13_new2 = '''                    # StudyInstanceUID is inherited from source by convert.py (Patch 9B).
+                    # Do NOT modify cached DICOM files on disk.
+                    if source_study_uid:
+                        logger.info(f"Source StudyInstanceUID: {source_study_uid}")'''
+        if _p13_old2 in _p13_content:
+            _p13_content = _p13_content.replace(_p13_old2, _p13_new2)
+            _p13_changed = True
+            print("Patch 13: Removed StudyInstanceUID injection + save_as(fpath)")
+
+        if _p13_changed:
+            # Add marker so this only runs once
+            _p13_content += f"\n# {PATCH13_MARKER} - Cache modification removed\n"
+            with open(INFER, "w") as f:
+                f.write(_p13_content)
+            print("Patch 13: Cache cleanup applied to infer.py")
+            patches_applied = True
+        else:
+            print("Patch 13: No cache modification code found (already clean)")
+    else:
+        print("Patch 13: Already applied")
+
+# Patch 14: Force explicit StudyInstanceUID on SEG from inference params
+# The Django backend now passes the correct OP study_uid in inference params.
+# This patch ensures the SEG always inherits that value, overriding any
+# auto-generated or cache-contaminated StudyInstanceUID.
+# This fixes SEGs appearing in separate studies instead of the OP's study.
+PATCH14_MARKER = "### PATCH14_FORCE_STUDY_UID ###"
+if os.path.exists(INFER):
+    with open(INFER) as f:
+        _p14_content = f.read()
+
+    if PATCH14_MARKER not in _p14_content:
+        # Find the push block: after dicom_seg_file is generated, before push to Orthanc
+        _p14_old = '''                    dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, _li3, use_itk=False)
+                    if dicom_seg_file and os.path.exists(dicom_seg_file):
+                        with open(dicom_seg_file, "rb") as f:
+                            resp = requests.post("http://orthanc-container:8042/instances", data=f, headers={"Content-Type": "application/dicom"})
+                            logger.info(f"Pushed DICOM-SEG to Orthanc: {resp.status_code}")'''
+        _p14_new = '''                    dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, _li3, use_itk=False)
+                    if dicom_seg_file and os.path.exists(dicom_seg_file):
+                        # Patch 14: Force StudyInstanceUID from inference params (if provided)
+                        # This ensures the SEG lands in the same study as the source OP.
+                        _p14_study_uid = p.get("study_uid") or result.get("params", {}).get("study_uid")
+                        if _p14_study_uid:
+                            try:
+                                _p14_seg = dcmread(dicom_seg_file)
+                                if str(_p14_seg.StudyInstanceUID) != _p14_study_uid:
+                                    _p14_seg.StudyInstanceUID = _p14_study_uid
+                                    _p14_seg.save_as(dicom_seg_file)
+                                    logger.info(f"Patch 14: Forced SEG StudyInstanceUID -> {_p14_study_uid}")
+                            except Exception as _p14_e:
+                                logger.warning(f"Patch 14: StudyUID fix skipped: {_p14_e}")
+                        ### PATCH14_FORCE_STUDY_UID ###
+                        with open(dicom_seg_file, "rb") as f:
+                            resp = requests.post("http://orthanc-container:8042/instances", data=f, headers={"Content-Type": "application/dicom"})
+                            logger.info(f"Pushed DICOM-SEG to Orthanc: {resp.status_code}")'''
+        if _p14_old in _p14_content:
+            _p14_content = _p14_content.replace(_p14_old, _p14_new)
+            with open(INFER, "w") as f:
+                f.write(_p14_content)
+            print("Patch 14: Force StudyInstanceUID from inference params applied to infer.py")
+            patches_applied = True
+        else:
+            # Try alternative pattern (from old-style AUTO_PUSH without _li3)
+            _p14_old2 = '''                    dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, label_info, use_itk=False)
+                    if dicom_seg_file and os.path.exists(dicom_seg_file):
+                        with open(dicom_seg_file, "rb") as f:
+                            resp = requests.post("http://orthanc-container:8042/instances", data=f, headers={"Content-Type": "application/dicom"})
+                            logger.info(f"Pushed DICOM-SEG to Orthanc: {resp.status_code}")'''
+            _p14_new2 = '''                    dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, label_info, use_itk=False)
+                    if dicom_seg_file and os.path.exists(dicom_seg_file):
+                        # Patch 14: Force StudyInstanceUID from inference params (if provided)
+                        _p14_study_uid = p.get("study_uid") or result.get("params", {}).get("study_uid")
+                        if _p14_study_uid:
+                            try:
+                                _p14_seg = dcmread(dicom_seg_file)
+                                if str(_p14_seg.StudyInstanceUID) != _p14_study_uid:
+                                    _p14_seg.StudyInstanceUID = _p14_study_uid
+                                    _p14_seg.save_as(dicom_seg_file)
+                                    logger.info(f"Patch 14: Forced SEG StudyInstanceUID -> {_p14_study_uid}")
+                            except Exception as _p14_e:
+                                logger.warning(f"Patch 14: StudyUID fix skipped: {_p14_e}")
+                        ### PATCH14_FORCE_STUDY_UID ###
+                        with open(dicom_seg_file, "rb") as f:
+                            resp = requests.post("http://orthanc-container:8042/instances", data=f, headers={"Content-Type": "application/dicom"})
+                            logger.info(f"Pushed DICOM-SEG to Orthanc: {resp.status_code}")'''
+            if _p14_old2 in _p14_content:
+                _p14_content = _p14_content.replace(_p14_old2, _p14_new2)
+                with open(INFER, "w") as f:
+                    f.write(_p14_content)
+                print("Patch 14: Force StudyInstanceUID from inference params applied to infer.py")
+                patches_applied = True
+            else:
+                print("WARNING: Patch 14 — DICOM-SEG push pattern not found in infer.py")
+    else:
+        print("Patch 14: Already applied")
 
 if not patches_applied:
     print("No patches needed (already applied or versions mismatch)")
