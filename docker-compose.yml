@@ -115,6 +115,9 @@ services:
       EMAIL_HOST_PASSWORD: "pohvbW2@"
       EMAIL_USE_TLS: "True"
       DEFAULT_FROM_EMAIL: tele.ophtalmo@rns.tn
+      MONAI_CACHE_DIR: /root/.cache/monailabel
+    volumes:
+      - ./monai-label/cache:/root/.cache/monailabel
     depends_on:
       - postgres-django
       - keycloak
@@ -164,6 +167,9 @@ services:
       EMAIL_HOST_PASSWORD: "pohvbW2@"
       EMAIL_USE_TLS: "True"
       DEFAULT_FROM_EMAIL: tele.ophtalmo@rns.tn
+      MONAI_CACHE_DIR: /root/.cache/monailabel
+    volumes:
+      - ./monai-label/cache:/root/.cache/monailabel
     depends_on:
       - redis
       - postgres-django
@@ -331,6 +337,24 @@ services:
       - teleophtalmo
 
   # =========================
+  #  REPORT GENERATION API
+  # =========================
+  report-generator:
+    build:
+      context: ./backend/report-generation
+    container_name: report-generator
+    restart: unless-stopped
+    ports:
+      - "8010:8010"
+    environment:
+      DEVICE: auto
+      VOLMO_REPO_ID: Yale-BIDS-Chen/VOLMO-2B
+    volumes:
+      - report-generator-hf-cache:/opt/hf-cache
+    networks:
+      - teleophtalmo
+
+  # =========================
   #  MAILPIT (SMTP interne)
   # =========================
   mailpit:
@@ -372,6 +396,7 @@ volumes:
   orthanc-index-data:
   orthanc-storage:
   monai-studies:
+  report-generator-hf-cache:
 
 networks:
   teleophtalmo:

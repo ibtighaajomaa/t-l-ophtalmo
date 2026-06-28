@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from datetime import date, datetime
 from django.db.models import Q, Max
@@ -17,6 +18,8 @@ from .serializers import (
 )
 from users.authentication import KeycloakAuthentication
 from .report_generator import ReportGenerator
+
+logger = logging.getLogger(__name__)
 
 
 @api_view(['GET', 'POST'])
@@ -360,6 +363,21 @@ def orthanc_webhook(request):
         except ValueError:
             pass
 
+    # Vérifier que l'étude contient au moins une série OP (fundus)
+    # pour éviter la boucle de rétroaction : SEG poussé → webhook → nouveau Exam → nouvelle seg
+    series_ids = meta.get('Series', [])
+    has_op = False
+    for sid in series_ids[:5]:
+        try:
+            sr = requests.get(f'{ORTHANC_URL}/series/{sid}', timeout=5)
+            if sr.status_code == 200 and sr.json().get('MainDicomTags', {}).get('Modality') == 'OP':
+                has_op = True
+                break
+        except Exception:
+            continue
+    if not has_op:
+        return Response({'status': 'skipped_no_op', 'study_id': study_id})
+
     # Extraire la région depuis InstitutionName
     main_dicom = meta.get('MainDicomTags', {})
     institution = main_dicom.get('InstitutionName', '')
@@ -377,15 +395,8 @@ def orthanc_webhook(request):
         notes='',
     )
 
-    # Déclencher la distribution automatique
-    try:
-        from .tasks import tache_distribution
-        tache_distribution.delay()
-    except Exception:
-        from .distribution import distribuer_examens
-        distribuer_examens()
-
     # Déclencher la segmentation automatique via MONAI Label
+    # (la distribution sera déclenchée après la segmentation terminée)
     try:
         from .tasks import tache_auto_segmentation
         tache_auto_segmentation.delay()
@@ -462,6 +473,24 @@ def request_composite_segmentation(request):
     image_id = request.data.get('image_id') or study_uid
     if not study_uid:
         return Response({'error': 'study_instance_uid is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Inject synthetic geometry into source OP DICOMs so that the generated SEG
+    # shares the same FrameOfReferenceUID and OHIF can spatially align the overlay.
+    # Also makes SeriesInstanceUID unique to prevent cross-patient collisions.
+    try:
+        from .tasks import inject_op_geometry, ORTHANC_URL
+        monai_cache = os.environ.get('MONAI_CACHE_DIR', '/root/.cache/monailabel')
+        study_resp = requests.get(f'{ORTHANC_URL}/studies/{study_uid}', timeout=10)
+        if study_resp.status_code == 200:
+            for sid in study_resp.json().get('Series', []):
+                sr = requests.get(f'{ORTHANC_URL}/series/{sid}', timeout=10)
+                if sr.status_code == 200 and sr.json().get('MainDicomTags', {}).get('Modality') == 'OP':
+                    _, new_series_uid = inject_op_geometry(ORTHANC_URL, sid, monai_cache)
+                    if new_series_uid:
+                        image_id = new_series_uid
+                    break
+    except Exception as e:
+        logger.warning(f"Geometry injection skipped for study {study_uid}: {e}")
 
     monai_url = "http://monai-label:8000/infer/composite_seg?output=json"
     monai_params = {"device": "cuda" if os.environ.get("USE_CUDA", "false") == "true" else "cpu"}

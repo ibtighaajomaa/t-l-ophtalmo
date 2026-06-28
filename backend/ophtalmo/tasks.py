@@ -7,6 +7,8 @@ Tâches Celery pour le système de distribution des examens.
 - tache_auto_segmentation : segmentation automatique des nouvelles études OP par MONAI Label
 """
 import os
+import json
+import hashlib
 import logging
 from datetime import date
 import requests
@@ -16,6 +18,193 @@ from django.core.cache import cache
 logger = logging.getLogger(__name__)
 
 ORTHANC_URL = os.environ.get('ORTHANC_URL', 'http://orthanc-container:8042')
+
+
+def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None):
+    """
+    Inject synthetic spatial geometry tags into all DICOM instances of an OP
+    (fundus photography) series directly in Orthanc, and make the SeriesInstanceUID
+    unique to avoid cross-patient collisions when MONAI Label searches by UID.
+
+    Fundus/OP images typically lack FrameOfReferenceUID, ImagePositionPatient,
+    ImageOrientationPatient and PixelSpacing.  Without these, OHIF/Cornerstone3D
+    cannot spatially align a generated DICOM-SEG overlay with the source image.
+
+    Additionally, if two different patients share the same SeriesInstanceUID (which
+    happens when the same fundus template is uploaded for multiple patients), MONAI
+    Label's DICOMweb search by SeriesInstanceUID may return the wrong patient's
+    DICOM — causing the SEG to be generated for the wrong patient.  To fix this,
+    we append a short hash of the StudyInstanceUID to the SeriesInstanceUID, making
+    it unique per study.
+
+    Uses Orthanc's /instances/{id}/modify endpoint to avoid changing the
+    SOPInstanceUID or file meta information.
+
+    After modification, clears the MONAI Label cache for the old series UID so
+    that MONAI Label re-downloads the updated DICOM from Orthanc on next inference.
+
+    Args:
+        orthanc_url: Orthanc base URL (e.g. http://orthanc-container:8042)
+        orthanc_series_id: Orthanc internal series ID (from /series endpoint)
+        monai_cache_dir: Path to MONAI Label DICOM cache (optional, for clearing)
+
+    Returns:
+        tuple: (num_modified, new_series_instance_uid) or (0, original_uid) if
+               no modification was needed.
+    """
+    # List instances in the series
+    try:
+        resp = requests.get(f'{orthanc_url}/series/{orthanc_series_id}/instances', timeout=15)
+        resp.raise_for_status()
+        instances = resp.json()
+    except requests.RequestException as e:
+        logger.warning(f"[GeometryInject] Could not list instances for series {orthanc_series_id}: {e}")
+        return 0, None
+
+    modified = 0
+    original_series_uid = None
+    study_instance_uid = None
+    new_series_uid = None
+
+    for inst in instances:
+        inst_id = inst.get('ID')
+        if not inst_id:
+            continue
+
+        # Check if geometry already exists via simplified-tags (lightweight, no download)
+        try:
+            tags_resp = requests.get(f'{orthanc_url}/instances/{inst_id}/simplified-tags', timeout=15)
+            tags_resp.raise_for_status()
+            tags = tags_resp.json()
+        except requests.RequestException as e:
+            logger.warning(f"[GeometryInject] Could not get tags for instance {inst_id}: {e}")
+            continue
+
+        sop_uid = tags.get('SOPInstanceUID', inst_id)
+        if not original_series_uid:
+            original_series_uid = tags.get('SeriesInstanceUID')
+            study_instance_uid = tags.get('StudyInstanceUID')
+
+        has_fruid = 'FrameOfReferenceUID' in tags
+        has_ipp = 'ImagePositionPatient' in tags
+        already_processed = has_fruid and has_ipp and tags.get('SeriesInstanceUID', '') != original_series_uid
+
+        # Compute synthetic FRUID (same formula as patch_monailabel.py Patch 9A)
+        synthetic_fruid = "2.25." + str(int(hashlib.md5(sop_uid.encode()).hexdigest(), 16))[:39]
+
+        # Generate a unique SeriesInstanceUID by appending a hash of the StudyInstanceUID.
+        # This prevents cross-patient collisions when MONAI Label searches by SeriesInstanceUID.
+        if study_instance_uid and original_series_uid and not new_series_uid:
+            study_hash = hashlib.md5(study_instance_uid.encode()).hexdigest()[:8]
+            # Only modify if the SeriesInstanceUID doesn't already have the hash suffix
+            if not original_series_uid.endswith(study_hash):
+                new_series_uid = f"{original_series_uid}.{study_hash}"
+            else:
+                new_series_uid = original_series_uid
+
+        # Build the modify body — always set geometry + SeriesInstanceUID (if new)
+        modify_body = {
+            "Replace": {
+                "FrameOfReferenceUID": synthetic_fruid,
+                "ImagePositionPatient": "0\\0\\0",
+                "ImageOrientationPatient": "1\\0\\0\\0\\1\\0",
+                "SliceThickness": "1",
+            },
+        }
+        if not tags.get('PixelSpacing'):
+            modify_body["Replace"]["PixelSpacing"] = "1\\1"
+        if new_series_uid and new_series_uid != original_series_uid:
+            modify_body["Replace"]["SeriesInstanceUID"] = new_series_uid
+
+        if not modify_body["Replace"].get("SeriesInstanceUID") and has_fruid and has_ipp:
+            # Already has geometry and no SeriesInstanceUID change needed
+            logger.debug(f"[GeometryInject] Instance {inst_id} already has geometry, skipping")
+            continue
+
+        try:
+            mod_resp = requests.post(
+                f'{orthanc_url}/instances/{inst_id}/modify',
+                json=modify_body,
+                timeout=30,
+            )
+            if mod_resp.status_code != 200:
+                logger.warning(
+                    f"[GeometryInject] Modify failed for instance {inst_id}: "
+                    f"HTTP {mod_resp.status_code} - {mod_resp.text[:200]}"
+                )
+                continue
+
+            new_inst_id = mod_resp.json().get('ID')
+            logger.info(
+                f"[GeometryInject] Instance {inst_id} -> {new_inst_id} "
+                f"(SOP {sop_uid[:40]}...) FRUID={synthetic_fruid[:40]}... "
+                f"SeriesUID={new_series_uid or original_series_uid}"
+            )
+
+            # Delete the original instance (the modified one is already in Orthanc)
+            try:
+                requests.delete(f'{orthanc_url}/instances/{inst_id}', timeout=15)
+            except requests.RequestException as e:
+                logger.warning(f"[GeometryInject] Could not delete original instance {inst_id}: {e}")
+
+            modified += 1
+        except requests.RequestException as e:
+            logger.warning(f"[GeometryInject] Modify request failed for instance {inst_id}: {e}")
+            continue
+
+    # Determine the final SeriesInstanceUID to return
+    final_series_uid = new_series_uid or original_series_uid
+
+    # Clear MONAI Label cache for BOTH the old and new series UIDs
+    if modified > 0 and monai_cache_dir:
+        if original_series_uid:
+            _clear_monai_cache(monai_cache_dir, original_series_uid)
+        if new_series_uid and new_series_uid != original_series_uid:
+            _clear_monai_cache(monai_cache_dir, new_series_uid)
+
+    logger.info(
+        f"[GeometryInject] Series {orthanc_series_id}: {modified}/{len(instances)} instances modified, "
+        f"SeriesInstanceUID: {original_series_uid} -> {final_series_uid}"
+    )
+    return modified, final_series_uid
+
+
+def _clear_monai_cache(monai_cache_dir, series_instance_uid):
+    """Delete cached DICOM + NIfTI files for a series so MONAI Label re-downloads."""
+    import shutil
+
+    # The MONAI Label DICOM cache is organized as:
+    #   {monai_cache_dir}/dicom/{hash}/{series_instance_uid}/  (DICOM files)
+    #   {monai_cache_dir}/dicom/{hash}/{series_instance_uid}.nii.gz  (NIfTI)
+    dicom_root = os.path.join(monai_cache_dir, 'dicom')
+    if not os.path.isdir(dicom_root):
+        logger.warning(f"[GeometryInject] MONAI cache dir not found: {dicom_root}")
+        return
+
+    cleared = 0
+    for hash_dir in os.listdir(dicom_root):
+        hash_path = os.path.join(dicom_root, hash_dir)
+        if not os.path.isdir(hash_path):
+            continue
+
+        # Delete cached DICOM directory
+        series_dir = os.path.join(hash_path, series_instance_uid)
+        if os.path.isdir(series_dir):
+            shutil.rmtree(series_dir, ignore_errors=True)
+            cleared += 1
+            logger.info(f"[GeometryInject] Cleared MONAI cache: {series_dir}")
+
+        # Delete cached NIfTI file
+        nii_file = os.path.join(hash_path, f"{series_instance_uid}.nii.gz")
+        if os.path.exists(nii_file):
+            try:
+                os.unlink(nii_file)
+                logger.info(f"[GeometryInject] Cleared MONAI NIfTI cache: {nii_file}")
+            except OSError:
+                pass
+
+    if cleared == 0:
+        logger.debug(f"[GeometryInject] No MONAI cache entries found for series {series_instance_uid}")
 
 
 @shared_task(name='ophtalmo.tasks.tache_distribution')
@@ -155,6 +344,22 @@ def tache_sync_orthanc_incremental():
             except ValueError:
                 pass
 
+        # Vérifier que l'étude contient au moins une série OP (fundus)
+        # pour éviter la boucle de rétroaction : SEG poussé → webhook → nouveau Exam → nouvelle seg
+        series_ids = meta.get('Series', [])
+        has_op = False
+        for sid in series_ids[:5]:
+            try:
+                sr = requests.get(f'{ORTHANC_URL}/series/{sid}', timeout=5)
+                if sr.status_code == 200 and sr.json().get('MainDicomTags', {}).get('Modality') == 'OP':
+                    has_op = True
+                    break
+            except Exception:
+                continue
+        if not has_op:
+            skipped += 1
+            continue
+
         main_dicom = meta.get('MainDicomTags', {})
         institution = main_dicom.get('InstitutionName', '')
         region = institution if institution else ''
@@ -176,14 +381,8 @@ def tache_sync_orthanc_incremental():
     cache.set('orthanc_changes_seq', new_seq, timeout=None)
 
     if created > 0:
-        try:
-            tache_distribution.delay()
-        except Exception:
-            from .distribution import distribuer_examens
-            distribuer_examens()
-
-    if created > 0:
         # Déclencher la segmentation automatique pour les nouvelles études
+        # (la distribution sera déclenchée après la segmentation)
         tache_auto_segmentation.delay()
 
     logger.info(
@@ -202,35 +401,56 @@ def tache_sync_orthanc_incremental():
 @shared_task(name='ophtalmo.tasks.tache_auto_segmentation')
 def tache_auto_segmentation():
     """
-    Parcourt les examens OP en attente dans la worklist et déclenche
-    la segmentation MONAI Label (OD/OC, vaisseaux, lésions) pour chacun.
+    Parcourt les examens OP en segmentation_status='pending' et déclenche
+    la segmentation MONAI Label (OD/OC, vaisseaux, lésions) + classification DR.
     Les résultats DICOM-SEG sont automatiquement poussés dans Orthanc
     via le pipeline patché de MONAI Label.
+
+    Après la segmentation, déclenche la distribution pour que l'examen
+    passe de 'En attente' → 'En cours' avec assignation à un médecin.
     """
     from .models import Exam
 
-    exams = Exam.objects.filter(
-        status='En attente',
-        exam_type='Rétinographie',
-    )[:5]
-
+    MAX_RETRIES = 3
     SEG_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
     MONAI_LABEL = "http://monai-label:8000"
 
+    exams = Exam.objects.filter(
+        segmentation_status='pending',
+        exam_type='Rétinographie',
+    ).exclude(
+        study_instance_uid__isnull=True,
+    ).exclude(
+        study_instance_uid__exact='',
+    )[:10]
+
+    if not exams:
+        return {'status': 'no_pending_exams'}
+
+    device = "cuda" if os.environ.get("USE_CUDA", "false") == "true" else "cpu"
+    processed = 0
+
     for exam in exams:
         study_id = exam.study_instance_uid
-        if not study_id:
-            continue
 
-        # Vérifier via Orthanc que l'étude a une série OP et récupérer son SeriesInstanceUID
+        # Mark as in_progress immediately to prevent double-processing
+        exam.segmentation_status = 'in_progress'
+        exam.save(update_fields=['segmentation_status'])
+
+        # Find OP series within the study
         op_series_uid = None
+        op_orthanc_series_id = None
         try:
             orthanc_resp = requests.get(
                 f'{ORTHANC_URL}/studies/{study_id}',
                 timeout=10,
             )
             if orthanc_resp.status_code != 200:
+                exam.segmentation_status = 'failed'
+                exam.segmentation_error = f'Orthanc study lookup returned {orthanc_resp.status_code}'
+                exam.save(update_fields=['segmentation_status', 'segmentation_error'])
                 continue
+
             orthanc_meta = orthanc_resp.json()
             for sid in orthanc_meta.get('Series', []):
                 sr = requests.get(f'{ORTHANC_URL}/series/{sid}', timeout=10)
@@ -238,15 +458,43 @@ def tache_auto_segmentation():
                     s = sr.json()
                     if s.get('MainDicomTags', {}).get('Modality') == 'OP':
                         op_series_uid = s.get('MainDicomTags', {}).get('SeriesInstanceUID')
+                        op_orthanc_series_id = sid
                         break
+
             if not op_series_uid:
+                exam.segmentation_status = 'completed'
+                exam.segmentation_models_status = {'skipped': 'no OP series found'}
+                exam.save(update_fields=['segmentation_status', 'segmentation_models_status'])
                 continue
         except Exception as e:
-            logger.warning(f"[AutoSeg] Orthanc check failed for {study_id}: {e}")
+            exam.segmentation_status = 'failed'
+            exam.segmentation_error = f'Orthanc check failed: {str(e)[:200]}'
+            exam.save(update_fields=['segmentation_status', 'segmentation_error'])
             continue
 
-        # Lancer les 3 segmentations via MONAI Label
-        device = "cuda" if os.environ.get("USE_CUDA", "false") == "true" else "cpu"
+        # Inject synthetic geometry into source OP DICOMs in Orthanc so that
+        # the generated SEG shares the same FrameOfReferenceUID and OHIF can
+        # spatially align the overlay.  Fundus/OP images lack IPP/IOP/FRUID.
+        # Also makes SeriesInstanceUID unique per study to prevent cross-patient
+        # collisions when MONAI Label searches by UID.
+        # Also clears the MONAI Label cache so it re-downloads the updated DICOM.
+        if op_orthanc_series_id:
+            monai_cache = os.environ.get('MONAI_CACHE_DIR', '/root/.cache/monailabel')
+            try:
+                _, new_series_uid = inject_op_geometry(ORTHANC_URL, op_orthanc_series_id, monai_cache)
+                if new_series_uid:
+                    op_series_uid = new_series_uid
+            except Exception as e:
+                logger.warning(f"[AutoSeg] Geometry injection failed for study {study_id}: {e}")
+
+        # Get the DICOM StudyInstanceUID to ensure SEG lands in the same study
+        op_study_uid = orthanc_meta.get('MainDicomTags', {}).get('StudyInstanceUID', '')
+        base_params = {"device": device}
+        if op_study_uid:
+            base_params["study_uid"] = op_study_uid
+
+        # Run all segmentation models
+        models_status = {}
         all_ok = True
 
         for model in SEG_MODELS:
@@ -255,17 +503,68 @@ def tache_auto_segmentation():
                 resp = requests.post(
                     f"{MONAI_LABEL}/infer/{model}",
                     params={"image": op_series_uid},
-                    data={"params": f'{{"device": "{device}"}}'},
+                    data={"params": json.dumps(base_params)},
                     timeout=300,
                 )
                 if resp.status_code == 200:
-                    logger.info(f"[AutoSeg] {model} succeeded")
+                    models_status[model] = 'ok'
+                    logger.info(f"[AutoSeg] {model} succeeded for study {study_id}")
                 else:
-                    logger.warning(f"[AutoSeg] {model} returned {resp.status_code}")
+                    models_status[model] = f'failed (HTTP {resp.status_code})'
+                    logger.warning(f"[AutoSeg] {model} returned {resp.status_code} for study {study_id}")
                     all_ok = False
             except Exception as e:
-                logger.error(f"[AutoSeg] {model} failed: {e}")
+                models_status[model] = f'failed ({str(e)[:100]})'
+                logger.error(f"[AutoSeg] {model} failed for study {study_id}: {e}")
                 all_ok = False
 
+        # Run DR classification
+        try:
+            logger.info(f"[AutoSeg] Running dr_classification on series {op_series_uid[:50]}...")
+            resp = requests.post(
+                f"{MONAI_LABEL}/infer/dr_classification",
+                params={"image": op_series_uid},
+                data={"params": json.dumps(base_params)},
+                timeout=120,
+            )
+            if resp.status_code == 200:
+                models_status['dr_classification'] = 'ok'
+                logger.info(f"[AutoSeg] dr_classification succeeded for study {study_id}")
+            else:
+                models_status['dr_classification'] = f'failed (HTTP {resp.status_code})'
+                logger.warning(f"[AutoSeg] dr_classification returned {resp.status_code}")
+        except Exception as e:
+            models_status['dr_classification'] = f'failed ({str(e)[:100]})'
+            logger.error(f"[AutoSeg] dr_classification failed for study {study_id}: {e}")
+
+        # Update exam based on results
+        exam.segmentation_models_status = models_status
+        exam.segmentation_retries += 1
+
         if all_ok:
+            exam.segmentation_status = 'completed'
+            exam.segmentation_error = ''
             logger.info(f"[AutoSeg] All segmentations completed for study {study_id}")
+        else:
+            # Partial failure: retry up to MAX_RETRIES times
+            if exam.segmentation_retries >= MAX_RETRIES:
+                exam.segmentation_status = 'failed'
+                failed_models = [m for m, s in models_status.items() if s != 'ok']
+                exam.segmentation_error = f'Échec après {MAX_RETRIES} tentatives: {", ".join(failed_models)}'
+                logger.warning(
+                    f"[AutoSeg] Giving up on study {study_id} after {MAX_RETRIES} retries. "
+                    f"Failed models: {failed_models}"
+                )
+            else:
+                exam.segmentation_status = 'pending'
+                logger.info(
+                    f"[AutoSeg] Study {study_id} will retry (attempt {exam.segmentation_retries}/{MAX_RETRIES})"
+                )
+
+        exam.save(update_fields=[
+            'segmentation_status', 'segmentation_retries',
+            'segmentation_error', 'segmentation_models_status',
+        ])
+        processed += 1
+
+    return {'processed': processed}
