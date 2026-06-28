@@ -540,9 +540,9 @@ def request_composite_segmentation(request):
     return Response({
         "status": "completed",
         "overlay_base64": overlay_base64,
-        "overlay_format": result_json.get("overlay_format", "png"),
-        "overlay_width": result_json.get("overlay_width"),
-        "overlay_height": result_json.get("overlay_height"),
+        "overlay_format": result.get("overlay_format", "png"),
+        "overlay_width": result.get("overlay_width"),
+        "overlay_height": result.get("overlay_height"),
         "analysis": analysis,
     })
 

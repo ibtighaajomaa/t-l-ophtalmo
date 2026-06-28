@@ -87,18 +87,21 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None):
 
         has_fruid = 'FrameOfReferenceUID' in tags
         has_ipp = 'ImagePositionPatient' in tags
-        already_processed = has_fruid and has_ipp and tags.get('SeriesInstanceUID', '') != original_series_uid
 
-        # Compute synthetic FRUID (same formula as patch_monailabel.py Patch 9A)
-        synthetic_fruid = "2.25." + str(int(hashlib.md5(sop_uid.encode()).hexdigest(), 16))[:39]
+        # Compute a single synthetic FRUID for the entire series (from StudyInstanceUID).
+        # A unique per-slice FRUID would break OHIF overlay — all slices must share the same FRUID.
+        if not study_instance_uid:
+            study_instance_uid = tags.get('StudyInstanceUID')
+        synthetic_fruid = "2.25." + str(int(hashlib.md5((study_instance_uid or sop_uid).encode()).hexdigest(), 16))[:39]
 
         # Generate a unique SeriesInstanceUID by appending a hash of the StudyInstanceUID.
         # This prevents cross-patient collisions when MONAI Label searches by SeriesInstanceUID.
-        if study_instance_uid and original_series_uid and not new_series_uid:
-            study_hash = hashlib.md5(study_instance_uid.encode()).hexdigest()[:8]
+        if original_series_uid and not new_series_uid:
+            uid_for_hash = study_instance_uid or sop_uid
+            uid_hash = hashlib.md5(uid_for_hash.encode()).hexdigest()[:8]
             # Only modify if the SeriesInstanceUID doesn't already have the hash suffix
-            if not original_series_uid.endswith(study_hash):
-                new_series_uid = f"{original_series_uid}.{study_hash}"
+            if not original_series_uid.endswith(uid_hash):
+                new_series_uid = f"{original_series_uid}.{uid_hash}"
             else:
                 new_series_uid = original_series_uid
 
@@ -158,9 +161,9 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None):
     # Clear MONAI Label cache for BOTH the old and new series UIDs
     if modified > 0 and monai_cache_dir:
         if original_series_uid:
-            _clear_monai_cache(monai_cache_dir, original_series_uid)
+            _clear_monai_cache(monai_cache_dir, original_series_uid, orthanc_url)
         if new_series_uid and new_series_uid != original_series_uid:
-            _clear_monai_cache(monai_cache_dir, new_series_uid)
+            _clear_monai_cache(monai_cache_dir, new_series_uid, orthanc_url)
 
     logger.info(
         f"[GeometryInject] Series {orthanc_series_id}: {modified}/{len(instances)} instances modified, "
@@ -169,42 +172,127 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None):
     return modified, final_series_uid
 
 
-def _clear_monai_cache(monai_cache_dir, series_instance_uid):
-    """Delete cached DICOM + NIfTI files for a series so MONAI Label re-downloads."""
+def _clear_monai_cache(monai_cache_dir, series_instance_uid, orthanc_url=None):
+    """Delete cached DICOM + NIfTI files for a series so MONAI Label re-downloads.
+
+    MONAI Label stores its DICOM cache as:
+      {monai_cache_dir}/dicom/{md5(orthanc_dicomweb_url)}/{series_instance_uid}/
+      {monai_cache_dir}/dicom/{md5(orthanc_dicomweb_url)}/{series_instance_uid}.nii.gz
+
+    If orthanc_url is provided, the hash path is computed directly for efficiency.
+    Otherwise, falls back to scanning all hash subdirectories.
+    """
     import shutil
 
-    # The MONAI Label DICOM cache is organized as:
-    #   {monai_cache_dir}/dicom/{hash}/{series_instance_uid}/  (DICOM files)
-    #   {monai_cache_dir}/dicom/{hash}/{series_instance_uid}.nii.gz  (NIfTI)
     dicom_root = os.path.join(monai_cache_dir, 'dicom')
     if not os.path.isdir(dicom_root):
         logger.warning(f"[GeometryInject] MONAI cache dir not found: {dicom_root}")
         return
 
-    cleared = 0
-    for hash_dir in os.listdir(dicom_root):
-        hash_path = os.path.join(dicom_root, hash_dir)
-        if not os.path.isdir(hash_path):
-            continue
-
+    def _clear_path(base_path):
+        cleared = 0
         # Delete cached DICOM directory
-        series_dir = os.path.join(hash_path, series_instance_uid)
-        if os.path.isdir(series_dir):
-            shutil.rmtree(series_dir, ignore_errors=True)
+        if os.path.isdir(base_path):
+            shutil.rmtree(base_path, ignore_errors=True)
             cleared += 1
-            logger.info(f"[GeometryInject] Cleared MONAI cache: {series_dir}")
-
+            logger.info(f"[GeometryInject] Cleared MONAI cache: {base_path}")
         # Delete cached NIfTI file
-        nii_file = os.path.join(hash_path, f"{series_instance_uid}.nii.gz")
-        if os.path.exists(nii_file):
+        nii = f"{base_path}.nii.gz"
+        if os.path.exists(nii):
             try:
-                os.unlink(nii_file)
-                logger.info(f"[GeometryInject] Cleared MONAI NIfTI cache: {nii_file}")
+                os.unlink(nii)
+                logger.info(f"[GeometryInject] Cleared MONAI NIfTI cache: {nii}")
             except OSError:
                 pass
+        return cleared
+
+    cleared = 0
+
+    # Fast path: compute the hash directly from orthanc_url
+    if orthanc_url:
+        dicomweb_url = orthanc_url.rstrip('/') + '/dicom-web'
+        uri_hash = hashlib.md5(dicomweb_url.encode('utf-8'), usedforsecurity=False).hexdigest()
+        cleared += _clear_path(os.path.join(dicom_root, uri_hash, series_instance_uid))
+    else:
+        # Fallback: scan all hash subdirectories (slower but works without orthanc_url)
+        for hash_dir in os.listdir(dicom_root):
+            hash_path = os.path.join(dicom_root, hash_dir)
+            if not os.path.isdir(hash_path):
+                continue
+            cleared += _clear_path(os.path.join(hash_path, series_instance_uid))
 
     if cleared == 0:
         logger.debug(f"[GeometryInject] No MONAI cache entries found for series {series_instance_uid}")
+
+
+def _fix_seg_association(orthanc_url, orthanc_study_id, expected_study_uid):
+    """
+    Post-processing safety net: enforce correct PatientID and StudyInstanceUID
+    on all SEG series within a study.  Catches cases where MONAI Label patches
+    fail and the SEG is pushed with wrong patient/study association.
+
+    Uses Orthanc /series/{id}/modify (creates corrected copy), then removes
+    the original incorrect series to avoid duplicates in OHIF.
+    """
+    try:
+        study_resp = requests.get(f'{orthanc_url}/studies/{orthanc_study_id}', timeout=15)
+        if study_resp.status_code != 200:
+            return
+
+        study_meta = study_resp.json()
+        expected_patient_id = study_meta.get('PatientMainDicomTags', {}).get('PatientID', '')
+        expected_study_uid = expected_study_uid or study_meta.get('MainDicomTags', {}).get('StudyInstanceUID', '')
+
+        if not expected_patient_id and not expected_study_uid:
+            return
+
+        for sid in study_meta.get('Series', []):
+            try:
+                sr = requests.get(f'{orthanc_url}/series/{sid}', timeout=10)
+                if sr.status_code != 200:
+                    continue
+                s = sr.json()
+                if s.get('MainDicomTags', {}).get('Modality') != 'SEG':
+                    continue
+
+                dt = s.get('MainDicomTags', {})
+                seg_pid = dt.get('PatientID', '')
+                seg_study = dt.get('StudyInstanceUID', '')
+
+                replace = {}
+                if expected_patient_id and seg_pid != expected_patient_id:
+                    replace['PatientID'] = expected_patient_id
+                if expected_study_uid and seg_study != expected_study_uid:
+                    replace['StudyInstanceUID'] = expected_study_uid
+
+                if not replace:
+                    continue
+
+                # Create corrected copy
+                mod = requests.post(
+                    f'{orthanc_url}/series/{sid}/modify',
+                    json={'Replace': replace},
+                    timeout=60,
+                )
+                if mod.status_code != 200:
+                    logger.warning(f"[SegFix] Modify failed for SEG series {sid}: {mod.status_code}")
+                    continue
+
+                # Remove the original incorrect series to avoid duplicates
+                del_resp = requests.delete(f'{orthanc_url}/series/{sid}', timeout=30)
+                if del_resp.status_code in (200, 204):
+                    logger.info(
+                        f"[SegFix] Fixed SEG series {sid}: replaced Tags={replace}, removed old series"
+                    )
+                else:
+                    logger.warning(
+                        f"[SegFix] Modified SEG series {sid} but could not remove original: "
+                        f"{del_resp.status_code}"
+                    )
+            except Exception as e:
+                logger.warning(f"[SegFix] Error checking series {sid}: {e}")
+    except Exception as e:
+        logger.warning(f"[SegFix] Error for study {orthanc_study_id}: {e}")
 
 
 @shared_task(name='ophtalmo.tasks.tache_distribution')
@@ -482,10 +570,19 @@ def tache_auto_segmentation():
             monai_cache = os.environ.get('MONAI_CACHE_DIR', '/root/.cache/monailabel')
             try:
                 _, new_series_uid = inject_op_geometry(ORTHANC_URL, op_orthanc_series_id, monai_cache)
-                if new_series_uid:
-                    op_series_uid = new_series_uid
             except Exception as e:
-                logger.warning(f"[AutoSeg] Geometry injection failed for study {study_id}: {e}")
+                logger.error(f"[AutoSeg] Geometry injection exception for study {study_id}: {e}")
+                exam.segmentation_status = 'failed'
+                exam.segmentation_error = f'Geometry injection exception: {str(e)[:200]}'
+                exam.save(update_fields=['segmentation_status', 'segmentation_error'])
+                continue
+            if not new_series_uid:
+                logger.error(f"[AutoSeg] inject_op_geometry returned no SeriesInstanceUID for study {study_id}")
+                exam.segmentation_status = 'failed'
+                exam.segmentation_error = 'Geometry injection returned no SeriesInstanceUID'
+                exam.save(update_fields=['segmentation_status', 'segmentation_error'])
+                continue
+            op_series_uid = new_series_uid
 
         # Get the DICOM StudyInstanceUID to ensure SEG lands in the same study
         op_study_uid = orthanc_meta.get('MainDicomTags', {}).get('StudyInstanceUID', '')
@@ -536,6 +633,13 @@ def tache_auto_segmentation():
         except Exception as e:
             models_status['dr_classification'] = f'failed ({str(e)[:100]})'
             logger.error(f"[AutoSeg] dr_classification failed for study {study_id}: {e}")
+
+        # Fix SEG patient/study association in Orthanc — safety net for any patch failures
+        if op_study_uid and op_series_uid:
+            try:
+                _fix_seg_association(ORTHANC_URL, study_id, op_study_uid)
+            except Exception as e:
+                logger.warning(f"[AutoSeg] SEG association fix failed for study {study_id}: {e}")
 
         # Update exam based on results
         exam.segmentation_models_status = models_status

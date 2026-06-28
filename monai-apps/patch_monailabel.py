@@ -37,7 +37,7 @@ if os.path.exists(CONVERT):
             image_datasets.append(ds)
         logger.info(f"Total Source Images: {len(image_datasets)}")'''
     new_read = '''        image_datasets = [dcmread(str(f), stop_before_pixels=True) for f in image_files]
-        logger.info
+        logger.info(f"Total Source Images: {len(image_datasets)}")
 
         # Inject synthetic geometry tags for non-standard modalities (OP fundus, etc.)
         import hashlib
@@ -141,15 +141,16 @@ if os.path.exists(CONVERT):
         # pydicom_seg needs these to build PerFrameFunctionalGroupsSequence correctly.
         import hashlib as _ohif_hl
         _src_study_uid_geom = None
+        _fruid_9a = None
         for _gi, _gds in enumerate(image_datasets):
             # Capture StudyInstanceUID from first source for post-processing
             if _src_study_uid_geom is None and hasattr(_gds, "StudyInstanceUID"):
                 _src_study_uid_geom = str(_gds.StudyInstanceUID)
-            # Assign a unique per-slice FrameOfReferenceUID derived from SOPInstanceUID
+            # Assign a single FrameOfReferenceUID for the entire series (from first SOP UID)
+            if _fruid_9a is None and hasattr(_gds, "SOPInstanceUID"):
+                _fruid_9a = "2.25." + str(int(_ohif_hl.md5(str(_gds.SOPInstanceUID).encode()).hexdigest(), 16))[:39]
             if not hasattr(_gds, "FrameOfReferenceUID"):
-                _gds.FrameOfReferenceUID = (
-                    "2.25." + str(int(_ohif_hl.md5(str(_gds.SOPInstanceUID).encode()).hexdigest(), 16))[:39]
-                )
+                _gds.FrameOfReferenceUID = _fruid_9a
                 logger.info(f"Injected FRUID on src[{_gi}]: {_gds.FrameOfReferenceUID}")
             if not hasattr(_gds, "ImagePositionPatient"):
                 _gds.ImagePositionPatient = [0.0, 0.0, float(_gi)]
@@ -856,10 +857,14 @@ if os.path.exists(CONVERT):
         segmentation_type=hd.seg.SegmentationTypeValues.LABELMAP,'''
         new_seg_binary = '''    ### OHIF_SEG_COMPAT ###
     # Inject geometry into ALL source datasets lacking spatial tags (fundus/OP images)
+    # Use a single FrameOfReferenceUID for the entire series (derived from first SOP UID)
     import hashlib as _hl
+    _fruid_8a = None
     for _si, _sd in enumerate(image_datasets):
+        if _fruid_8a is None and hasattr(_sd, "SOPInstanceUID"):
+            _fruid_8a = "2.25." + str(int(_hl.md5(str(_sd.SOPInstanceUID).encode()).hexdigest(), 16))[:39]
         if not hasattr(_sd, "FrameOfReferenceUID"):
-            _sd.FrameOfReferenceUID = "2.25." + str(int(_hl.md5(str(_sd.SOPInstanceUID).encode()).hexdigest(), 16))[:39]
+            _sd.FrameOfReferenceUID = _fruid_8a
         if not hasattr(_sd, "ImagePositionPatient"):
             _sd.ImagePositionPatient = [0.0, 0.0, float(_si)]
             _sd.ImageOrientationPatient = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
@@ -1133,9 +1138,16 @@ PATCH11_NEW_ORTHANC = """            # Query Orthanc for the actual SOPInstanceU
                                 except Exception:
                                     pass
                         if _p11_pid:
-                            _p11_seg.PatientID = str(_p11_pid)
-                            _p11_mod = True
-                            logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_pid}")
+                            _p11_existing_pid = str(_p11_seg.PatientID) if hasattr(_p11_seg, 'PatientID') and _p11_seg.PatientID else None
+                            if _p11_existing_pid and _p11_existing_pid != str(_p11_pid):
+                                logger.warning(
+                                    f"Patch 11: Orthanc PatientID {_p11_pid} differs from SEG's {_p11_existing_pid}, "
+                                    f"keeping SEG's value (from source DICOM)"
+                                )
+                            elif not _p11_existing_pid:
+                                _p11_seg.PatientID = str(_p11_pid)
+                                _p11_mod = True
+                                logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_pid}")
             except Exception as _p11_oe:
                 logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")
 
@@ -1146,8 +1158,7 @@ PATCH11_NEW_ORTHANC = """            # Query Orthanc for the actual SOPInstanceU
                     logger.info(f"Patch 11: Fallback SOPInstanceUID from file: {_p11_expected}")
 
             if _p11_expected is None:
-                _p11_expected = _p11_pl.Path(series_dir).name
-                logger.warning(f"Patch 11: Final fallback to series_dir name: {_p11_expected}")"""
+                logger.warning("Patch 11: Final fallback to series_dir name skipped (would be invalid SOP UID)")"""
 
 if os.path.exists(PATCH11_CONVERT):
     with open(PATCH11_CONVERT) as f:
@@ -1189,9 +1200,16 @@ if os.path.exists(PATCH11_CONVERT):
                                 except Exception:
                                     pass
                         if _p11_pid:
-                            _p11_seg.PatientID = str(_p11_pid)
-                            _p11_mod = True
-                            logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_pid}")
+                            _p11_existing_pid = str(_p11_seg.PatientID) if hasattr(_p11_seg, 'PatientID') and _p11_seg.PatientID else None
+                            if _p11_existing_pid and _p11_existing_pid != str(_p11_pid):
+                                logger.warning(
+                                    f"Patch 11: Orthanc PatientID {_p11_pid} differs from SEG's {_p11_existing_pid}, "
+                                    f"keeping SEG's value (from source DICOM)"
+                                )
+                            elif not _p11_existing_pid:
+                                _p11_seg.PatientID = str(_p11_pid)
+                                _p11_mod = True
+                                logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_pid}")
                 except Exception as _p11_oe:
                     logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")'''
     if "Set SEG PatientID from Orthanc" not in _p11_content and _p11d_old in _p11_content:
@@ -1305,6 +1323,7 @@ if os.path.exists(PATCH11_CONVERT):
             _p11_seg = _p11_dr(output_file)
             _p11_mod = False
             _p11_total = 0
+            _p11_all_sops = []
 
             # Query Orthanc for the actual SOPInstanceUID in this series
             _p11_expected = None
@@ -1320,6 +1339,11 @@ if os.path.exists(PATCH11_CONVERT):
                     _p11_file_sop = str(_p11_src.SOPInstanceUID)
                 if hasattr(_p11_src, "StudyInstanceUID"):
                     _p11_study_uid = str(_p11_src.StudyInstanceUID)
+                # Build per-frame SOP list from ALL cached DICOM files (not just first)
+                for _p11_df in _p11_dcm_files:
+                    _p11_tmp = _p11_dr(str(_p11_df), stop_before_pixels=True)
+                    if hasattr(_p11_tmp, "SOPInstanceUID"):
+                        _p11_all_sops.append(str(_p11_tmp.SOPInstanceUID))
             try:
                 if _p11_study_uid:
                     # Query Orthanc at instance level with BOTH Study+Series UIDs for precise filtering
@@ -1366,9 +1390,16 @@ if os.path.exists(PATCH11_CONVERT):
                                 except Exception:
                                     pass
                         if _p11_opa:
-                            _p11_seg.PatientID = str(_p11_opa)
-                            _p11_mod = True
-                            logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_opa}")
+                            _p11_existing_pid = str(_p11_seg.PatientID) if hasattr(_p11_seg, 'PatientID') and _p11_seg.PatientID else None
+                            if _p11_existing_pid and _p11_existing_pid != str(_p11_opa):
+                                logger.warning(
+                                    f"Patch 11: Orthanc PatientID {_p11_opa} differs from SEG's {_p11_existing_pid}, "
+                                    f"keeping SEG's value (from source DICOM)"
+                                )
+                            elif not _p11_existing_pid:
+                                _p11_seg.PatientID = str(_p11_opa)
+                                _p11_mod = True
+                                logger.info(f"Patch 11: Set SEG PatientID from Orthanc: {_p11_opa}")
             except Exception as _p11_oe:
                 logger.warning(f"Patch 11: Orthanc query failed: {_p11_oe}")
 
@@ -1379,8 +1410,7 @@ if os.path.exists(PATCH11_CONVERT):
                     logger.info(f"Patch 11: Fallback SOPInstanceUID from file: {_p11_expected}")
 
             if _p11_expected is None:
-                _p11_expected = _p11_pl.Path(series_dir).name
-                logger.warning(f"Patch 11: Final fallback to series_dir name: {_p11_expected}")
+                logger.warning(f"Patch 11: No SOP UID available from Orthanc or file, keeping original SEG refs")
 
             def _p11_force(item, uid):
                 c = 0
@@ -1397,10 +1427,14 @@ if os.path.exists(PATCH11_CONVERT):
 
             if hasattr(_p11_seg, "PerFrameFunctionalGroupsSequence"):
                 for fi, fg in enumerate(_p11_seg.PerFrameFunctionalGroupsSequence):
-                    _p11_total += _p11_force(fg, _p11_expected)
+                    _p11_uid = _p11_all_sops[fi] if fi < len(_p11_all_sops) else (_p11_expected or _p11_all_sops[0] if _p11_all_sops else None)
+                    if _p11_uid:
+                        _p11_total += _p11_force(fg, _p11_uid)
             if hasattr(_p11_seg, "SharedFunctionalGroupsSequence"):
-                for sfg in _p11_seg.SharedFunctionalGroupsSequence:
-                    _p11_total += _p11_force(sfg, _p11_expected)
+                _p11_uid = _p11_all_sops[0] if _p11_all_sops else _p11_expected
+                if _p11_uid:
+                    for sfg in _p11_seg.SharedFunctionalGroupsSequence:
+                        _p11_total += _p11_force(sfg, _p11_uid)
             if _p11_total > 0 or _p11_mod:
                 _p11_seg.save_as(output_file)
                 logger.info(f"Patch 11: Forced {_p11_total} ReferencedSOPInstanceUID -> {_p11_expected}")
