@@ -1350,7 +1350,8 @@ def delete_user_view(request, user_id):
                     
             if target_user:
                 # Reset all pending or in-progress exams assigned to this user
-                from ophtalmo.models import Exam
+                from ophtalmo.models import Exam, CalendarSession
+                from datetime import date
                 exams_to_reset = Exam.objects.filter(
                     assigned_to=target_user,
                     status__in=[Exam.Status.EN_ATTENTE, Exam.Status.EN_COURS]
@@ -1360,12 +1361,19 @@ def delete_user_view(request, user_id):
                     assigned_to=None
                 )
                 
+                # Delete future CalendarSessions, keep past ones for traceability
+                CalendarSession.objects.filter(
+                    doctor=target_user,
+                    date__gt=date.today()
+                ).delete()
+                
             keycloak_admin.delete_user(user_id)
             
+            # Soft delete in Django DB to preserve past traceability
             if email:
-                User.objects.filter(email=email).delete()
+                User.objects.filter(email=email).update(is_active=False)
             if username:
-                User.objects.filter(username=username).delete()
+                User.objects.filter(username=username).update(is_active=False)
                 
             # Run automatic distribution to reassign the newly pending exams
             try:
