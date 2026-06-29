@@ -1377,8 +1377,8 @@ def delete_user_view(request, user_id):
                 
             # Run automatic distribution to reassign the newly pending exams
             try:
-                from ophtalmo.distribution import run_automatic_distribution
-                run_automatic_distribution()
+                from ophtalmo.distribution import distribuer_examens
+                distribuer_examens()
             except Exception as e:
                 print("Erreur lors de la redistribution:", e)
                 
