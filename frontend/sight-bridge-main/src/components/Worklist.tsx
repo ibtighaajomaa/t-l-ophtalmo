@@ -231,8 +231,14 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                   </td>
                 </tr>
               ) : (
-                paginatedExams.map((exam) => (
-                  <tr key={exam.id} className="hover:bg-slate-50/60">
+                paginatedExams.map((exam) => {
+                  const isOldDoctor = user && exam.reassignedFromName === `Dr. ${user.firstName} ${user.lastName}`;
+                  const rowClass = exam.isReassigned24h 
+                    ? "bg-red-50/50 hover:bg-red-100/50" 
+                    : "hover:bg-slate-50/60";
+                  
+                  return (
+                  <tr key={exam.id} className={rowClass}>
                     <td className="px-4 py-3 font-mono text-xs text-slate-500">
                       {exam.id}
                     </td>
@@ -258,11 +264,22 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                     </td>
                     <td className="px-4 py-3 text-slate-700">{exam.region || "—"}</td>
                     <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${STATUS_STYLES[exam.status]}`}
-                      >
-                        {exam.status}
-                      </span>
+                      {isOldDoctor && exam.isReassigned24h ? (
+                        <span className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 bg-red-100 text-red-700 ring-red-200">
+                          Retiré et réassigné
+                        </span>
+                      ) : (
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${STATUS_STYLES[exam.status]}`}
+                        >
+                          {exam.status}
+                        </span>
+                      )}
+                      {exam.isReassigned24h && !isOldDoctor && (
+                        <div className="mt-1 text-[10px] text-red-600 font-medium">
+                          ⚠️ Réassigné (retard 24h)
+                        </div>
+                      )}
                     </td>
                     {showAssignedTo && (
                       <td className="px-4 py-3 text-slate-700">
@@ -271,6 +288,11 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                             <span className="text-slate-400 italic">Non assigné</span>
                           )}
                         </span>
+                        {exam.isReassigned24h && exam.reassignedFromName && (
+                          <div className="text-[10px] text-red-500 mt-0.5">
+                            Retiré à : {exam.reassignedFromName}
+                          </div>
+                        )}
                       </td>
                     )}
                     <td className="px-4 py-3 text-right">
@@ -288,7 +310,8 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                       </div>
                     </td>
                   </tr>
-                ))
+                );
+              })
               )}
               {!loading && filtered.length === 0 && (
                 <tr>

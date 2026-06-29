@@ -62,6 +62,15 @@ class Exam(models.Model):
     segmentation_error = models.TextField(blank=True, default="")
     segmentation_models_status = models.JSONField(null=True, blank=True)
 
+    is_reassigned_24h = models.BooleanField(default=False)
+    reassigned_from = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lost_exams",
+    )
+
     def save(self, *args, **kwargs):
         if not self.assigned_to and self.status == self.Status.EN_COURS:
             self.status = self.Status.EN_ATTENTE
@@ -168,6 +177,31 @@ class MedicalReportVersion(models.Model):
 
     def __str__(self):
         return f"v{self.version_number} ({self.version_type}) — {self.report}"
+
+class DoctorNote(models.Model):
+
+    class Eye(models.TextChoices):
+        RIGHT = "right", "Œil droit"
+        LEFT = "left", "Œil gauche"
+        BOTH = "both", "Les deux"
+
+    series_instance_uid = models.CharField(max_length=255, db_index=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+    )
+    eye = models.CharField(max_length=10, choices=Eye.choices, default=Eye.BOTH)
+    text = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        eye_label = dict(self.Eye.choices).get(self.eye, self.eye)
+        return f"Note {self.id} — {eye_label} ({self.created_at:%Y-%m-%d %H:%M})"
+
 
 class CalendarSession(models.Model):
     doctor = models.ForeignKey(

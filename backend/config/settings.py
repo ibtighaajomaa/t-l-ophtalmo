@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 import os
 from datetime import timedelta
+from celery.schedules import crontab
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -154,7 +155,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Africa/Tunis'
 
 USE_I18N = True
 
@@ -239,7 +240,7 @@ CELERY_TIMEZONE = 'UTC'
 CELERY_BEAT_SCHEDULE = {
     'verification-quotidienne-24h': {
         'task': 'ophtalmo.tasks.tache_verification_24h',
-        'schedule': timedelta(hours=24),
+        'schedule': crontab(hour=0, minute=1),
     },
     'sync-orthanc-incremental': {
         'task': 'ophtalmo.tasks.tache_sync_orthanc_incremental',

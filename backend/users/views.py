@@ -1001,7 +1001,7 @@ def assign_session(request):
         
         actual_assigned = 0
         now = timezone.now()
-        today = now.date()
+        today = timezone.localdate()
         
         # On n'assigne immédiatement que si la session est pour aujourd'hui
         if session_date == today:
@@ -1044,9 +1044,12 @@ def assign_session(request):
         role = user.profil.role if hasattr(user, 'profil') else "Medecin"
         title = "Pr" if role == "Chef" else "Dr"
         
-        msg = f'{actual_assigned} examens assignés au Dr {user.last_name}.'
-        if actual_assigned < a_assigner:
-            msg += f' (Il ne restait que {actual_assigned} examens disponibles sur les {a_assigner} demandés).'
+        if session_date == today:
+            msg = f'{actual_assigned} examens assignés au Dr {user.last_name}.'
+            if actual_assigned < a_assigner:
+                msg += f' (Il ne restait que {actual_assigned} examens disponibles sur les {a_assigner} demandés).'
+        else:
+            msg = f"Session planifiée. Les {a_assigner} examens seront assignés automatiquement le jour J."
             
         return Response({
             'message': msg, 
@@ -1159,24 +1162,29 @@ def delete_session(request, session_id):
         exams_to_unassign = Exam.objects.filter(assigned_to=doctor, status='En cours')[:count_to_remove]
         
         unassigned_count = 0
-        for exam in exams_to_unassign:
-            exam.status = 'En attente'
-            exam.assigned_to = None
-            exam.date_assignation = None
-            exam.save(update_fields=['status', 'assigned_to', 'date_assignation'])
-            unassigned_count += 1
-            
-        if hasattr(doctor, 'profil'):
-            profil = doctor.profil
-            profil.charge_actuelle = max(0, profil.charge_actuelle - unassigned_count)
-            profil.save(update_fields=['charge_actuelle'])
+        from django.utils import timezone
+        today = timezone.localdate()
+        
+        if session_date == today:
+            for exam in exams_to_unassign:
+                exam.status = 'En attente'
+                exam.assigned_to = None
+                exam.date_assignation = None
+                exam.save(update_fields=['status', 'assigned_to', 'date_assignation'])
+                unassigned_count += 1
+                
+            if hasattr(doctor, 'profil'):
+                profil = doctor.profil
+                profil.charge_actuelle = max(0, profil.charge_actuelle - unassigned_count)
+                profil.save(update_fields=['charge_actuelle'])
 
         session_obj.delete()
         
-        # Auto-fill other incomplete sessions for the same day
-        fill_incomplete_sessions(session_date)
-        
-        return Response({'message': f'Session supprimée et {unassigned_count} examens remis en attente (et potentiellement redistribués)'})
+        if session_date == today:
+            fill_incomplete_sessions(session_date)
+            return Response({'message': f'Session supprimée et {unassigned_count} examens remis en attente (et potentiellement redistribués)'})
+        else:
+            return Response({'message': 'Session future supprimée avec succès.'})
     except CalendarSession.DoesNotExist:
         return Response({'error': 'Session introuvable'}, status=404)
 
@@ -1201,7 +1209,7 @@ def update_session(request, session_id):
         diff = new_count - old_count
         
         from django.utils import timezone
-        today = timezone.now().date()
+        today = timezone.localdate()
         
         # N'assigner immédiatement des examens QUE si la session est pour aujourd'hui
         if diff > 0 and session_obj.date == today:
@@ -1285,7 +1293,7 @@ def update_session(request, session_id):
         session_obj.save()
         
         from django.utils import timezone
-        today = timezone.now().date()
+        today = timezone.localdate()
         if diff < 0 and session_obj.date == today:
             fill_incomplete_sessions(session_obj.date)
         

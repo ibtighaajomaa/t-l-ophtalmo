@@ -9,12 +9,13 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from django.http import FileResponse
-from .models import Exam, AnalysisReport, MedicalReport, MedicalReportVersion
+from .models import Exam, AnalysisReport, MedicalReport, MedicalReportVersion, DoctorNote
 from .serializers import (
     ExamSerializer,
     AnalysisReportSerializer,
     MedicalReportSerializer,
     MedicalReportVersionSerializer,
+    DoctorNoteSerializer,
 )
 from users.authentication import KeycloakAuthentication
 from .report_generator import ReportGenerator
@@ -64,8 +65,8 @@ def exam_list(request):
             try:
                 profil = request.user.profil
                 if profil.role in ('Medecin', 'Resident', 'RESIDENT', 'OPHTALMOLOGUE', 'CHEF_SERVICE', 'Chef'):
-                    # Tous les rôles médicaux ne voient QUE les examens qui leur sont assignés
-                    exams = exams.filter(assigned_to=request.user)
+                    # Tous les rôles médicaux ne voient QUE les examens qui leur sont assignés (ou qu'ils ont perdu)
+                    exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
                 # Admin : pas de filtre, voit tout
             except Exception:
                 pass
@@ -115,7 +116,22 @@ def exam_detail(request, pk):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     elif request.method == 'DELETE':
-        exam.delete()
+        if exam.status == 'En cours' and exam.assigned_to:
+            try:
+                profil = exam.assigned_to.profil
+                profil.charge_actuelle = max(0, profil.charge_actuelle - 1)
+                profil.save(update_fields=['charge_actuelle'])
+            except Exception:
+                pass
+                
+        exam.status = 'En attente'
+        exam.assigned_to = None
+        exam.date_assignation = None
+        exam.save(update_fields=['status', 'assigned_to', 'date_assignation'])
+        
+        from .distribution import distribuer_examens
+        distribuer_examens()
+        
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -127,7 +143,7 @@ def exam_stats(request):
         try:
             profil = request.user.profil
             if profil.role in ('Medecin', 'Resident', 'RESIDENT', 'OPHTALMOLOGUE', 'CHEF_SERVICE', 'Chef'):
-                exams = exams.filter(assigned_to=request.user)
+                exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
         except Exception:
             pass
 
@@ -283,14 +299,14 @@ def sync_orthanc(request):
             created += 1
 
     # Déclencher la distribution automatique après la sync
-    if created > 0:
-        try:
-            from .tasks import tache_distribution
-            tache_distribution.delay()
-        except Exception:
-            # Si Celery n'est pas dispo, distribuer en synchrone
-            from .distribution import distribuer_examens
-            distribuer_examens()
+    # Toujours distribuer pour assigner les examens en attente
+    try:
+        from .tasks import tache_distribution
+        tache_distribution.delay()
+    except Exception:
+        # Si Celery n'est pas dispo, distribuer en synchrone
+        from .distribution import distribuer_examens
+        distribuer_examens()
 
     # Nettoyage : supprimer les Exam dont l'étude n'existe plus dans Orthanc
     orthanc_study_ids = set(study_ids)
@@ -570,7 +586,7 @@ def mes_examens(request):
     Filtres optionnels : ?status=En cours&priority=Urgent
     """
     exams = Exam.objects.filter(
-        assigned_to=request.user,
+        Q(assigned_to=request.user) | Q(reassigned_from=request.user)
     ).order_by('-priority', 'created_at')
 
     status_param = request.query_params.get('status')
@@ -738,6 +754,42 @@ def generate_report(request):
             {'error': str(e)},
             status=status.HTTP_502_BAD_GATEWAY,
         )
+
+
+@api_view(['GET', 'POST'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def doctor_notes(request):
+    if request.method == 'GET':
+        series_uid = request.query_params.get('series_instance_uid')
+        if not series_uid:
+            return Response(
+                {'error': 'series_instance_uid is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        notes = DoctorNote.objects.filter(
+            series_instance_uid=series_uid,
+        )
+        serializer = DoctorNoteSerializer(notes, many=True)
+        return Response(serializer.data)
+
+    elif request.method == 'POST':
+        series_uid = request.data.get('series_instance_uid')
+        if not series_uid:
+            return Response(
+                {'error': 'series_instance_uid is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        text = request.data.get('text', '')
+        eye = request.data.get('eye', 'both')
+        note = DoctorNote.objects.create(
+            series_instance_uid=series_uid,
+            user=request.user if request.user.is_authenticated else None,
+            eye=eye,
+            text=text,
+        )
+        serializer = DoctorNoteSerializer(note)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET', 'POST'])

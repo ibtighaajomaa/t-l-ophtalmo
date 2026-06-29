@@ -120,9 +120,11 @@ def distribuer_examens():
     
     from ophtalmo.models import CalendarSession
     from django.utils import timezone
-    today = timezone.now().date()
+    today = timezone.localdate()
     sessions_aujourdhui = CalendarSession.objects.filter(date=today)
-    session_map = {s.doctor_id: s.count for s in sessions_aujourdhui}
+    session_map = {}
+    for s in sessions_aujourdhui:
+        session_map[s.doctor_id] = session_map.get(s.doctor_id, 0) + s.count
     
     # 1. Phase Unique : Assigner UNIQUEMENT à ceux qui ont explicitement demandé via une session
     medecins_prioritaires = []
@@ -196,25 +198,22 @@ def reassigner_examens_en_retard():
             remis_en_attente += 1
             continue
 
-        if not profil.is_disponible:
-            # Médecin non disponible → réassigner
-            examen.status = 'En attente'
-            examen.assigned_to = None
-            examen.date_assignation = None
-            examen.save(update_fields=['status', 'assigned_to', 'date_assignation'])
+        # L'examen a dépassé 24h -> on le retire systématiquement
+        examen.status = 'En attente'
+        examen.reassigned_from = profil.user
+        examen.is_reassigned_24h = True
+        examen.assigned_to = None
+        examen.date_assignation = None
+        examen.save(update_fields=['status', 'assigned_to', 'date_assignation', 'reassigned_from', 'is_reassigned_24h'])
 
-            profil.charge_actuelle = max(0, profil.charge_actuelle - 1)
-            profil.save(update_fields=['charge_actuelle'])
+        profil.charge_actuelle = max(0, profil.charge_actuelle - 1)
+        profil.save(update_fields=['charge_actuelle'])
 
-            remis_en_attente += 1
-            logger.info(
-                f"Examen #{examen.id} retiré du Dr {examen.assigned_to.get_full_name()} "
-                f"(non disponible) → remis en attente."
-            )
-        else:
-            # Médecin disponible → rappel email
-            _envoyer_rappel_email(profil.user, examen)
-            rappels_envoyes += 1
+        remis_en_attente += 1
+        logger.info(
+            f"Examen #{examen.id} retiré du Dr {profil.user.get_full_name()} "
+            f"(délai > 24h) → remis en attente."
+        )
 
     logger.info(
         f"Vérification 24h : {remis_en_attente} réassignés, "

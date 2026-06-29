@@ -13,6 +13,7 @@ urlpatterns = [
     path('api/exams/save-analysis/', views.save_analysis, name='save-analysis'),
     path('api/exams/analysis-reports/', views.list_analysis_reports, name='list-analysis-reports'),
     path('api/exams/generate-report/', views.generate_report, name='generate-report'),
+    path('api/exams/doctor-notes/', views.doctor_notes, name='doctor-notes'),
     path('api/exams/medical-reports/', views.medical_report_list, name='medical-report-list'),
     path('api/exams/medical-reports/<int:pk>/', views.medical_report_detail, name='medical-report-detail'),
     path('api/exams/medical-reports/<int:pk>/sign/', views.sign_medical_report, name='sign-medical-report'),

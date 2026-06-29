@@ -607,71 +607,6 @@ async def analyze(request: dict):
         "clahe_image": clahe_b64,
     }
 
-    try:
-        study_uid = request.get("study_uid", "1.2.3.4.5.6.7.8.9")
-        series_uid = request.get("series_uid", None)
-
-        ds = Dataset()
-        file_meta = FileMetaDataset()
-        file_meta.MediaStorageSOPClassUID = "1.2.840.10008.5.1.4.1.1.88.22"
-        file_meta.MediaStorageSOPInstanceUID = generate_uid()
-        file_meta.TransferSyntaxUID = "1.2.840.10008.1.2"
-        file_meta.ImplementationClassUID = "1.2.826.0.1.3680043.10.1234"
-        ds.file_meta = file_meta
-        ds.PatientName = ""
-        ds.PatientID = ""
-        try:
-            _src_path = instance.datastore().get_image_uri(image)
-            if _src_path and os.path.isdir(_src_path):
-                _dcm_files = list(pathlib.Path(_src_path).glob("*"))
-                if _dcm_files:
-                    _src_ds = dcmread(str(_dcm_files[0]), stop_before_pixels=True)
-                    if hasattr(_src_ds, 'PatientName'):
-                        ds.PatientName = str(_src_ds.PatientName)
-                    if hasattr(_src_ds, 'PatientID'):
-                        ds.PatientID = str(_src_ds.PatientID)
-        except Exception as _sr_e:
-            logger.warning(f"Could not read source PatientID/PatientName: {_sr_e}")
-        ds.StudyInstanceUID = study_uid
-        ds.SeriesInstanceUID = series_uid or generate_uid()
-        ds.SOPClassUID = file_meta.MediaStorageSOPClassUID
-        ds.SOPInstanceUID = file_meta.MediaStorageSOPInstanceUID
-        ds.Modality = "SR"
-        ds.SeriesDescription = "AI Ophthalmology Report"
-
-        lines = [
-            "AI Ophthalmology Report",
-            "",
-            "DR Classification:",
-            "  Grade: " + dr.get("grade", "N/A"),
-            "  Confidence: " + ("{:.0%}".format(dr.get("confidence", 0))),
-            "",
-            "Lesion Analysis:",
-            "  Microaneurysms: " + str(lesion.get("microaneurysms", 0)),
-            "  Hemorrhages: " + str(lesion.get("hemorrhages", 0)),
-            "  Exudates: " + str(lesion.get("exudates", 0)),
-            "  Coverage: " + "{:.1f}%".format(lesion.get("coverage_pct", 0)),
-            "",
-            "Optic Disc/Cup:",
-            "  Cup/Disc Ratio: " + "{:.2f}".format(optic.get("cup_disc_ratio", 0)),
-            "",
-            "Vessel Analysis:",
-            "  Coverage: " + "{:.1f}%".format(vessel.get("coverage_pct", 0)),
-        ]
-        ds.TextValue = "\\n".join(lines)
-
-        sr_path = tempfile.NamedTemporaryFile(suffix=".dcm", delete=False).name
-        ds.save_as(sr_path)
-        logger.info("DICOM SR saved to %s", sr_path)
-
-        import requests
-        with open(sr_path, "rb") as f:
-            resp = requests.post("http://orthanc-container:8042/instances", data=f, headers={"Content-Type": "application/dicom"})
-        logger.info("Pushed DICOM SR to Orthanc: %s", resp.status_code)
-        os.unlink(sr_path)
-    except Exception as e:
-        logger.error("DICOM SR generation/push failed: %s", e)
-
     return report
 """
         idx = content.find(insert_before)
@@ -1636,6 +1571,72 @@ if os.path.exists(INFER):
                 print("WARNING: Patch 14 — DICOM-SEG push pattern not found in infer.py")
     else:
         print("Patch 14: Already applied")
+
+
+# Patch 15: Fix dicom_web_download_series crash when SeriesInstanceUID has hash suffix
+# and when DICOMWeb search returns empty results
+DICOM_PY = "/usr/local/lib/python3.10/dist-packages/monailabel/datastore/utils/dicom.py"
+if os.path.exists(DICOM_PY):
+    with open(DICOM_PY) as f:
+        content = f.read()
+
+    marker = "### PATCH_HASH_SUFFIX ###"
+    if marker not in content:
+        old_dws_code = '''    # Limitation for DICOMWeb Client as it needs StudyInstanceUID to fetch series
+    if not study_id:
+        meta = Dataset.from_json(
+            [
+                series
+                for series in client.search_for_series(search_filters={"SeriesInstanceUID": series_id})
+                if series["0020000E"]["Value"] == [series_id]
+            ][0]
+        )
+        study_id = str(meta["StudyInstanceUID"].value)'''
+
+        new_dws_code = '''    # Limitation for DICOMWeb Client as it needs StudyInstanceUID to fetch series
+    if not study_id:
+        ### PATCH_HASH_SUFFIX ###
+        # Fix: handle hash-suffixed SeriesInstanceUID (e.g. ...UID.XYZ12345)
+        # and empty DICOMWeb search results gracefully
+        import re as _re
+        search_results = client.search_for_series(search_filters={"SeriesInstanceUID": series_id})
+        filtered = [
+            series for series in search_results
+            if series.get("0020000E", {}).get("Value") == [series_id]
+        ]
+
+        # If no results and series_id ends with .XXXXXXXX (hash suffix), retry with base UID
+        if not filtered:
+            base_match = _re.match(r'^(.+?)\.[0-9a-fA-F]{8}$', series_id)
+            if base_match:
+                base_uid = base_match.group(1)
+                logger.info(f"DICOMWeb: no results for {series_id[:60]}..., retrying with base UID {base_uid[:60]}...")
+                search_results = client.search_for_series(search_filters={"SeriesInstanceUID": base_uid})
+                filtered = [
+                    series for series in search_results
+                    if series.get("0020000E", {}).get("Value") == [base_uid]
+                ]
+                if filtered:
+                    series_id = base_uid
+
+        if not filtered:
+            raise Exception(f"Series not found via DICOMWeb: {series_id[:60]}...")
+
+        meta = Dataset.from_json(filtered[0])
+        study_id = str(meta["StudyInstanceUID"].value)'''
+
+        if old_dws_code in content:
+            content = content.replace(old_dws_code, new_dws_code)
+            with open(DICOM_PY, "w") as f:
+                f.write(content)
+            print("dicom.py: fixed dicom_web_download_series for hash-suffixed UIDs + empty results")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 15 — dicom_web_download_series pattern not found in dicom.py")
+    else:
+        patches_applied = True
+        print("dicom.py: Patch 15 already applied")
+
 
 if not patches_applied:
     print("No patches needed (already applied or versions mismatch)")

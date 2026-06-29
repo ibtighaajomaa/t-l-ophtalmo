@@ -18,6 +18,8 @@ interface ApiExam {
   notes: string;
   created_at: string;
   updated_at: string;
+  is_reassigned_24h?: boolean;
+  reassigned_from_name?: string | null;
 }
 
 interface PaginatedResponse {
@@ -69,6 +71,8 @@ function toFrontendExam(api: ApiExam): Exam {
     region: api.region,
     modalityIp: api.modality_ip,
     studyInstanceUid: api.study_instance_uid ?? undefined,
+    isReassigned24h: api.is_reassigned_24h,
+    reassignedFromName: api.reassigned_from_name,
   };
 }
 

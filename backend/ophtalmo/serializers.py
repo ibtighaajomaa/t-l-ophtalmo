@@ -1,10 +1,11 @@
 from rest_framework import serializers
-from .models import Exam, AnalysisReport, MedicalReport, MedicalReportVersion
+from .models import Exam, AnalysisReport, MedicalReport, MedicalReportVersion, DoctorNote
 
 
 class ExamSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
+    reassigned_from_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Exam
@@ -14,13 +15,19 @@ class ExamSerializer(serializers.ModelSerializer):
             'assigned_to', 'assigned_to_name',
             'created_by', 'created_by_name',
             'region', 'modality_ip', 'notes',
+            'is_reassigned_24h', 'reassigned_from', 'reassigned_from_name',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'assigned_to_name', 'created_by_name']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'assigned_to_name', 'created_by_name', 'reassigned_from_name']
 
     def get_assigned_to_name(self, obj):
         if obj.assigned_to:
             return f"Dr. {obj.assigned_to.first_name} {obj.assigned_to.last_name}"
+        return None
+
+    def get_reassigned_from_name(self, obj):
+        if obj.reassigned_from:
+            return f"Dr. {obj.reassigned_from.first_name} {obj.reassigned_from.last_name}"
         return None
 
     def get_created_by_name(self, obj):
@@ -102,4 +109,21 @@ class MedicalReportVersionSerializer(serializers.ModelSerializer):
     def get_modified_by_name(self, obj):
         if obj.modified_by:
             return f"{obj.modified_by.first_name} {obj.modified_by.last_name}".strip() or obj.modified_by.username
+        return None
+
+
+class DoctorNoteSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DoctorNote
+        fields = [
+            'id', 'series_instance_uid', 'user', 'user_name',
+            'eye', 'text', 'created_at',
+        ]
+        read_only_fields = ['id', 'user', 'created_at', 'user_name']
+
+    def get_user_name(self, obj):
+        if obj.user:
+            return f"Dr. {obj.user.first_name} {obj.user.last_name}".strip() or obj.user.username
         return None

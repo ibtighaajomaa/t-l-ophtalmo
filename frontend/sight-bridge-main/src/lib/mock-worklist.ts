@@ -14,11 +14,13 @@ export interface Exam {
   assignedTo: string | null;
   notes?: string;
   imageUrl?: string;
+  doctorId?: string;
   region: string;
   modalityIp: string;
-  doctorId?: string;
   createdByUserId?: string;
   studyInstanceUid?: string;
+  isReassigned24h?: boolean;
+  reassignedFromName?: string | null;
 }
 
 export const MOCK_EXAMS: Exam[] = [

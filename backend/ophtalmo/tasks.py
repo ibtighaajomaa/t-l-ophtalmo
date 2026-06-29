@@ -23,34 +23,26 @@ ORTHANC_URL = os.environ.get('ORTHANC_URL', 'http://orthanc-container:8042')
 def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None, orthanc_study_id=None):
     """
     Inject synthetic spatial geometry tags into all DICOM instances of an OP
-    (fundus photography) series directly in Orthanc, and make the SeriesInstanceUID
-    unique to avoid cross-patient collisions when MONAI Label searches by UID.
+    (fundus photography) series directly in Orthanc.
 
     Fundus/OP images typically lack FrameOfReferenceUID, ImagePositionPatient,
     ImageOrientationPatient and PixelSpacing.  Without these, OHIF/Cornerstone3D
     cannot spatially align a generated DICOM-SEG overlay with the source image.
 
-    Additionally, if two different patients share the same SeriesInstanceUID (which
-    happens when the same fundus template is uploaded for multiple patients), MONAI
-    Label's DICOMweb search by SeriesInstanceUID may return the wrong patient's
-    DICOM — causing the SEG to be generated for the wrong patient.  To fix this,
-    we append a short hash of the Orthanc study ID to the SeriesInstanceUID, making
-    it unique per study.
-
     Uses Orthanc's /instances/{id}/modify endpoint to avoid changing the
     SOPInstanceUID or file meta information.
 
-    After modification, clears the MONAI Label cache for the old series UID so
+    After modification, clears the MONAI Label cache for the series UID so
     that MONAI Label re-downloads the updated DICOM from Orthanc on next inference.
 
     Args:
         orthanc_url: Orthanc base URL (e.g. http://orthanc-container:8042)
         orthanc_series_id: Orthanc internal series ID (from /series endpoint)
         monai_cache_dir: Path to MONAI Label DICOM cache (optional, for clearing)
-        orthanc_study_id: Orthanc internal study ID (optional, for unique hash)
+        orthanc_study_id: Orthanc internal study ID (optional)
 
     Returns:
-        tuple: (num_modified, new_series_instance_uid) or (0, original_uid) if
+        tuple: (num_modified, series_instance_uid) or (0, None) if
                no modification was needed.
     """
     # List instances in the series
@@ -73,7 +65,6 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None, ort
     modified = 0
     original_series_uid = None
     study_instance_uid = None
-    new_series_uid = None
 
     for inst in instances:
         inst_id = inst.get('ID')
@@ -103,19 +94,7 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None, ort
             study_instance_uid = tags.get('StudyInstanceUID')
         synthetic_fruid = "2.25." + str(int(hashlib.md5((study_instance_uid or sop_uid).encode()).hexdigest(), 16))[:39]
 
-        # Generate a unique SeriesInstanceUID by appending a hash of the Orthanc study ID.
-        # This prevents cross-patient collisions when MONAI Label searches by SeriesInstanceUID.
-        # Orthanc study ID is guaranteed unique, unlike DICOM StudyInstanceUID which can collide.
-        if original_series_uid and not new_series_uid:
-            uid_for_hash = orthanc_study_id or study_instance_uid or sop_uid
-            uid_hash = hashlib.md5(uid_for_hash.encode()).hexdigest()[:8]
-            # Only modify if the SeriesInstanceUID doesn't already have the hash suffix
-            if not original_series_uid.endswith(uid_hash):
-                new_series_uid = f"{original_series_uid}.{uid_hash}"
-            else:
-                new_series_uid = original_series_uid
-
-        # Build the modify body — always set geometry + SeriesInstanceUID (if new)
+        # Build the modify body — inject geometry tags only (keep original SeriesInstanceUID)
         modify_body = {
             "Replace": {
                 "FrameOfReferenceUID": synthetic_fruid,
@@ -126,11 +105,8 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None, ort
         }
         if not tags.get('PixelSpacing'):
             modify_body["Replace"]["PixelSpacing"] = "1\\1"
-        if new_series_uid and new_series_uid != original_series_uid:
-            modify_body["Replace"]["SeriesInstanceUID"] = new_series_uid
-            modify_body["Force"] = True
 
-        if not modify_body["Replace"].get("SeriesInstanceUID") and has_fruid and has_ipp:
+        if has_fruid and has_ipp:
             # Already has geometry and no SeriesInstanceUID change needed
             logger.debug(f"[GeometryInject] Instance {inst_id} already has geometry, skipping")
             continue
@@ -153,7 +129,7 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None, ort
             logger.info(
                 f"[GeometryInject] Modified instance {inst_id} "
                 f"(SOP {sop_uid[:40]}...) FRUID={synthetic_fruid[:40]}... "
-                f"SeriesUID={new_series_uid or original_series_uid} (HTTP {mod_resp.status_code})"
+                f"SeriesUID={original_series_uid} (HTTP {mod_resp.status_code})"
             )
 
             # Delete the original instance (the modified one is already in Orthanc)
@@ -167,24 +143,17 @@ def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None, ort
             logger.warning(f"[GeometryInject] Modify request failed for instance {inst_id}: {e}")
             continue
 
-    # Determine the final SeriesInstanceUID to return.
-    # Only return the new UID if at least one instance was actually modified,
-    # otherwise MONAI Label would try to download a non-existent series.
-    if modified > 0 and new_series_uid:
-        final_series_uid = new_series_uid
-    else:
-        final_series_uid = original_series_uid
+    # Return the original SeriesInstanceUID (unchanged)
+    final_series_uid = original_series_uid
 
-    # Clear MONAI Label cache for BOTH the old and new series UIDs
+    # Clear MONAI Label cache for the series UID
     if modified > 0 and monai_cache_dir:
         if original_series_uid:
             _clear_monai_cache(monai_cache_dir, original_series_uid, orthanc_url)
-        if new_series_uid and new_series_uid != original_series_uid:
-            _clear_monai_cache(monai_cache_dir, new_series_uid, orthanc_url)
 
     logger.info(
         f"[GeometryInject] Series {orthanc_series_id}: {modified}/{len(instances)} instances modified, "
-        f"SeriesInstanceUID: {original_series_uid} -> {final_series_uid}"
+        f"SeriesInstanceUID: {final_series_uid}"
     )
     return modified, final_series_uid
 
@@ -568,38 +537,21 @@ def tache_auto_segmentation():
             exam.save(update_fields=['segmentation_status', 'segmentation_error'])
             continue
 
-        # Inject synthetic geometry into source OP DICOMs in Orthanc so that
-        # the generated SEG shares the same FrameOfReferenceUID and OHIF can
-        # spatially align the overlay.  Fundus/OP images lack IPP/IOP/FRUID.
-        # Also makes SeriesInstanceUID unique per study to prevent cross-patient
-        # collisions when MONAI Label searches by UID.
-        # Also clears the MONAI Label cache so it re-downloads the updated DICOM.
+        # Inject synthetic geometry into source OP DICOMs in Orthanc
+        # (FRUID, IPP, IOP) so the generated DICOM-SEG overlay aligns
+        # spatially in OHIF. The geometry is injected directly in the
+        # cached DICOM files on the MONAI Label side (via infer.py patch)
+        # before SEG generation — no need to modify Orthanc instances here.
+        # Clear MONAI Label cache so it re-downloads the source images
+        # fresh (with the correct UID) from Orthanc.
         if op_orthanc_series_id:
             monai_cache = os.environ.get('MONAI_CACHE_DIR', '/root/.cache/monailabel')
-            try:
-                _, new_series_uid = inject_op_geometry(ORTHANC_URL, op_orthanc_series_id, monai_cache, study_id)
-            except Exception as e:
-                logger.error(f"[AutoSeg] Geometry injection exception for study {study_id}: {e}")
-                exam.segmentation_status = 'failed'
-                exam.segmentation_error = f'Geometry injection exception: {str(e)[:200]}'
-                exam.save(update_fields=['segmentation_status', 'segmentation_error'])
-                continue
-            if not new_series_uid:
-                logger.error(f"[AutoSeg] inject_op_geometry returned no SeriesInstanceUID for study {study_id}")
-                exam.segmentation_status = 'failed'
-                exam.segmentation_error = 'Geometry injection returned no SeriesInstanceUID'
-                exam.save(update_fields=['segmentation_status', 'segmentation_error'])
-                continue
-            op_series_uid = new_series_uid
-
-            # Nuclear option: blow away the entire MONAI Label DICOM cache so it
-            # MUST re-download the geometry-injected instances fresh.
             try:
                 import shutil
                 dicom_root = os.path.join(monai_cache, 'dicom')
                 if os.path.isdir(dicom_root):
                     shutil.rmtree(dicom_root, ignore_errors=True)
-                    logger.info(f"[AutoSeg] Cleared entire MONAI DICOM cache: {dicom_root}")
+                    logger.info(f"[AutoSeg] Cleared MONAI DICOM cache: {dicom_root}")
             except Exception as e:
                 logger.warning(f"[AutoSeg] Could not clear DICOM cache: {e}")
 
@@ -696,5 +648,9 @@ def tache_auto_segmentation():
             'segmentation_error', 'segmentation_models_status',
         ])
         processed += 1
+
+    # Déclencher la distribution pour assigner les examens terminés (ou échoués) aux médecins
+    if processed > 0:
+        tache_distribution.delay()
 
     return {'processed': processed}
