@@ -8,6 +8,7 @@ from django.conf import settings
 from keycloak import KeycloakAdmin
 from keycloak.exceptions import KeycloakError
 from .models import Profil
+from .authentication import KeycloakAuthentication
 import requests
 
 class CreerUtilisateurView(APIView):
