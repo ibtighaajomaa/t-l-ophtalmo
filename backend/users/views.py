@@ -1339,6 +1339,15 @@ def delete_user_view(request, user_id):
             if email and request.user.email == email:
                 return Response({'error': 'Vous ne pouvez pas supprimer votre propre compte.'}, status=status.HTTP_400_BAD_REQUEST)
                 
+            # Vérifier si l'utilisateur cible est un administrateur
+            target_user = User.objects.filter(email=email).first()
+            if not target_user and username:
+                target_user = User.objects.filter(username=username).first()
+                
+            if target_user and hasattr(target_user, 'profil'):
+                if target_user.profil.role in ('Admin', 'ADMIN_SYSTEME'):
+                    return Response({'error': 'Vous ne pouvez pas supprimer un autre administrateur.'}, status=status.HTTP_403_FORBIDDEN)
+                    
             keycloak_admin.delete_user(user_id)
             
             if email:
