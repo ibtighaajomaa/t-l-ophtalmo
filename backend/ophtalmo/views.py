@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 @api_view(['GET', 'POST'])
+@authentication_classes([KeycloakAuthentication])
 @permission_classes([AllowAny])
 def exam_list(request):
     if request.method == 'GET':
@@ -69,6 +70,16 @@ def exam_list(request):
                 if profil.role in ('Medecin', 'Resident', 'RESIDENT', 'Chef'):
                     # Tous les rôles médicaux ne voient QUE les examens qui leur sont assignés (ou qu'ils ont perdu)
                     exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
+                    
+                    # Le médecin ne visualise par défaut que les examens en attente/en cours
+                    # et les examens corrigés (Interprété) SEULEMENT s'ils datent d'aujourd'hui
+                    from django.utils import timezone
+                    today = timezone.now().date()
+                    exams = exams.exclude(
+                        Q(status='Interprété') &
+                        ~Q(updated_at__date=today) &
+                        ~Q(date_assignation__date=today)
+                    )
                 # Admin : pas de filtre, voit tout
             except Exception:
                 pass
@@ -138,6 +149,7 @@ def exam_detail(request, pk):
 
 
 @api_view(['GET'])
+@authentication_classes([KeycloakAuthentication])
 @permission_classes([AllowAny])
 def exam_stats(request):
     exams = Exam.objects.all()
@@ -146,6 +158,15 @@ def exam_stats(request):
             profil = request.user.profil
             if profil.role in ('Medecin', 'Resident', 'RESIDENT', 'Chef'):
                 exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
+                
+                # Appliquer la même restriction pour les stats
+                from django.utils import timezone
+                today = timezone.now().date()
+                exams = exams.exclude(
+                    Q(status='Interprété') &
+                    ~Q(updated_at__date=today) &
+                    ~Q(date_assignation__date=today)
+                )
         except Exception:
             pass
 
