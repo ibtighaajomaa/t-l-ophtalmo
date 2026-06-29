@@ -965,6 +965,7 @@ function ExamDetail() {
                 studyInstanceUid={exam.studyInstanceUid}
                 seriesInstanceUid={exam.studyInstanceUid}
                 patientId={exam.patientName}
+                patientAge={exam.patientAge}
               />
             ) : (
               <>

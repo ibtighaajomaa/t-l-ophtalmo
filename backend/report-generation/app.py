@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from huggingface_hub import snapshot_download
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModel, AutoTokenizer, pipeline
 
 from report_generator import generate_report, _extract_json, _build_html_from_sections
 
@@ -311,6 +311,124 @@ Rédigez l'intégralité du rapport en français médical professionnel."""
 volmo = VolmoEngine()
 
 
+# ---------------------------------------------------------
+# Lazy singleton for the LLaMA model (local text generation)
+# ---------------------------------------------------------
+class LlamaReportEngine:
+    def __init__(self):
+        self.pipe = None
+
+    def load(self):
+        if self.pipe is not None:
+            return
+        print("Loading LLaMA-3.2-3B-Instruct...")
+        self.pipe = pipeline(
+            "text-generation",
+            model="meta-llama/Llama-3.2-3B-Instruct",
+            torch_dtype=torch.float32,
+            device_map="cpu",
+            low_cpu_mem_usage=True,
+        )
+        print("LLaMA-3.2-3B-Instruct loaded on CPU")
+
+    def generate_report(
+        self,
+        patient_id: str,
+        patient_age: int | None,
+        eye: str,
+        report_data: dict,
+    ) -> str:
+        self.load()
+        exam_date = datetime.now().strftime("%d/%m/%Y")
+        cls = report_data.get("dr_classification") or {}
+        les = report_data.get("lesions") or {}
+        odc = report_data.get("optic_disc_cup") or {}
+        gla = report_data.get("glaucoma") or {}
+        ves = report_data.get("vessels") or {}
+
+        grade = cls.get("grade", "N/A")
+        confidence = cls.get("confidence")
+        conf_str = f"{confidence:.1%}" if confidence is not None else "N/A"
+        probs = cls.get("probabilities", [])
+        prob_details = (
+            ", ".join(f"{p.get('label','?')}: {p.get('score',0):.1%}" for p in probs)
+            if probs
+            else "N/A"
+        )
+
+        micro = les.get("microaneurysms", "N/A")
+        hemo = les.get("hemorrhages", "N/A")
+        exu = les.get("exudates", "N/A")
+        coverage = les.get("coverage_pct", "N/A")
+        cov_str = f"{coverage:.2f}%" if isinstance(coverage, (int, float)) else "N/A"
+
+        vcdr = odc.get("cup_disc_ratio") or gla.get("vcdr", "N/A")
+        risk = gla.get("risk", "N/A")
+        disc_area = odc.get("disc_area_px") or gla.get("disc_area_px", "N/A")
+        cup_area = odc.get("cup_area_px") or gla.get("cup_area_px", "N/A")
+
+        vessel_cov = ves.get("coverage_pct", "N/A")
+        vessel_str = f"{vessel_cov:.2f}%" if isinstance(vessel_cov, (int, float)) else "N/A"
+
+        age_str = f"{patient_age} ans" if patient_age else "Non renseigné"
+
+        system_prompt = (
+            "Tu es un ophtalmologue expérimenté. Rédige un compte rendu ophtalmologique "
+            "structuré en français médical à partir des données quantitatives fournies. "
+            "Utilise UNIQUEMENT les chiffres donnés sans les inventer ni les modifier. "
+            "Sois précis, professionnel et factuel."
+        )
+
+        user_prompt = f"""Génère un compte rendu ophtalmologique avec le format suivant :
+
+COMPTE RENDU OPHTALMOLOGIQUE – FOND D'ŒIL
+
+1. Informations patient
+- Nom : {patient_id}
+- Âge : {age_str}
+- Date d'examen : {exam_date}
+- Œil examiné : {eye}
+
+2. Classification de la Rétinopathie Diabétique
+- Grade : {grade}
+- Confiance : {conf_str}
+- Distribution des probabilités : {prob_details}
+
+3. Quantification des Lésions
+- Microanévrismes : {micro}
+- Hémorragies : {hemo}
+- Exsudats : {exu}
+- Couverture lésionnelle : {cov_str}
+
+4. Évaluation du Glaucome
+- Rapport C/D (vCDR) : {vcdr}
+- Risque : {risk}
+- Surface disque optique : {disc_area} px²
+- Surface cupule : {cup_area} px²
+
+5. Analyse Vasculaire
+- Densité vasculaire : {vessel_str}
+
+6. Conclusion
+Rédige une conclusion clinique qui synthétise le grade de rétinopathie diabétique, le risque de glaucome, le stade de sévérité, et les recommandations de suivi ophtalmologique."""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        outputs = self.pipe(
+            messages,
+            max_new_tokens=2048,
+            temperature=0.1,
+            do_sample=False,
+        )
+        return outputs[0]["generated_text"][-1]["content"].strip()
+
+
+llama_engine = LlamaReportEngine()
+
+
 @app.on_event("startup")
 def _warmup_volmo():
     threading.Thread(target=volmo.load, daemon=True).start()
@@ -324,6 +442,13 @@ class ReportRequest(BaseModel):
     report_data: dict
 
 
+class LlamaReportRequest(BaseModel):
+    patient_id: str
+    patient_age: int | None = None
+    eye: str = "Non spécifié"
+    report_data: dict
+
+
 # ---------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------
@@ -334,6 +459,7 @@ def health():
         "device": str(_resolve_device()),
         "cuda_available": torch.cuda.is_available(),
         "volmo_loaded": volmo.model is not None,
+        "llama_loaded": llama_engine.pipe is not None,
         "report_engine": "volmo-chat",
     }
 
@@ -368,6 +494,30 @@ def report(req: ReportRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Report generation failed: {e}")
     return JSONResponse(content={"patient_id": req.patient_id, "report": result})
+
+
+@app.post("/report-llama")
+def report_llama(req: LlamaReportRequest):
+    """Generate a clinical report using LLaMA-3.2-3B-Instruct locally on CPU,
+    using the classification data (DR grade, lesions, glaucoma, vessels) as input."""
+    try:
+        text = llama_engine.generate_report(
+            patient_id=req.patient_id,
+            patient_age=req.patient_age,
+            eye=req.eye,
+            report_data=req.report_data,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"LLaMA report generation failed: {e}"
+        )
+
+    html = report_text_to_html(text)
+    return JSONResponse(content={
+        "report_text": text,
+        "report_html": html,
+        "report_json": {"engine": "llama-local"},
+    })
 
 
 @app.post("/generate")

@@ -19,9 +19,15 @@ interface AIPanelProps {
   studyInstanceUid?: string;
   seriesInstanceUid?: string;
   patientId?: string;
+  patientAge?: number;
 }
 
-export function AIPanel({ studyInstanceUid, seriesInstanceUid, patientId }: AIPanelProps) {
+export function AIPanel({
+  studyInstanceUid,
+  seriesInstanceUid,
+  patientId,
+  patientAge,
+}: AIPanelProps) {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,7 +81,18 @@ export function AIPanel({ studyInstanceUid, seriesInstanceUid, patientId }: AIPa
     setGeneratingReport(true);
     setError(null);
     try {
-      const result = await generateReport(analysis, patientId ?? studyInstanceUid ?? "inconnu");
+      const eyeLabel =
+        eyeRight && eyeLeft
+          ? "Bilatéral"
+          : eyeRight
+            ? "Œil droit (OD)"
+            : eyeLeft
+              ? "Œil gauche (OG)"
+              : "Non spécifié";
+      const result = await generateReport(analysis, patientId ?? studyInstanceUid ?? "inconnu", {
+        patientAge,
+        eye: eyeLabel,
+      });
       setReportText(result.report_text);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Report generation failed");

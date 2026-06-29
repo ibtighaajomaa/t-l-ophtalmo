@@ -237,6 +237,7 @@ export async function runAIAnalysis(
 export async function generateReport(
   analysisData: AnalysisResult,
   patientId: string,
+  options?: { patientAge?: number; eye?: string },
 ): Promise<{ report_text: string; report_html: string }> {
   const res = await fetch(`${BASE}/generate-report/`, {
     method: "POST",
@@ -244,6 +245,8 @@ export async function generateReport(
     body: JSON.stringify({
       report_data: analysisData,
       patient_id: patientId,
+      patient_age: options?.patientAge,
+      eye: options?.eye,
     }),
   });
   if (!res.ok) {

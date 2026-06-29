@@ -871,11 +871,32 @@ def generate_report(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    patient_age = request.data.get('patient_age')
+    eye = request.data.get('eye', 'Non spécifié')
+
     REPORT_GENERATOR_URL = os.environ.get(
         'REPORT_GENERATOR_URL', 'http://report-generator:8010'
     )
 
-    # Primary path: VOLMO-2B full pipeline (image + MONAI data)
+    # Tier 1: LLaMA-3.2-3B-Instruct local (CPU)
+    try:
+        llama_resp = requests.post(
+            f'{REPORT_GENERATOR_URL}/report-llama',
+            json={
+                'patient_id': patient_id,
+                'patient_age': patient_age,
+                'eye': eye,
+                'report_data': report_data,
+            },
+            timeout=300,
+        )
+        if llama_resp.status_code == 200:
+            return Response(llama_resp.json())
+        logger.warning(f"LLaMA /report-llama returned {llama_resp.status_code}")
+    except Exception as e:
+        logger.warning(f"LLaMA report failed: {e}")
+
+    # Tier 2: VOLMO-2B full pipeline (image + MONAI data)
     if series_uid:
         try:
             # Resolve Orthanc internal ID from SeriesInstanceUID
@@ -925,7 +946,7 @@ def generate_report(request):
             logger.warning(f"VOLMO-2B image pipeline failed: {e}")
             # Fall through to local fallback
 
-    # Fallback: local deterministic report via the VOLMO-2B service (/report endpoint)
+    # Tier 3: local deterministic report via the VOLMO-2B service (/report endpoint)
     try:
         fallback_resp = requests.post(
             f'{REPORT_GENERATOR_URL}/report',

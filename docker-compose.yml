@@ -349,6 +349,7 @@ services:
     environment:
       DEVICE: auto
       VOLMO_REPO_ID: Yale-BIDS-Chen/VOLMO-2B
+      HF_TOKEN: ${HF_TOKEN}
     volumes:
       - report-generator-hf-cache:/opt/hf-cache
     networks:
