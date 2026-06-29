@@ -67,14 +67,6 @@ def exam_list(request):
         if request.user.is_authenticated:
             try:
                 roles = getattr(request, 'roles', [])
-                has_medecin_role = any(r in roles for r in ('OPHTALMOLOGUE', 'RESIDENT', 'CHEF_SERVICE', 'Medecin', 'Resident', 'Chef'))
-                
-                if not has_medecin_role:
-                    try:
-                        has_medecin_role = request.user.profil.role in ('Medecin', 'Resident', 'RESIDENT', 'Chef', 'OPHTALMOLOGUE', 'CHEF_SERVICE')
-                    except Exception:
-                        pass
-
                 is_admin = any(r in roles for r in ('ADMIN_SYSTEME', 'ADMIN', 'Admin'))
                 if not is_admin:
                     try:
@@ -82,8 +74,9 @@ def exam_list(request):
                     except Exception:
                         pass
 
-                if has_medecin_role and not is_admin:
-                    # Le médecin ne visualise QUE les examens qui lui sont assignés
+                if not is_admin:
+                    # Tout utilisateur non-admin (Médecin, Chef, Résident ou sans rôle spécifique)
+                    # ne visualise QUE les examens qui lui sont assignés
                     exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
                     
                     # ET il ne visualise QUE les examens assignés LE JOUR J (aujourd'hui)
@@ -166,14 +159,6 @@ def exam_stats(request):
     if request.user.is_authenticated:
         try:
             roles = getattr(request, 'roles', [])
-            has_medecin_role = any(r in roles for r in ('OPHTALMOLOGUE', 'RESIDENT', 'CHEF_SERVICE', 'Medecin', 'Resident', 'Chef'))
-            
-            if not has_medecin_role:
-                try:
-                    has_medecin_role = request.user.profil.role in ('Medecin', 'Resident', 'RESIDENT', 'Chef', 'OPHTALMOLOGUE', 'CHEF_SERVICE')
-                except Exception:
-                    pass
-
             is_admin = any(r in roles for r in ('ADMIN_SYSTEME', 'ADMIN', 'Admin'))
             if not is_admin:
                 try:
@@ -181,7 +166,7 @@ def exam_stats(request):
                 except Exception:
                     pass
 
-            if has_medecin_role and not is_admin:
+            if not is_admin:
                 exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
                 
                 # Appliquer la même restriction pour les stats (seulement le jour J)
