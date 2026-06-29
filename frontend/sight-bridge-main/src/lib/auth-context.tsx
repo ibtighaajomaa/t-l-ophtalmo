@@ -438,15 +438,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             body: JSON.stringify(payload),
           });
 
+          const resData = await res.json().catch(() => null);
+
           if (!res.ok) {
-            const errData = await res.json().catch(() => null);
-            return { ok: false, error: errData?.error || "Erreur de création côté serveur." };
+            return { ok: false, error: resData?.error || "Erreur de création côté serveur." };
           }
 
           // Ajout local pour que l'interface se mette à jour sans recharger
           const newUser: AppUser = {
             ...data,
-            id: `u-${Date.now()}`,
+            id: resData?.keycloak_id || `u-${Date.now()}`,
             createdAt: new Date().toISOString(),
             createdBy: user ? `${user.firstName} ${user.lastName}` : "Système",
           };

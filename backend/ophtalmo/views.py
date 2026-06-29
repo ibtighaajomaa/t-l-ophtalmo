@@ -30,6 +30,16 @@ logger = logging.getLogger(__name__)
 @permission_classes([AllowAny])
 def exam_list(request):
     if request.method == 'GET':
+        # Auto-cleanup orphaned exams
+        orphaned = Exam.objects.filter(status='En cours', assigned_to__isnull=True)
+        if orphaned.exists():
+            orphaned.update(status='En attente')
+            try:
+                from .distribution import distribuer_examens
+                distribuer_examens()
+            except Exception as e:
+                logger.error(f"Error during auto-cleanup redistribution: {e}")
+
         exams = Exam.objects.all().order_by('-date', '-id')
 
         status_param = request.query_params.get('status')
@@ -155,6 +165,16 @@ def exam_detail(request, pk):
 @authentication_classes([KeycloakAuthentication])
 @permission_classes([AllowAny])
 def exam_stats(request):
+    # Auto-cleanup orphaned exams (e.g. if a user was hard-deleted from DB)
+    orphaned = Exam.objects.filter(status='En cours', assigned_to__isnull=True)
+    if orphaned.exists():
+        orphaned.update(status='En attente')
+        try:
+            from .distribution import distribuer_examens
+            distribuer_examens()
+        except Exception as e:
+            logger.error(f"Error during auto-cleanup redistribution: {e}")
+
     exams = Exam.objects.all()
     if request.user.is_authenticated:
         try:
