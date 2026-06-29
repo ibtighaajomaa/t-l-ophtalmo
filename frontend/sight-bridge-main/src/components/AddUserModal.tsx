@@ -89,11 +89,10 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
                     type="button"
                     key={opt.value}
                     onClick={() => setRole(opt.value)}
-                    className={`flex flex-col items-center gap-1.5 rounded-lg border px-2 py-3 text-xs font-medium transition ${
-                      active
+                    className={`flex flex-col items-center gap-1.5 rounded-lg border px-2 py-3 text-xs font-medium transition ${active
                         ? "border-blue-600 bg-blue-50 text-blue-700"
                         : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                    }`}
+                      }`}
                   >
                     <Icon className="h-5 w-5" />
                     {opt.label}
@@ -135,11 +134,10 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
 
           {feedback && (
             <div
-              className={`flex items-start gap-2 rounded-lg px-3 py-2 text-sm ${
-                feedback.ok
+              className={`flex items-start gap-2 rounded-lg px-3 py-2 text-sm ${feedback.ok
                   ? "bg-green-50 text-green-700 ring-1 ring-green-200"
                   : "bg-red-50 text-red-700 ring-1 ring-red-200"
-              }`}
+                }`}
             >
               {feedback.ok && <CheckCircle2 className="h-4 w-4 mt-0.5" />}
               <span>{feedback.msg}</span>

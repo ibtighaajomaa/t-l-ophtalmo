@@ -66,7 +66,7 @@ function LoginPage() {
       <div className="hidden lg:block relative w-full h-full bg-slate-900">
         <img
           src="/login-bg.png"
-          alt="TéléOphta"
+          alt="Télé-rétinographie"
           className="absolute inset-0 w-full h-full object-cover"
         />
       </div>

@@ -12,4 +12,5 @@ def initialiser_examens_medecin(sender, instance, created, **kwargs):
     """
     if created:
         # La fonction gère la vérification du rôle (Medecin, etc.) et de la disponibilité.
-        assigner_examens_nouveau_medecin(instance)
+        # assigner_examens_nouveau_medecin(instance)
+        pass # Logique retirée : l'assignation se fait uniquement via le calendrier

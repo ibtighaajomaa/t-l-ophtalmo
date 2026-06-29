@@ -523,13 +523,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser((prev) =>
               prev
                 ? {
-                    ...prev,
-                    email: data.email,
-                    firstName: data.firstName,
-                    lastName: data.lastName,
-                    phone: data.phone,
-                    role: data.role || prev.role,
-                  }
+                  ...prev,
+                  email: data.email,
+                  firstName: data.firstName,
+                  lastName: data.lastName,
+                  phone: data.phone,
+                  role: data.role || prev.role,
+                }
                 : null,
             );
           }

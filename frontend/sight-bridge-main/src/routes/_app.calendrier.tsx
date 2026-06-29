@@ -172,7 +172,8 @@ function CalendrierPage() {
     if (user?.role === "Admin") {
       setSelectedDoctors(new Set(doctors));
     } else if (user?.firstName) {
-      setSelectedDoctors(new Set([`Dr ${user.firstName} ${user.lastName}`]));
+      const title = user.role === "Chef" ? "Pr" : "Dr";
+      setSelectedDoctors(new Set([`${title} ${user.firstName} ${user.lastName}`]));
     } else {
       setSelectedDoctors(new Set(doctors));
     }

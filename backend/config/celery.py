@@ -1,5 +1,5 @@
 """
-Celery configuration for the TéléOphtalmo project.
+Celery configuration for the Télé-rétinographielmo project.
 Auto-discovers tasks from all installed Django apps.
 """
 import os

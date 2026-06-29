@@ -258,11 +258,10 @@ function AdminDashboard() {
                   <button
                     key={f.value}
                     onClick={() => setFilter(f.value)}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                      filter === f.value
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${filter === f.value
                         ? "bg-blue-600 text-white"
                         : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                    }`}
+                      }`}
                   >
                     {f.label}
                   </button>
@@ -348,23 +347,22 @@ function AdminDashboard() {
                           (u.role === "Medecin" || u.role === "Resident" || u.role === "Chef")) ||
                           (user?.role === "Chef" &&
                             (u.role === "Medecin" || u.role === "Resident"))) && (
-                          <button
-                            onClick={() => handleToggleAvailability(u.email)}
-                            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
-                              u.is_disponible
-                                ? "text-red-600 hover:bg-red-50"
-                                : "text-green-600 hover:bg-green-50"
-                            }`}
-                            title={u.is_disponible ? "Rendre Indisponible" : "Rendre Disponible"}
-                          >
-                            {u.is_disponible ? (
-                              <UserX className="h-3.5 w-3.5" />
-                            ) : (
-                              <UserCheck className="h-3.5 w-3.5" />
-                            )}
-                            Basculer
-                          </button>
-                        )}
+                            <button
+                              onClick={() => handleToggleAvailability(u.email)}
+                              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${u.is_disponible
+                                  ? "text-red-600 hover:bg-red-50"
+                                  : "text-green-600 hover:bg-green-50"
+                                }`}
+                              title={u.is_disponible ? "Rendre Indisponible" : "Rendre Disponible"}
+                            >
+                              {u.is_disponible ? (
+                                <UserX className="h-3.5 w-3.5" />
+                              ) : (
+                                <UserCheck className="h-3.5 w-3.5" />
+                              )}
+                              Basculer
+                            </button>
+                          )}
                         <button
                           onClick={() => handleEdit(u)}
                           className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50"
@@ -429,11 +427,10 @@ function AdminDashboard() {
                         </td>
                         <td className="py-3 pr-4">
                           <span
-                            className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                              e.action === "login"
+                            className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${e.action === "login"
                                 ? "bg-green-50 text-green-700 ring-1 ring-green-200"
                                 : "bg-slate-100 text-slate-600"
-                            }`}
+                              }`}
                           >
                             {e.action === "login" ? "Connexion" : "Déconnexion"}
                           </span>

@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 MAX_CHARGE_PAR_MEDECIN = 30
 
 # Rôles éligibles pour recevoir des examens
-ROLES_MEDECIN = ['Medecin', 'OPHTALMOLOGUE', 'Resident', 'RESIDENT', 'CHEF_SERVICE', 'Chef']
+ROLES_MEDECIN = ['Medecin', 'Resident', 'RESIDENT']
 
 
 def get_medecins_disponibles():
@@ -298,7 +298,7 @@ def assigner_examens_nouveau_medecin(profil, max_examens=None):
 def _envoyer_rappel_email(user, examen):
     """Envoie un email de rappel au médecin pour un examen en retard."""
     try:
-        sujet = "[TéléOphta] Rappel — Examen en attente de votre interprétation"
+        sujet = "[Télé-rétinographie] Rappel — Examen en attente de votre interprétation"
         message = f"""Bonjour Dr {user.first_name} {user.last_name},
 
 Nous vous rappelons que l'examen suivant vous a été assigné il y a plus de 24 heures et attend votre interprétation :
@@ -313,7 +313,7 @@ Merci de vous connecter à la plateforme pour traiter cet examen dans les meille
 
 Cordialement,
 
-L'équipe TéléOphta
+L'équipe Télé-rétinographie
 Plateforme de Télédépistage de la Rétinopathie
 """
         send_mail(

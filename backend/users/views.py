@@ -89,23 +89,13 @@ class CreerUtilisateurView(APIView):
             )
 
             creator_role = data.get('creatorRole')
-            if creator_role == 'Chef' and mapped_role in ['Resident', 'Medecin']:
-                try:
-                    from ophtalmo.distribution import assigner_examens_nouveau_medecin
-                    assigner_examens_nouveau_medecin(profil, max_examens=3)
-                except Exception as e:
-                    pass
-            else:
-                try:
-                    from ophtalmo.distribution import distribuer_examens
-                    distribuer_examens()
-                except Exception as e:
-                    pass
+            # Nous n'assignons plus d'examens automatiquement à la création
+            # Les assignations se feront uniquement via les sessions de calendrier
 
 
             # 6. Envoyer l'email de bienvenue avec les identifiants
             from django.core.mail import send_mail
-            sujet = "Bienvenue sur TéléOphta - Vos identifiants"
+            sujet = "Bienvenue sur Télé-rétinographie - Vos identifiants"
             lien_login = "http://193.95.31.196/login"
             
             message = f"""Bonjour Dr {data['prenom']} {data['nom']},
@@ -119,7 +109,7 @@ Mot de passe provisoire : {data['password_provisoire']}
 Vous pouvez vous connecter à cette adresse : {lien_login}
             
 Cordialement,
-L'équipe TéléOphta.
+L'équipe Télé-rétinographie.
 """
             try:
                 send_mail(
@@ -317,17 +307,17 @@ def request_password_reset(request):
     
     # 3. Envoyer le mail vers REACT
     link = f"http://193.95.31.196/reset-password?token={reset_obj.token}"
-    sujet = "[TéléOphta] Demande de réinitialisation de votre mot de passe"
+    sujet = "[Télé-rétinographie] Demande de réinitialisation de votre mot de passe"
     message = f"""Bonjour Dr {prenom_medecin} {nom_medecin},
 
-Nous avons reçu une demande de réinitialisation de mot de passe pour votre compte sur la plateforme TéléOphta.
+Nous avons reçu une demande de réinitialisation de mot de passe pour votre compte sur la plateforme Télé-rétinographie.
 
 Pour configurer un nouveau mot de passe, veuillez cliquer sur le lien ci-dessous :
 {link}
 
 Cordialement,
 
-L'équipe TéléOphta
+L'équipe Télé-rétinographie
 Plateforme de Télédépistage de la Rétinopathie
 """
     send_mail(

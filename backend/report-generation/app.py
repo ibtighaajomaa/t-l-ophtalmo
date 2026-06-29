@@ -468,7 +468,7 @@ def health():
         "device": str(_resolve_device()),
         "cuda_available": torch.cuda.is_available(),
         "volmo_loaded": volmo.model is not None,
-        "llama_loaded": llama_engine.pipe is not None,
+        "llama_loaded": llama_engine.llm is not None,
         "report_engine": "volmo-chat",
     }
 

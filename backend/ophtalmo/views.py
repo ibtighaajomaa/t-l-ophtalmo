@@ -66,7 +66,7 @@ def exam_list(request):
         if request.user.is_authenticated:
             try:
                 profil = request.user.profil
-                if profil.role in ('Medecin', 'Resident', 'RESIDENT', 'OPHTALMOLOGUE', 'CHEF_SERVICE', 'Chef'):
+                if profil.role in ('Medecin', 'Resident', 'RESIDENT', 'Chef'):
                     # Tous les rôles médicaux ne voient QUE les examens qui leur sont assignés (ou qu'ils ont perdu)
                     exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
                 # Admin : pas de filtre, voit tout
@@ -144,7 +144,7 @@ def exam_stats(request):
     if request.user.is_authenticated:
         try:
             profil = request.user.profil
-            if profil.role in ('Medecin', 'Resident', 'RESIDENT', 'OPHTALMOLOGUE', 'CHEF_SERVICE', 'Chef'):
+            if profil.role in ('Medecin', 'Resident', 'RESIDENT', 'Chef'):
                 exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
         except Exception:
             pass
@@ -589,7 +589,9 @@ def run_analysis(request):
                 {'error': f'Orthanc study lookup returned {study_resp.status_code}'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
-        for sid in study_resp.json().get('Series', []):
+        study_data = study_resp.json()
+        study_instance_dicom_uid = study_data.get('MainDicomTags', {}).get('StudyInstanceUID')
+        for sid in study_data.get('Series', []):
             sr = requests.get(f'{ORTHANC_URL}/series/{sid}', timeout=10)
             if sr.status_code == 200:
                 s = sr.json()
@@ -658,7 +660,11 @@ def run_analysis(request):
     try:
         resp = requests.post(
             monai_url,
-            json={"image": op_series_uid, "run_segmentation": True},
+            json={
+                "image": op_series_uid,
+                "run_segmentation": True,
+                "study_uid": study_instance_dicom_uid or study_uid,
+            },
             timeout=300,
         )
         logger.info(f"MONAI Label response status: {resp.status_code}")
