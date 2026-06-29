@@ -1304,3 +1304,39 @@ def update_session(request, session_id):
         }})
     except CalendarSession.DoesNotExist:
         return Response({'error': 'Session introuvable'}, status=404)
+
+@api_view(['DELETE'])
+@authentication_classes([KeycloakAuthentication])
+def delete_user_view(request, email):
+    is_admin = False
+    try:
+        roles = getattr(request, 'roles', [])
+        is_admin = any(r in roles for r in ('ADMIN_SYSTEME', 'ADMIN', 'Admin'))
+        if not is_admin:
+            is_admin = request.user.profil.role in ('Admin', 'ADMIN_SYSTEME')
+    except Exception:
+        pass
+        
+    if not is_admin:
+        return Response({'error': 'Seul un administrateur peut supprimer un utilisateur.'}, status=status.HTTP_403_FORBIDDEN)
+        
+    if request.user.email == email:
+        return Response({'error': 'Vous ne pouvez pas supprimer votre propre compte.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+    try:
+        keycloak_admin = KeycloakAdmin(
+            server_url=settings.KEYCLOAK_SERVER_URL,
+            username=settings.KEYCLOAK_ADMIN_USER,
+            password=settings.KEYCLOAK_ADMIN_PASSWORD,
+            realm_name=settings.KEYCLOAK_REALM,
+            user_realm_name="master",
+            verify=True
+        )
+        user_id_kc = keycloak_admin.get_user_id(email)
+        if user_id_kc:
+            keycloak_admin.delete_user(user_id_kc)
+            
+        User.objects.filter(email=email).delete()
+        return Response({'success': True})
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

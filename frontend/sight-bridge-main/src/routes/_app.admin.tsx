@@ -144,9 +144,9 @@ function AdminDashboard() {
     return u.role !== "Admin";
   });
 
-  const handleDelete = (id: string, name: string) => {
+  const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Supprimer l'utilisateur "${name}" ?`)) return;
-    const res = deleteUser(id);
+    const res = await deleteUser(id);
     if (!res.ok) setError(res.error ?? "Erreur");
     else {
       setError(null);

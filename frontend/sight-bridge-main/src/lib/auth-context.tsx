@@ -171,7 +171,7 @@ interface AuthContextValue {
   logout: () => void;
   resetPassword: (email: string, newPassword: string) => Promise<{ ok: boolean; error?: string }>;
   createUser: (u: Omit<AppUser, "id">) => Promise<{ ok: boolean; error?: string }>;
-  deleteUser: (id: string) => { ok: boolean; error?: string };
+  deleteUser: (id: string) => Promise<{ ok: boolean; error?: string }>;
   updateUser: (
     oldEmail: string,
     data: {
@@ -457,12 +457,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return { ok: false, error: "Impossible de joindre le backend Django." };
         }
       },
-      deleteUser: (id) => {
+      deleteUser: async (id) => {
         if (user?.id === id) {
           return { ok: false, error: "Vous ne pouvez pas supprimer votre propre compte." };
         }
-        setUsers((prev) => prev.filter((u) => u.id !== id));
-        return { ok: true };
+        try {
+          const res = await fetch(`/api/users/delete/${id}/`, {
+            method: "DELETE",
+          });
+          if (res.ok) {
+            setUsers((prev) => prev.filter((u) => u.id !== id));
+            return { ok: true };
+          } else {
+            const data = await res.json().catch(() => ({}));
+            return { ok: false, error: data.error || "Erreur lors de la suppression." };
+          }
+        } catch (err) {
+          return { ok: false, error: "Erreur réseau." };
+        }
       },
       updateUser: async (oldEmail, data) => {
         try {

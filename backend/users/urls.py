@@ -4,7 +4,7 @@ from .views import (
     forgot_password_relay, request_password_reset, confirm_password_reset,
     get_keycloak_events, logout_relay, update_keycloak_user,
     get_paginated_users, get_user_stats, toggle_medecin_status_admin,
-    assign_session, get_sessions, delete_session, update_session
+    assign_session, get_sessions, delete_session, update_session, delete_user_view
 )
 
 urlpatterns = [
@@ -24,4 +24,5 @@ urlpatterns = [
     path('api/users/sessions/', get_sessions, name='get_sessions'),
     path('api/users/delete-session/<int:session_id>/', delete_session, name='delete_session'),
     path('api/users/update-session/<int:session_id>/', update_session, name='update_session'),
+    path('api/users/delete/<str:email>/', delete_user_view, name='delete_user'),
 ]
