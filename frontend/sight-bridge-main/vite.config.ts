@@ -4,7 +4,8 @@ export default defineConfig({
   tanstackStart: {
     server: { entry: "server" },
   },
-  nitro: process.env.NODE_ENV === 'production' || process.env.DOCKER_BUILD
-    ? { preset: 'node-server' }
-    : undefined,
+  nitro:
+    process.env.NODE_ENV === "production" || process.env.DOCKER_BUILD
+      ? { preset: "node-server" }
+      : undefined,
 });

@@ -1,6 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Users, Trash2, Stethoscope, GraduationCap, Briefcase, Activity, Edit, X, UserCheck, UserX } from "lucide-react";
+import {
+  Users,
+  Trash2,
+  Stethoscope,
+  GraduationCap,
+  Briefcase,
+  Activity,
+  Edit,
+  X,
+  UserCheck,
+  UserX,
+} from "lucide-react";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { Navbar } from "@/components/Navbar";
 import { useAuth, type Role, type AppUser } from "@/lib/auth-context";
@@ -33,7 +44,7 @@ function AdminDashboard() {
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [reloadTrigger, setReloadTrigger] = useState(0);
-  
+
   const [stats, setStats] = useState({ total: 0, chefs: 0, medecins: 0, residents: 0 });
 
   // States for Edit Modal
@@ -90,8 +101,8 @@ function AdminDashboard() {
       url += `?createdBy=${encodeURIComponent(`${user.firstName} ${user.lastName}`)}`;
     }
     fetch(url)
-      .then(r => r.json())
-      .then(d => setStats(d))
+      .then((r) => r.json())
+      .then((d) => setStats(d))
       .catch(console.error);
   }, [user?.role, user?.firstName, user?.lastName]);
 
@@ -106,7 +117,7 @@ function AdminDashboard() {
         if (user?.role === "Chef") {
           url += `&createdBy=${encodeURIComponent(`${user.firstName} ${user.lastName}`)}`;
         }
-        
+
         const res = await fetch(url);
         const data = await res.json();
         if (data.users) {
@@ -125,17 +136,22 @@ function AdminDashboard() {
 
   const visibleUsers = users.filter((u) => {
     if (user?.role === "Chef") {
-      return u.createdBy === `${user.firstName} ${user.lastName}` && (u.role === "Medecin" || u.role === "Resident");
+      return (
+        u.createdBy === `${user.firstName} ${user.lastName}` &&
+        (u.role === "Medecin" || u.role === "Resident")
+      );
     }
     return u.role !== "Admin";
   });
-
 
   const handleDelete = (id: string, name: string) => {
     if (!confirm(`Supprimer l'utilisateur "${name}" ?`)) return;
     const res = deleteUser(id);
     if (!res.ok) setError(res.error ?? "Erreur");
-    else { setError(null); setReloadTrigger(prev => prev + 1); }
+    else {
+      setError(null);
+      setReloadTrigger((prev) => prev + 1);
+    }
   };
 
   const handleToggleAvailability = async (email: string) => {
@@ -143,11 +159,11 @@ function AdminDashboard() {
       const res = await fetch("/api/users/toggle-status/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email })
+        body: JSON.stringify({ email }),
       });
       const data = await res.json();
       if (res.ok) {
-        setReloadTrigger(prev => prev + 1);
+        setReloadTrigger((prev) => prev + 1);
       } else {
         alert("Erreur : " + data.error);
       }
@@ -171,12 +187,12 @@ function AdminDashboard() {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
-    
+
     if (!editForm.firstName.trim() || !editForm.lastName.trim() || !editForm.email.trim()) {
       setEditError("Veuillez remplir tous les champs obligatoires (Prénom, Nom, Email).");
       return;
     }
-    
+
     setIsSaving(true);
     setEditError(null);
     try {
@@ -187,10 +203,10 @@ function AdminDashboard() {
         phone: editForm.phone.trim() || undefined,
         role: editForm.role,
       });
-      
+
       if (res.ok) {
         setEditingUser(null);
-        setReloadTrigger(prev => prev + 1);
+        setReloadTrigger((prev) => prev + 1);
       } else {
         setEditError(res.error || "Une erreur est survenue lors de la mise à jour.");
       }
@@ -208,8 +224,18 @@ function AdminDashboard() {
         {/* Stats */}
         <div className="grid sm:grid-cols-4 gap-4">
           <StatCard label="Chefs de Service" value={stats.chefs} accent="blue" icon={Briefcase} />
-          <StatCard label="Ophtalmologues" value={stats.medecins} accent="green" icon={Stethoscope} />
-          <StatCard label="Résidents" value={stats.residents} accent="orange" icon={GraduationCap} />
+          <StatCard
+            label="Ophtalmologues"
+            value={stats.medecins}
+            accent="green"
+            icon={Stethoscope}
+          />
+          <StatCard
+            label="Résidents"
+            value={stats.residents}
+            accent="orange"
+            icon={GraduationCap}
+          />
           <StatCard label="Utilisateurs totaux" value={stats.total} accent="slate" icon={Users} />
         </div>
 
@@ -266,13 +292,19 @@ function AdminDashboard() {
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={user?.role === "Admin" ? 6 : 5} className="py-6 text-center text-slate-500">
+                    <td
+                      colSpan={user?.role === "Admin" ? 6 : 5}
+                      className="py-6 text-center text-slate-500"
+                    >
                       Chargement...
                     </td>
                   </tr>
                 ) : backendUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={user?.role === "Admin" ? 6 : 5} className="py-6 text-center text-slate-500">
+                    <td
+                      colSpan={user?.role === "Admin" ? 6 : 5}
+                      className="py-6 text-center text-slate-500"
+                    >
                       Aucun utilisateur.
                     </td>
                   </tr>
@@ -290,7 +322,7 @@ function AdminDashboard() {
                         <div className="text-xs text-slate-400 mt-0.5">{u.phone || "—"}</div>
                       </td>
                       <td className="py-3 pr-4">
-                        {(u.role === "Medecin" || u.role === "Resident" || u.role === "Chef") ? (
+                        {u.role === "Medecin" || u.role === "Resident" || u.role === "Chef" ? (
                           <div className="flex flex-col gap-1.5">
                             <div>
                               {u.is_disponible ? (
@@ -308,41 +340,49 @@ function AdminDashboard() {
                           <span className="text-slate-400 text-xs">—</span>
                         )}
                       </td>
-                      {user?.role === "Admin" && <td className="py-3 pr-4 text-slate-600">{u.createdBy || "—"}</td>}
-                    <td className="py-3 pr-4 text-right space-x-2">
-                      {((user?.role === "Admin" && (u.role === "Medecin" || u.role === "Resident" || u.role === "Chef")) ||
-                        (user?.role === "Chef" && (u.role === "Medecin" || u.role === "Resident"))) && (
-                        <button
-                          onClick={() => handleToggleAvailability(u.email)}
-                          className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
-                            u.is_disponible 
-                            ? "text-red-600 hover:bg-red-50" 
-                            : "text-green-600 hover:bg-green-50"
-                          }`}
-                          title={u.is_disponible ? "Rendre Indisponible" : "Rendre Disponible"}
-                        >
-                          {u.is_disponible ? <UserX className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}
-                          Basculer
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleEdit(u)}
-                        className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50"
-                      >
-                        <Edit className="h-3.5 w-3.5" />
-                        Modifier
-                      </button>
                       {user?.role === "Admin" && (
-                        <button
-                          onClick={() => handleDelete(u.id, `${u.firstName} ${u.lastName}`)}
-                          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          Supprimer
-                        </button>
+                        <td className="py-3 pr-4 text-slate-600">{u.createdBy || "—"}</td>
                       )}
-                    </td>
-                  </tr>
+                      <td className="py-3 pr-4 text-right space-x-2">
+                        {((user?.role === "Admin" &&
+                          (u.role === "Medecin" || u.role === "Resident" || u.role === "Chef")) ||
+                          (user?.role === "Chef" &&
+                            (u.role === "Medecin" || u.role === "Resident"))) && (
+                          <button
+                            onClick={() => handleToggleAvailability(u.email)}
+                            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
+                              u.is_disponible
+                                ? "text-red-600 hover:bg-red-50"
+                                : "text-green-600 hover:bg-green-50"
+                            }`}
+                            title={u.is_disponible ? "Rendre Indisponible" : "Rendre Disponible"}
+                          >
+                            {u.is_disponible ? (
+                              <UserX className="h-3.5 w-3.5" />
+                            ) : (
+                              <UserCheck className="h-3.5 w-3.5" />
+                            )}
+                            Basculer
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleEdit(u)}
+                          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50"
+                        >
+                          <Edit className="h-3.5 w-3.5" />
+                          Modifier
+                        </button>
+                        {user?.role === "Admin" && (
+                          <button
+                            onClick={() => handleDelete(u.id, `${u.firstName} ${u.lastName}`)}
+                            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Supprimer
+                          </button>
+                        )}
+                      </td>
+                    </tr>
                   ))
                 )}
               </tbody>
@@ -383,9 +423,7 @@ function AdminDashboard() {
                         <td className="py-3 pr-4 text-slate-600">
                           {d.toISOString().slice(11, 16)}
                         </td>
-                        <td className="py-3 pr-4 font-medium text-slate-900">
-                          {e.userName}
-                        </td>
+                        <td className="py-3 pr-4 font-medium text-slate-900">{e.userName}</td>
                         <td className="py-3 pr-4 text-slate-600">
                           <RoleBadge role={e.role} />
                         </td>
@@ -438,14 +476,14 @@ function AdminDashboard() {
                 <X className="h-5 w-5" />
               </button>
             </div>
-            
+
             <form onSubmit={handleSave} className="p-6 space-y-4">
               {editError && (
                 <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-red-200">
                   {editError}
                 </div>
               )}
-              
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
@@ -472,7 +510,7 @@ function AdminDashboard() {
                   />
                 </div>
               </div>
-              
+
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   Email <span className="text-red-500">*</span>
@@ -485,7 +523,7 @@ function AdminDashboard() {
                   required
                 />
               </div>
-              
+
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   Téléphone
@@ -498,7 +536,7 @@ function AdminDashboard() {
                   className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-100"
                 />
               </div>
-              
+
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   Rôle
@@ -523,7 +561,7 @@ function AdminDashboard() {
                   )}
                 </select>
               </div>
-              
+
               <div className="flex justify-end gap-3 border-t border-slate-100 pt-4 mt-6">
                 <button
                   type="button"
@@ -556,7 +594,10 @@ function RoleBadge({ role }: { role: Role }) {
     Medecin: { label: "Ophtalmologue", cls: "bg-emerald-50 text-emerald-700" },
     Resident: { label: "Résident", cls: "bg-orange-50 text-orange-700" },
   };
-  const { label, cls } = map[role] || { label: role || "Inconnu", cls: "bg-slate-100 text-slate-700" };
+  const { label, cls } = map[role] || {
+    label: role || "Inconnu",
+    cls: "bg-slate-100 text-slate-700",
+  };
   return <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${cls}`}>{label}</span>;
 }
 

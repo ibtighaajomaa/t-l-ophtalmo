@@ -119,7 +119,6 @@ export function Sidebar() {
           )}
         </nav>
 
-
         <div className="border-t border-slate-200 p-3">
           <div className="flex items-center justify-between px-2 py-2">
             <div className="flex items-center gap-3">

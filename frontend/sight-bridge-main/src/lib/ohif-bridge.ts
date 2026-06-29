@@ -1,12 +1,12 @@
 type BridgeEventType =
-  | 'ready'
-  | 'status'
-  | 'study-opened'
-  | 'study-closed'
-  | 'series-selected'
-  | 'measurement-added'
-  | 'viewport-changed'
-  | 'error';
+  | "ready"
+  | "status"
+  | "study-opened"
+  | "study-closed"
+  | "series-selected"
+  | "measurement-added"
+  | "viewport-changed"
+  | "error";
 
 interface BridgeMessage {
   type: `ohif-bridge:${BridgeEventType}`;
@@ -23,34 +23,34 @@ interface BridgeOptions {
 }
 
 export class OhifBridge {
-  private iframeRef: BridgeOptions['iframeRef'];
+  private iframeRef: BridgeOptions["iframeRef"];
   private handlers: Map<BridgeEventType, Set<(...args: unknown[]) => void>> = new Map();
   private ready = false;
 
   constructor(private opts: BridgeOptions) {
     this.iframeRef = opts.iframeRef;
-    if (opts.onReady) this.on('ready', opts.onReady);
-    if (opts.onStudyOpened) this.on('study-opened', opts.onStudyOpened);
-    if (opts.onStudyClosed) this.on('study-closed', opts.onStudyClosed);
-    if (opts.onSeriesSelected) this.on('series-selected', opts.onSeriesSelected);
-    if (opts.onError) this.on('error', opts.onError);
+    if (opts.onReady) this.on("ready", opts.onReady);
+    if (opts.onStudyOpened) this.on("study-opened", opts.onStudyOpened);
+    if (opts.onStudyClosed) this.on("study-closed", opts.onStudyClosed);
+    if (opts.onSeriesSelected) this.on("series-selected", opts.onSeriesSelected);
+    if (opts.onError) this.on("error", opts.onError);
     this.listen();
   }
 
   private listen() {
-    window.addEventListener('message', (event: MessageEvent<BridgeMessage>) => {
+    window.addEventListener("message", (event: MessageEvent<BridgeMessage>) => {
       const { type, ...payload } = event.data || {};
-      if (!type || !type.startsWith('ohif-bridge:')) return;
+      if (!type || !type.startsWith("ohif-bridge:")) return;
 
-      const eventType = type.replace('ohif-bridge:', '') as BridgeEventType;
+      const eventType = type.replace("ohif-bridge:", "") as BridgeEventType;
 
-      if (eventType === 'ready') {
+      if (eventType === "ready") {
         this.ready = true;
       }
 
       const handlers = this.handlers.get(eventType);
       if (handlers) {
-        handlers.forEach(fn => fn(payload));
+        handlers.forEach((fn) => fn(payload));
       }
     });
   }
@@ -69,33 +69,28 @@ export class OhifBridge {
   private postMessage(type: string, payload: Record<string, unknown> = {}) {
     const iframe = this.iframeRef.current;
     if (!iframe?.contentWindow) {
-      console.warn('[OhifBridge] iframe not available');
+      console.warn("[OhifBridge] iframe not available");
       return;
     }
-    iframe.contentWindow.postMessage(
-      { type: `ohif-bridge:${type}`, ...payload },
-      '*',
-    );
+    iframe.contentWindow.postMessage({ type: `ohif-bridge:${type}`, ...payload }, "*");
   }
 
   openStudy(studyInstanceUids: string | string[]) {
-    this.postMessage('open-study', {
-      studyInstanceUids: Array.isArray(studyInstanceUids)
-        ? studyInstanceUids
-        : [studyInstanceUids],
+    this.postMessage("open-study", {
+      studyInstanceUids: Array.isArray(studyInstanceUids) ? studyInstanceUids : [studyInstanceUids],
     });
   }
 
   setTool(toolName: string) {
-    this.postMessage('set-tool', { toolName });
+    this.postMessage("set-tool", { toolName });
   }
 
   getStatus() {
-    this.postMessage('get-status');
+    this.postMessage("get-status");
   }
 
   setSegmentationVisibility(segmentationId: string, visible: boolean) {
-    this.postMessage('set-segmentation-visibility', {
+    this.postMessage("set-segmentation-visibility", {
       segmentationId,
       visible,
     });

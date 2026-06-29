@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Brain,
   Target,
@@ -12,22 +12,48 @@ import {
   Plus,
   MessageSquare,
 } from "lucide-react";
-import type { AnalysisResult } from "@/lib/exam-api";
-import { runAIAnalysis, generateReport } from "@/lib/exam-api";
+import type { AnalysisResult, DoctorNote } from "@/lib/exam-api";
+import { runAIAnalysis, generateReport, fetchDoctorNotes, createDoctorNote } from "@/lib/exam-api";
 
 interface AIPanelProps {
   studyInstanceUid?: string;
+  seriesInstanceUid?: string;
   patientId?: string;
 }
 
-export function AIPanel({ studyInstanceUid, patientId }: AIPanelProps) {
+export function AIPanel({ studyInstanceUid, seriesInstanceUid, patientId }: AIPanelProps) {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reportText, setReportText] = useState<string | null>(null);
   const [generatingReport, setGeneratingReport] = useState(false);
-  const [notes, setNotes] = useState<string[]>([]);
   const [noteInput, setNoteInput] = useState("");
+  const [eyeRight, setEyeRight] = useState(false);
+  const [eyeLeft, setEyeLeft] = useState(false);
+  const [doctorNotes, setDoctorNotes] = useState<DoctorNote[]>([]);
+  const [loadingNotes, setLoadingNotes] = useState(false);
+  const [savingNote, setSavingNote] = useState(false);
+  const [notesError, setNotesError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!seriesInstanceUid) return;
+    let cancelled = false;
+    setLoadingNotes(true);
+    setNotesError(null);
+    fetchDoctorNotes(seriesInstanceUid)
+      .then((data) => {
+        if (!cancelled) setDoctorNotes(data);
+      })
+      .catch((e) => {
+        if (!cancelled) setNotesError(e instanceof Error ? e.message : "Erreur de chargement");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingNotes(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [seriesInstanceUid]);
 
   async function handleRunAnalysis() {
     if (!studyInstanceUid) return;
@@ -58,11 +84,31 @@ export function AIPanel({ studyInstanceUid, patientId }: AIPanelProps) {
     }
   }
 
-  function handleAddNote() {
+  async function handleAddNote() {
     const trimmed = noteInput.trim();
     if (!trimmed) return;
-    setNotes((prev) => [...prev, trimmed]);
-    setNoteInput("");
+    if (!seriesInstanceUid) {
+      setNotesError("Aucune série DICOM disponible.");
+      return;
+    }
+    if (!eyeRight && !eyeLeft) {
+      setNotesError("Veuillez sélectionner au moins un œil.");
+      return;
+    }
+    const eye = eyeRight && eyeLeft ? "both" : eyeRight ? "right" : "left";
+    setSavingNote(true);
+    setNotesError(null);
+    try {
+      const note = await createDoctorNote(seriesInstanceUid, trimmed, eye);
+      setDoctorNotes((prev) => [...prev, note]);
+      setNoteInput("");
+      setEyeRight(false);
+      setEyeLeft(false);
+    } catch (e) {
+      setNotesError(e instanceof Error ? e.message : "Échec de l'enregistrement.");
+    } finally {
+      setSavingNote(false);
+    }
   }
 
   const hasAnalysis = !!analysis;
@@ -297,37 +343,111 @@ export function AIPanel({ studyInstanceUid, patientId }: AIPanelProps) {
         <section className="space-y-3 pt-4 border-t border-slate-700">
           <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
             <MessageSquare className="h-3.5 w-3.5 text-blue-400" />
-            Notes
+            Note Médecin
           </h3>
-          <div className="flex gap-2">
-            <textarea
-              value={noteInput}
-              onChange={(e) => setNoteInput(e.target.value)}
-              placeholder="Add a note…"
-              className="flex-1 rounded-md border border-slate-700 bg-[#121936] px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none"
-              rows={2}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleAddNote();
-                }
-              }}
-            />
-            <button
-              onClick={handleAddNote}
-              disabled={!noteInput.trim()}
-              className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition shrink-0 self-end"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Ajouter
-            </button>
-          </div>
-          {notes.length > 0 && (
-            <ul className="space-y-1.5">
-              {notes.map((note, i) => (
-                <li key={i} className="flex items-start gap-2 text-xs text-slate-300">
-                  <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />
-                  <span>{note}</span>
+
+          {notesError && (
+            <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/30 p-3 text-xs text-red-300">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>{notesError}</span>
+            </div>
+          )}
+
+          {seriesInstanceUid && (
+            <>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={eyeRight}
+                    onChange={(e) => setEyeRight(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-600 bg-[#121936] text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+                  />
+                  Œil droit
+                </label>
+                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={eyeLeft}
+                    onChange={(e) => setEyeLeft(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-600 bg-[#121936] text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+                  />
+                  Œil gauche
+                </label>
+              </div>
+
+              <div className="flex gap-2">
+                <textarea
+                  value={noteInput}
+                  onChange={(e) => setNoteInput(e.target.value)}
+                  placeholder="Écrire une note…"
+                  className="flex-1 rounded-md border border-slate-700 bg-[#121936] px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none"
+                  rows={2}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleAddNote();
+                    }
+                  }}
+                />
+                <button
+                  onClick={handleAddNote}
+                  disabled={!noteInput.trim() || savingNote}
+                  className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition shrink-0 self-end"
+                >
+                  {savingNote ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Plus className="h-3.5 w-3.5" />
+                  )}
+                  {savingNote ? "Enregistrement…" : "Ajouter"}
+                </button>
+              </div>
+            </>
+          )}
+
+          {!seriesInstanceUid && (
+            <p className="text-xs text-slate-500">Aucune série DICOM disponible pour les notes.</p>
+          )}
+
+          {loadingNotes && (
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Chargement des notes…
+            </div>
+          )}
+
+          {doctorNotes.length > 0 && (
+            <ul className="space-y-2">
+              {doctorNotes.map((note) => (
+                <li key={note.id} className="rounded-lg bg-[#121936] border border-slate-700 p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span
+                      className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${
+                        note.eye === "right"
+                          ? "bg-blue-500/20 text-blue-300"
+                          : note.eye === "left"
+                            ? "bg-purple-500/20 text-purple-300"
+                            : "bg-emerald-500/20 text-emerald-300"
+                      }`}
+                    >
+                      {note.eye === "right"
+                        ? "Œil droit"
+                        : note.eye === "left"
+                          ? "Œil gauche"
+                          : "Les deux"}
+                    </span>
+                    <span className="text-[10px] text-slate-500">
+                      {note.user_name && <span className="mr-2">{note.user_name}</span>}
+                      {new Date(note.created_at).toLocaleDateString("fr-FR", {
+                        day: "numeric",
+                        month: "short",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 whitespace-pre-wrap">{note.text}</p>
                 </li>
               ))}
             </ul>

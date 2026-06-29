@@ -269,3 +269,48 @@ export async function syncWithOrthanc(): Promise<{
   }
   return res.json();
 }
+
+export interface DoctorNote {
+  id: number;
+  series_instance_uid: string;
+  user: number | null;
+  user_name: string | null;
+  eye: "right" | "left" | "both";
+  text: string;
+  created_at: string;
+}
+
+export async function fetchDoctorNotes(seriesInstanceUid: string): Promise<DoctorNote[]> {
+  const res = await fetch(
+    `${BASE}/doctor-notes/?series_instance_uid=${encodeURIComponent(seriesInstanceUid)}`,
+    { headers: getHeaders() },
+  );
+  if (!res.ok) {
+    if (res.status === 401) throw new Error("Veuillez vous reconnecter.");
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Échec du chargement des notes.");
+  }
+  return res.json();
+}
+
+export async function createDoctorNote(
+  seriesInstanceUid: string,
+  text: string,
+  eye: string,
+): Promise<DoctorNote> {
+  const res = await fetch(`${BASE}/doctor-notes/`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({
+      series_instance_uid: seriesInstanceUid,
+      text,
+      eye,
+    }),
+  });
+  if (!res.ok) {
+    if (res.status === 401) throw new Error("Veuillez vous reconnecter.");
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Échec de l'enregistrement de la note.");
+  }
+  return res.json();
+}

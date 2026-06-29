@@ -1,6 +1,14 @@
 /** Modal — Admin crée Chef de Service, Médecin (ophtalmologue) ou Résident. */
 import { useState } from "react";
-import { X, UserPlus, Stethoscope, GraduationCap, Briefcase, CheckCircle2, ShieldCheck } from "lucide-react";
+import {
+  X,
+  UserPlus,
+  Stethoscope,
+  GraduationCap,
+  Briefcase,
+  CheckCircle2,
+  ShieldCheck,
+} from "lucide-react";
 import { useAuth, type Role } from "@/lib/auth-context";
 
 type CreatableRole = Extract<Role, "Admin" | "Chef" | "Medecin" | "Resident">;
@@ -37,7 +45,14 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
     setIsLoading(false);
     if (res.ok) {
       setFeedback({ ok: true, msg: `${form.firstName} ${form.lastName} ajouté(e) avec succès.` });
-      setForm({ firstName: "", lastName: "", email: "", specialty: "", phone: "", password: Math.random().toString(36).slice(-8) });
+      setForm({
+        firstName: "",
+        lastName: "",
+        email: "",
+        specialty: "",
+        phone: "",
+        password: Math.random().toString(36).slice(-8),
+      });
     } else {
       setFeedback({ ok: false, msg: res.error ?? "Erreur lors de la création" });
     }
@@ -63,7 +78,10 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
           <div>
             <label className="mb-2 block text-xs font-medium text-slate-600">Rôle</label>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {(user?.role === "Admin" ? ROLE_OPTIONS : ROLE_OPTIONS.filter(r => r.value === "Medecin" || r.value === "Resident")).map((opt) => {
+              {(user?.role === "Admin"
+                ? ROLE_OPTIONS
+                : ROLE_OPTIONS.filter((r) => r.value === "Medecin" || r.value === "Resident")
+              ).map((opt) => {
                 const Icon = opt.icon;
                 const active = role === opt.value;
                 return (
@@ -86,12 +104,29 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Prénom" value={form.firstName} onChange={(v) => setForm({ ...form, firstName: v })} />
-            <Field label="Nom" value={form.lastName} onChange={(v) => setForm({ ...form, lastName: v })} />
+            <Field
+              label="Prénom"
+              value={form.firstName}
+              onChange={(v) => setForm({ ...form, firstName: v })}
+            />
+            <Field
+              label="Nom"
+              value={form.lastName}
+              onChange={(v) => setForm({ ...form, lastName: v })}
+            />
           </div>
-          <Field label="Email" type="email" value={form.email} onChange={(v) => setForm({ ...form, email: v })} />
+          <Field
+            label="Email"
+            type="email"
+            value={form.email}
+            onChange={(v) => setForm({ ...form, email: v })}
+          />
 
-          <Field label="Téléphone" value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} />
+          <Field
+            label="Téléphone"
+            value={form.phone}
+            onChange={(v) => setForm({ ...form, phone: v })}
+          />
           <Field
             label="Mot de passe provisoire"
             value={form.password}
@@ -119,7 +154,10 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
             >
               Fermer
             </button>
-            <button disabled={isLoading} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+            <button
+              disabled={isLoading}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            >
               {isLoading ? "Création en cours..." : "Créer le compte"}
             </button>
           </div>

@@ -1,6 +1,7 @@
 import io
 import os
 import json
+import threading
 from datetime import datetime
 
 import torch
@@ -187,12 +188,6 @@ def report_text_to_html(text: str) -> str:
             parts.append(f"<p>{line}</p>")
     if in_list:
         parts.append("</ul>")
-    disclaimer = (
-        "<hr><p><em>Ce rapport est généré automatiquement par intelligence artificielle "
-        "(VOLMO-2B + MONAI Label). Il ne constitue pas un diagnostic médical et doit être "
-        "validé par un ophtalmologue qualifié avant toute décision clinique.</em></p>"
-    )
-    parts.append(disclaimer)
     return "\n".join(parts)
 
 
@@ -302,7 +297,7 @@ Précisez le stade de sévérité de la pathologie selon les classifications en 
 Proposez des recommandations cliniques claires et hiérarchisées (surveillance, consultation spécialisée, examens complémentaires, délai de suivi, contrôle des facteurs de risque systémiques).
 
 ## Limitations
-Précisez que ce rapport est généré par intelligence artificielle (VOLMO-2B + MONAI Label) et doit être validé par un ophtalmologue qualifié avant toute décision clinique.
+Décrivez les limites de l'examen et de l'analyse automatisée (qualité de l'image, artifacts, champ de vision, fiabilité des mesures quantitatives selon la qualité du cliché).
 
 Rédigez l'intégralité du rapport en français médical professionnel."""
 
@@ -314,6 +309,11 @@ Rédigez l'intégralité du rapport en français médical professionnel."""
 
 
 volmo = VolmoEngine()
+
+
+@app.on_event("startup")
+def _warmup_volmo():
+    threading.Thread(target=volmo.load, daemon=True).start()
 
 
 # ---------------------------------------------------------

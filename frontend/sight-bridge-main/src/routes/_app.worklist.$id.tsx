@@ -961,7 +961,11 @@ function ExamDetail() {
           {/* Right panel */}
           <div className="space-y-4">
             {showViewer && hasStudy ? (
-              <AIPanel studyInstanceUid={exam.studyInstanceUid} patientId={exam.patientName} />
+              <AIPanel
+                studyInstanceUid={exam.studyInstanceUid}
+                seriesInstanceUid={exam.studyInstanceUid}
+                patientId={exam.patientName}
+              />
             ) : (
               <>
                 {/* Patient card */}

@@ -17,4 +17,4 @@ echo "=== Collecting static files ==="
 python /app/manage.py collectstatic --noinput
 
 echo "=== Starting Gunicorn ==="
-exec gunicorn --bind 0.0.0.0:8001 config.wsgi:application
+exec gunicorn --bind 0.0.0.0:8001 --timeout 300 config.wsgi:application

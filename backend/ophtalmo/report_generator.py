@@ -41,7 +41,7 @@ Regles:
 - Sois precis dans les descriptions quantitatives
 - Indique clairement le niveau de confiance des predictions
 - Inclus systematiquement une section 'Interprétation Clinique' et 'Recommandations'
-- Termine par une section 'Limitations' qui precise que le rapport est genere par IA"""
+- Termine par une section 'Limitations' qui mentionne les limites de l'examen et de l'analyse automatisee"""
 
 
 def _format_classification(data: dict) -> str:
@@ -159,13 +159,6 @@ def _build_html_from_sections(sections: list) -> str:
                     parts.append(f"<li>{item}</li>")
                 parts.append("</ul>")
 
-    disclaimer = (
-        "<hr>"
-        "<p><em>Ce rapport est genere automatiquement par intelligence artificielle (Nemotron via OpenRouter). "
-        "Il ne constitue pas un diagnostic medical et doit etre valide par un "
-        "ophtalmologue qualifie avant toute decision clinique.</em></p>"
-    )
-    parts.append(disclaimer)
     return "\n".join(parts)
 
 

@@ -860,34 +860,111 @@ def list_analysis_reports(request):
 
 
 @api_view(['POST'])
-@authentication_classes([KeycloakAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def generate_report(request):
     report_data = request.data.get('report_data')
     patient_id = request.data.get('patient_id', 'inconnu')
+    series_uid = request.data.get('series_uid')
     if not report_data:
         return Response(
             {'error': 'report_data is required'},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    try:
-        api_key = os.environ.get('OPENROUTER_API_KEY')
-        if not api_key:
-            return Response(
-                {'error': 'OPENROUTER_API_KEY not configured'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+
+    REPORT_GENERATOR_URL = os.environ.get(
+        'REPORT_GENERATOR_URL', 'http://report-generator:8010'
+    )
+
+    # Primary path: VOLMO-2B full pipeline (image + MONAI data)
+    if series_uid:
+        try:
+            # Resolve Orthanc internal ID from SeriesInstanceUID
+            find_resp = requests.post(
+                f'{ORTHANC_URL}/tools/find',
+                json={"Level": "Series", "Query": {"SeriesInstanceUID": series_uid}},
+                timeout=10,
             )
-        generator = ReportGenerator(api_key=api_key)
-        result = generator.generate_report(
-            report_data=report_data,
-            patient_id=patient_id,
+            if find_resp.status_code == 200 and find_resp.json():
+                orthanc_series_id = find_resp.json()[0]
+                series_detail = requests.get(
+                    f'{ORTHANC_URL}/series/{orthanc_series_id}', timeout=10
+                )
+                if series_detail.status_code == 200:
+                    instances = series_detail.json().get('Instances', [])
+                    if instances:
+                        # Fetch rendered fundus image from Orthanc
+                        first_instance_id = instances[0]
+                        image_resp = requests.get(
+                            f'{ORTHANC_URL}/instances/{first_instance_id}/rendered',
+                            timeout=30,
+                        )
+                        if image_resp.status_code == 200:
+                            # Forward to VOLMO-2B: image + MONAI data
+                            volmo_resp = requests.post(
+                                f'{REPORT_GENERATOR_URL}/generate',
+                                files={'file': ('fundus.png', image_resp.content, 'image/png')},
+                                data={
+                                    'patient_id': patient_id,
+                                    'monai_data': json.dumps(report_data),
+                                },
+                                timeout=600,
+                            )
+                            if volmo_resp.status_code == 200:
+                                result = volmo_resp.json()
+                                return Response({
+                                    'report_text': result.get('report_text', ''),
+                                    'report_html': result.get('report_html', ''),
+                                    'report_json': {
+                                        'report_engine': 'volmo-chat',
+                                    },
+                                })
+                            logger.warning(
+                                f"VOLMO-2B /generate returned {volmo_resp.status_code}"
+                            )
+        except Exception as e:
+            logger.warning(f"VOLMO-2B image pipeline failed: {e}")
+            # Fall through to local fallback
+
+    # Fallback: local deterministic report via the VOLMO-2B service (/report endpoint)
+    try:
+        fallback_resp = requests.post(
+            f'{REPORT_GENERATOR_URL}/report',
+            json={'patient_id': patient_id, 'report_data': report_data},
+            timeout=60,
         )
-        return Response({
-            'report_text': result['report_text'],
-            'report_html': result['report_html'],
-            'report_json': result['report_json'],
-        })
-    except RuntimeError as e:
+        if fallback_resp.status_code == 200:
+            result = fallback_resp.json()
+            report = result.get('report', {})
+            return Response({
+                'report_text': report.get('report_text', ''),
+                'report_html': report.get('report_html', ''),
+                'report_json': report.get('report_json', {
+                    'report_engine': 'local-formatter',
+                }),
+            })
+        else:
+            raise RuntimeError(
+                f"Report generator service returned {fallback_resp.status_code}"
+            )
+    except requests.exceptions.ConnectionError:
+        # Last resort: use the built-in OpenRouter-based generator
+        api_key = os.environ.get('OPENROUTER_API_KEY')
+        if api_key:
+            generator = ReportGenerator(api_key=api_key)
+            result = generator.generate_report(
+                report_data=report_data,
+                patient_id=patient_id,
+            )
+            return Response({
+                'report_text': result['report_text'],
+                'report_html': result['report_html'],
+                'report_json': result['report_json'],
+            })
+        return Response(
+            {'error': 'Report generator service unreachable and no OPENROUTER_API_KEY configured'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    except Exception as e:
         return Response(
             {'error': str(e)},
             status=status.HTTP_502_BAD_GATEWAY,

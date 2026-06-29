@@ -14,14 +14,14 @@ export function Pagination({ currentPage, totalPages, onPageChange }: Pagination
     }
 
     if (current <= 4) {
-      return [1, 2, 3, 4, 5, '...', total];
+      return [1, 2, 3, 4, 5, "...", total];
     }
 
     if (current >= total - 3) {
-      return [1, '...', total - 4, total - 3, total - 2, total - 1, total];
+      return [1, "...", total - 4, total - 3, total - 2, total - 1, total];
     }
 
-    return [1, '...', current - 1, current, current + 1, '...', total];
+    return [1, "...", current - 1, current, current + 1, "...", total];
   };
 
   const visiblePages = getVisiblePages(currentPage, totalPagesCount);
@@ -55,7 +55,10 @@ export function Pagination({ currentPage, totalPages, onPageChange }: Pagination
           </p>
         </div>
         <div>
-          <nav className="isolate inline-flex -space-x-px rounded-lg shadow-sm bg-slate-50 p-1" aria-label="Pagination">
+          <nav
+            className="isolate inline-flex -space-x-px rounded-lg shadow-sm bg-slate-50 p-1"
+            aria-label="Pagination"
+          >
             <button
               disabled={currentPage === 1}
               onClick={() => onPageChange(currentPage - 1)}
@@ -64,8 +67,8 @@ export function Pagination({ currentPage, totalPages, onPageChange }: Pagination
               <span className="sr-only">Précédent</span>
               <ChevronLeft className="h-4 w-4" />
             </button>
-            {visiblePages.map((p, idx) => (
-              p === '...' ? (
+            {visiblePages.map((p, idx) =>
+              p === "..." ? (
                 <span
                   key={`ellipsis-${idx}`}
                   className="relative inline-flex items-center px-3 py-1.5 text-sm font-semibold text-slate-600 mx-0.5"
@@ -84,8 +87,8 @@ export function Pagination({ currentPage, totalPages, onPageChange }: Pagination
                 >
                   {p}
                 </button>
-              )
-            ))}
+              ),
+            )}
             <button
               disabled={currentPage === totalPagesCount}
               onClick={() => onPageChange(currentPage + 1)}

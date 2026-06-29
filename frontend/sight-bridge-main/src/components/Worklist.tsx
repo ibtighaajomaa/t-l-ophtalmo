@@ -1,7 +1,21 @@
 import { useMemo, useState, useEffect, useCallback } from "react";
-import { Filter, Search, MonitorPlay, RefreshCw, Clock, Loader2, CheckCircle2, Calendar } from "lucide-react";
+import {
+  Filter,
+  Search,
+  MonitorPlay,
+  RefreshCw,
+  Clock,
+  Loader2,
+  CheckCircle2,
+  Calendar,
+} from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { fetchExams, updateExam as apiUpdateExam, getExamStats, syncWithOrthanc } from "@/lib/exam-api";
+import {
+  fetchExams,
+  updateExam as apiUpdateExam,
+  getExamStats,
+  syncWithOrthanc,
+} from "@/lib/exam-api";
 import type { Exam, ExamStatus } from "@/lib/mock-worklist";
 import { Pagination } from "@/components/Pagination";
 
@@ -38,7 +52,14 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
     setLoading(true);
     setError(null);
     try {
-      console.log("[Worklist] Fetching exams...", { statusFilter, query, regionFilter, doctorFilter, filterDate, page });
+      console.log("[Worklist] Fetching exams...", {
+        statusFilter,
+        query,
+        regionFilter,
+        doctorFilter,
+        filterDate,
+        page,
+      });
       const result = await fetchExams({
         status: statusFilter === "Tous" ? undefined : statusFilter,
         q: query || undefined,
@@ -51,7 +72,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
       console.log("[Worklist] Exams received:", result);
       setExams(result.exams);
       setTotal(result.total);
-      
+
       const statsData = await getExamStats({
         q: query || undefined,
         region: regionFilter || undefined,
@@ -82,7 +103,9 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
     setSyncing(true);
     try {
       const result = await syncWithOrthanc();
-      alert(`Synchronisation terminée : ${result.created} créé(s), ${result.updated} mis à jour, ${result.errors} erreur(s)`);
+      alert(
+        `Synchronisation terminée : ${result.created} créé(s), ${result.updated} mis à jour, ${result.errors} erreur(s)`,
+      );
       loadExams();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Erreur de synchronisation";
@@ -95,9 +118,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
   const handleStatusChange = async (examId: string, newStatus: ExamStatus) => {
     try {
       await apiUpdateExam(examId, { status: newStatus });
-      setExams((prev) =>
-        prev.map((e) => (e.id === examId ? { ...e, status: newStatus } : e)),
-      );
+      setExams((prev) => prev.map((e) => (e.id === examId ? { ...e, status: newStatus } : e)));
     } catch (err) {
       console.error("Failed to update status:", err);
     }
@@ -113,11 +134,13 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
         const matchStatus = statusFilter === "Tous" || e.status === statusFilter;
         const q = query.toLowerCase();
         const matchQ =
-          !q ||
-          e.patientName.toLowerCase().includes(q) ||
-          e.id.toLowerCase().includes(q);
-        const matchRegion = !regionFilter || (e.region && e.region.toLowerCase().includes(regionFilter.toLowerCase()));
-        const matchDoctor = !doctorFilter || (e.assignedTo && e.assignedTo.toLowerCase().includes(doctorFilter.toLowerCase()));
+          !q || e.patientName.toLowerCase().includes(q) || e.id.toLowerCase().includes(q);
+        const matchRegion =
+          !regionFilter ||
+          (e.region && e.region.toLowerCase().includes(regionFilter.toLowerCase()));
+        const matchDoctor =
+          !doctorFilter ||
+          (e.assignedTo && e.assignedTo.toLowerCase().includes(doctorFilter.toLowerCase()));
         return matchStatus && matchQ && matchRegion && matchDoctor;
       }),
     [scopedExams, statusFilter, query, regionFilter, doctorFilter],
@@ -150,7 +173,10 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
             value={query}
-            onChange={(e) => { setQuery(e.target.value); setPage(1); }}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setPage(1);
+            }}
             placeholder="Rechercher patient ou ID…"
             className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-10 pr-3 text-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
           />
@@ -158,7 +184,10 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
         <div className="flex-1 max-w-xs">
           <input
             value={regionFilter}
-            onChange={(e) => { setRegionFilter(e.target.value); setPage(1); }}
+            onChange={(e) => {
+              setRegionFilter(e.target.value);
+              setPage(1);
+            }}
             placeholder="Filtrer par région…"
             className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
           />
@@ -166,7 +195,10 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
         <div className="flex-1 max-w-xs">
           <input
             value={doctorFilter}
-            onChange={(e) => { setDoctorFilter(e.target.value); setPage(1); }}
+            onChange={(e) => {
+              setDoctorFilter(e.target.value);
+              setPage(1);
+            }}
             placeholder="Filtrer par médecin assigné…"
             className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
           />
@@ -176,7 +208,10 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
           {(["Tous", "En attente", "En cours", "Interprété"] as const).map((s) => (
             <button
               key={s}
-              onClick={() => { setStatusFilter(s); setPage(1); }}
+              onClick={() => {
+                setStatusFilter(s);
+                setPage(1);
+              }}
               className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
                 statusFilter === s
                   ? "bg-blue-600 text-white"
@@ -192,7 +227,10 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
           <input
             type="date"
             value={filterDate}
-            onChange={(e) => { setFilterDate(e.target.value); setPage(1); }}
+            onChange={(e) => {
+              setFilterDate(e.target.value);
+              setPage(1);
+            }}
             className="rounded-lg border border-slate-200 bg-white py-1.5 px-3 text-sm text-slate-600 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-100"
           />
         </div>
@@ -232,86 +270,85 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                 </tr>
               ) : (
                 paginatedExams.map((exam) => {
-                  const isOldDoctor = user && exam.reassignedFromName === `Dr. ${user.firstName} ${user.lastName}`;
-                  const rowClass = exam.isReassigned24h 
-                    ? "bg-red-50/50 hover:bg-red-100/50" 
+                  const isOldDoctor =
+                    user && exam.reassignedFromName === `Dr. ${user.firstName} ${user.lastName}`;
+                  const rowClass = exam.isReassigned24h
+                    ? "bg-red-50/50 hover:bg-red-100/50"
                     : "hover:bg-slate-50/60";
-                  
+
                   return (
-                  <tr key={exam.id} className={rowClass}>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-500">
-                      {exam.id}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-slate-900">{exam.patientName}</div>
-                      <div className="text-xs text-slate-500">{exam.patientAge} ans</div>
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">{exam.type}</td>
-                    <td className="px-4 py-3 text-slate-600">{exam.date}</td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
-                          exam.priority === "Urgent"
-                            ? "bg-red-50 text-red-700 ring-1 ring-red-200"
-                            : "bg-slate-100 text-slate-600"
-                        }`}
-                      >
-                        {exam.priority === "Urgent" && (
-                          <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-                        )}
-                        {exam.priority}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">{exam.region || "—"}</td>
-                    <td className="px-4 py-3">
-                      {isOldDoctor && exam.isReassigned24h ? (
-                        <span className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 bg-red-100 text-red-700 ring-red-200">
-                          Retiré et réassigné
-                        </span>
-                      ) : (
+                    <tr key={exam.id} className={rowClass}>
+                      <td className="px-4 py-3 font-mono text-xs text-slate-500">{exam.id}</td>
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-slate-900">{exam.patientName}</div>
+                        <div className="text-xs text-slate-500">{exam.patientAge} ans</div>
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">{exam.type}</td>
+                      <td className="px-4 py-3 text-slate-600">{exam.date}</td>
+                      <td className="px-4 py-3">
                         <span
-                          className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${STATUS_STYLES[exam.status]}`}
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+                            exam.priority === "Urgent"
+                              ? "bg-red-50 text-red-700 ring-1 ring-red-200"
+                              : "bg-slate-100 text-slate-600"
+                          }`}
                         >
-                          {exam.status}
-                        </span>
-                      )}
-                      {exam.isReassigned24h && !isOldDoctor && (
-                        <div className="mt-1 text-[10px] text-red-600 font-medium">
-                          ⚠️ Réassigné (retard 24h)
-                        </div>
-                      )}
-                    </td>
-                    {showAssignedTo && (
-                      <td className="px-4 py-3 text-slate-700">
-                        <span className="text-sm">
-                          {exam.assignedTo ?? (
-                            <span className="text-slate-400 italic">Non assigné</span>
+                          {exam.priority === "Urgent" && (
+                            <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
                           )}
+                          {exam.priority}
                         </span>
-                        {exam.isReassigned24h && exam.reassignedFromName && (
-                          <div className="text-[10px] text-red-500 mt-0.5">
-                            Retiré à : {exam.reassignedFromName}
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">{exam.region || "—"}</td>
+                      <td className="px-4 py-3">
+                        {isOldDoctor && exam.isReassigned24h ? (
+                          <span className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 bg-red-100 text-red-700 ring-red-200">
+                            Retiré et réassigné
+                          </span>
+                        ) : (
+                          <span
+                            className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${STATUS_STYLES[exam.status]}`}
+                          >
+                            {exam.status}
+                          </span>
+                        )}
+                        {exam.isReassigned24h && !isOldDoctor && (
+                          <div className="mt-1 text-[10px] text-red-600 font-medium">
+                            ⚠️ Réassigné (retard 24h)
                           </div>
                         )}
                       </td>
-                    )}
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        {exam.studyInstanceUid && (
-                          <a
-                            href="/ohif/"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 transition"
-                          >
-                            <MonitorPlay className="h-3.5 w-3.5" /> Visualiser
-                          </a>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
+                      {showAssignedTo && (
+                        <td className="px-4 py-3 text-slate-700">
+                          <span className="text-sm">
+                            {exam.assignedTo ?? (
+                              <span className="text-slate-400 italic">Non assigné</span>
+                            )}
+                          </span>
+                          {exam.isReassigned24h && exam.reassignedFromName && (
+                            <div className="text-[10px] text-red-500 mt-0.5">
+                              Retiré à : {exam.reassignedFromName}
+                            </div>
+                          )}
+                        </td>
+                      )}
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {exam.studyInstanceUid && (
+                            <a
+                              href="/ohif/"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 transition"
+                            >
+                              <MonitorPlay className="h-3.5 w-3.5" /> Visualiser
+                            </a>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
               {!loading && filtered.length === 0 && (
                 <tr>
@@ -323,11 +360,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
             </tbody>
           </table>
         </div>
-        <Pagination
-          currentPage={page}
-          totalPages={Math.ceil(total / 10)}
-          onPageChange={setPage}
-        />
+        <Pagination currentPage={page} totalPages={Math.ceil(total / 10)} onPageChange={setPage} />
       </div>
     </div>
   );
@@ -345,13 +378,25 @@ function StatPill({
   color: "orange" | "blue" | "green";
 }) {
   const map = {
-    orange: { bg: "bg-orange-50", text: "text-orange-700", ring: "ring-orange-200", icon: "text-orange-500" },
+    orange: {
+      bg: "bg-orange-50",
+      text: "text-orange-700",
+      ring: "ring-orange-200",
+      icon: "text-orange-500",
+    },
     blue: { bg: "bg-blue-50", text: "text-blue-700", ring: "ring-blue-200", icon: "text-blue-500" },
-    green: { bg: "bg-green-50", text: "text-green-700", ring: "ring-green-200", icon: "text-green-500" },
+    green: {
+      bg: "bg-green-50",
+      text: "text-green-700",
+      ring: "ring-green-200",
+      icon: "text-green-500",
+    },
   } as const;
   const c = map[color];
   return (
-    <div className={`flex items-center justify-between rounded-xl ${c.bg} ring-1 ${c.ring} px-4 py-3`}>
+    <div
+      className={`flex items-center justify-between rounded-xl ${c.bg} ring-1 ${c.ring} px-4 py-3`}
+    >
       <div>
         <div className={`text-xs font-medium uppercase tracking-wide ${c.text}`}>{label}</div>
         <div className={`mt-1 text-2xl font-bold ${c.text}`}>{value}</div>

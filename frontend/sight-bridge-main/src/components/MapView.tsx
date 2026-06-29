@@ -34,12 +34,12 @@ export default function MapView({
   regions,
   selectedRegionId,
   setSelectedRegionId,
-  averageInterprete
+  averageInterprete,
 }: {
-  regions: RegionData[],
-  selectedRegionId: string | null,
-  setSelectedRegionId: (id: string | null) => void,
-  averageInterprete: number
+  regions: RegionData[];
+  selectedRegionId: string | null;
+  setSelectedRegionId: (id: string | null) => void;
+  averageInterprete: number;
 }) {
   const [geoData, setGeoData] = useState<any>(null);
 
@@ -81,7 +81,9 @@ export default function MapView({
   const createCustomIcon = (interprete: number, name: string, isSelected: boolean) => {
     const isAboveAverage = interprete > averageInterprete;
     const colorClass = isAboveAverage ? "bg-green-500" : "bg-red-500";
-    const borderClass = isSelected ? "border-[3px] border-white shadow-[0_4px_12px_rgba(0,0,0,0.3)] scale-110" : "border-2 border-white shadow-[0_3px_6px_rgba(0,0,0,0.16)]";
+    const borderClass = isSelected
+      ? "border-[3px] border-white shadow-[0_4px_12px_rgba(0,0,0,0.3)] scale-110"
+      : "border-2 border-white shadow-[0_3px_6px_rgba(0,0,0,0.16)]";
 
     return L.divIcon({
       html: `
@@ -111,7 +113,7 @@ export default function MapView({
       attributionControl={false}
       maxBounds={[
         [29.5, 6.0], // Limite Sud-Ouest
-        [38.0, 13.0] // Limite Nord-Est
+        [38.0, 13.0], // Limite Nord-Est
       ]}
       maxBoundsViscosity={1.0}
       scrollWheelZoom={true}
@@ -151,7 +153,7 @@ export default function MapView({
               </div>
             `,
             className: "",
-            iconSize: [45, 45]
+            iconSize: [45, 45],
           });
         }}
       >

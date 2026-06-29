@@ -9,7 +9,6 @@ export const Route = createFileRoute("/login")({
   component: LoginPage,
 });
 
-
 function LoginPage() {
   const { login, resetPassword, user } = useAuth();
   const navigate = useNavigate();
@@ -24,10 +23,7 @@ function LoginPage() {
 
   if (user) {
     navigate({
-      to:
-        user.role === "Admin"
-          ? "/admin"
-          : "/worklist",
+      to: user.role === "Admin" ? "/admin" : "/worklist",
     });
   }
 
@@ -60,7 +56,8 @@ function LoginPage() {
     // Si la réinitialisation réussit, on connecte directement l'utilisateur
     const loginRes = await login(email, newPassword);
     setIsLoading(false);
-    if (!loginRes.ok) return setError(loginRes.error ?? "Erreur lors de la reconnexion automatique.");
+    if (!loginRes.ok)
+      return setError(loginRes.error ?? "Erreur lors de la reconnexion automatique.");
   };
 
   return (
@@ -89,7 +86,9 @@ function LoginPage() {
           <h2 className="text-2xl font-bold text-slate-900 text-center sm:text-left">
             {isForgotPassword
               ? "Mot de passe oublié"
-              : isResettingPassword ? "Nouveau mot de passe" : "Connexion"}
+              : isResettingPassword
+                ? "Nouveau mot de passe"
+                : "Connexion"}
           </h2>
           <p className="mt-1 text-sm text-slate-500">
             {isForgotPassword
@@ -213,8 +212,6 @@ function LoginPage() {
               </button>
             </form>
           )}
-
-
         </div>
       </div>
     </div>

@@ -89,11 +89,11 @@ function LogsPage() {
       const res = await fetch("/api/users/toggle-status/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email })
+        body: JSON.stringify({ email }),
       });
       const data = await res.json();
       if (res.ok) {
-        setReloadTrigger(prev => prev + 1);
+        setReloadTrigger((prev) => prev + 1);
       } else {
         alert("Erreur : " + data.error);
       }
@@ -104,17 +104,14 @@ function LogsPage() {
 
   return (
     <>
-      <Navbar
-        title="Logs"
-        subtitle="Historique des connexions et utilisateurs enregistrés"
-      />
+      <Navbar title="Logs" subtitle="Historique des connexions et utilisateurs enregistrés" />
       <div className="flex-1 p-6 space-y-6">
-
-
         {/* Historique des connexions */}
         <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-4 flex items-center justify-between gap-3">
-            <h2 className="font-semibold text-slate-900">Connexions et déconnexions (tous les jours)</h2>
+            <h2 className="font-semibold text-slate-900">
+              Connexions et déconnexions (tous les jours)
+            </h2>
             <div className="relative w-full max-w-xs">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
@@ -154,10 +151,10 @@ function LogsPage() {
                         <td className="py-3 pr-4 text-slate-600">
                           {isNaN(d.getTime()) ? "—" : d.toISOString().slice(11, 16)}
                         </td>
-                        <td className="py-3 pr-4 font-medium text-slate-900">
-                          {e.userName}
+                        <td className="py-3 pr-4 font-medium text-slate-900">{e.userName}</td>
+                        <td className="py-3 pr-4 text-slate-600">
+                          {ROLE_LABEL[e.role as Role] || e.role}
                         </td>
-                        <td className="py-3 pr-4 text-slate-600">{ROLE_LABEL[e.role as Role] || e.role}</td>
                         <td className="py-3 pr-4">
                           <span
                             className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
@@ -230,11 +227,13 @@ function LogsPage() {
                           {u.createdAt ? u.createdAt.slice(0, 10) : "—"}
                         </td>
                         <td className="py-3 pr-4">
-                          {(u.role === "Medecin" || u.role === "Resident" || u.role === "Chef") ? (
+                          {u.role === "Medecin" || u.role === "Resident" || u.role === "Chef" ? (
                             <button
                               onClick={() => handleToggleAvailability(u.email)}
                               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium transition hover:opacity-80 cursor-pointer ${
-                                u.is_disponible ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                                u.is_disponible
+                                  ? "bg-green-100 text-green-700"
+                                  : "bg-red-100 text-red-700"
                               }`}
                               title={u.is_disponible ? "Rendre Indisponible" : "Rendre Disponible"}
                             >

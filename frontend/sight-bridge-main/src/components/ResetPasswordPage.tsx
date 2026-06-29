@@ -1,16 +1,16 @@
-import React, { useState } from 'react';
-import { Route } from '../routes/reset-password';
-import { useNavigate } from '@tanstack/react-router';
-import { Lock, Eye, ShieldCheck } from 'lucide-react';
-import axios from 'axios';
-import { useAuth } from '@/lib/auth-context';
+import React, { useState } from "react";
+import { Route } from "../routes/reset-password";
+import { useNavigate } from "@tanstack/react-router";
+import { Lock, Eye, ShieldCheck } from "lucide-react";
+import axios from "axios";
+import { useAuth } from "@/lib/auth-context";
 
 export const ResetPasswordPage = () => {
   const { token } = Route.useSearch();
   const navigate = useNavigate();
   const { login } = useAuth();
-  
-  const [password, setPassword] = useState('');
+
+  const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -18,15 +18,15 @@ export const ResetPasswordPage = () => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
-    
+
     try {
-      const res = await axios.post('/api/confirm-reset/', { token, password });
+      const res = await axios.post("/api/confirm-reset/", { token, password });
       const email = res.data.email;
-      
+
       // Auto-login with the new password
       const loginRes = await login(email, password);
       setIsLoading(false);
-      
+
       if (!loginRes.ok) {
         setError(loginRes.error ?? "Erreur lors de la reconnexion automatique.");
       } else {
@@ -52,11 +52,13 @@ export const ResetPasswordPage = () => {
         </div>
         <div>
           <h1 className="text-4xl font-bold leading-tight">
-            La télé-ophtalmologie,<br />enfin fluide et sécurisée.
+            La télé-ophtalmologie,
+            <br />
+            enfin fluide et sécurisée.
           </h1>
           <p className="mt-4 max-w-md text-blue-100">
-            Centralisez les examens, collaborez entre médecins et résidents, et
-            interprétez les images à distance — depuis une plateforme unique.
+            Centralisez les examens, collaborez entre médecins et résidents, et interprétez les
+            images à distance — depuis une plateforme unique.
           </p>
           <div className="mt-8 flex items-center gap-2 text-sm text-blue-100">
             <ShieldCheck className="h-4 w-4" />
@@ -110,10 +112,10 @@ export const ResetPasswordPage = () => {
             >
               {isLoading ? "Enregistrement en cours..." : "Valider et se connecter"}
             </button>
-            
-            <button 
+
+            <button
               type="button"
-              onClick={() => navigate({ to: '/login' })}
+              onClick={() => navigate({ to: "/login" })}
               className="mt-4 w-full text-center text-sm font-medium text-blue-600 hover:underline"
             >
               Retour à la connexion

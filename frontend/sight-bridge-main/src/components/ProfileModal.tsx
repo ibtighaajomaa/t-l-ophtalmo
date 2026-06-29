@@ -4,7 +4,7 @@ import { X, Save, User } from "lucide-react";
 
 export function ProfileModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { user, updateUser } = useAuth();
-  
+
   const [form, setForm] = useState({
     firstName: "",
     lastName: "",
@@ -13,7 +13,7 @@ export function ProfileModal({ open, onClose }: { open: boolean; onClose: () => 
     password: "",
     oldPassword: "",
   });
-  
+
   const [isSaving, setIsSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
 
@@ -36,24 +36,27 @@ export function ProfileModal({ open, onClose }: { open: boolean; onClose: () => 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (form.password && !form.oldPassword) {
-      setFeedback({ ok: false, msg: "Veuillez saisir votre ancien mot de passe pour le modifier." });
+      setFeedback({
+        ok: false,
+        msg: "Veuillez saisir votre ancien mot de passe pour le modifier.",
+      });
       return;
     }
-    
+
     setIsSaving(true);
     setFeedback(null);
-    
+
     // On passe le rôle actuel pour ne pas le perdre lors de l'update
-    const res = await updateUser(user.email, { 
+    const res = await updateUser(user.email, {
       email: form.email,
       firstName: form.firstName,
       lastName: form.lastName,
       phone: form.phone,
       password: form.password || undefined,
       oldPassword: form.oldPassword || undefined,
-      role: user.role
+      role: user.role,
     });
-    
+
     setIsSaving(false);
     if (res.ok) {
       setFeedback({ ok: true, msg: "Profil mis à jour avec succès." });
@@ -85,7 +88,9 @@ export function ProfileModal({ open, onClose }: { open: boolean; onClose: () => 
 
         <form onSubmit={submit} className="p-6">
           {feedback && (
-            <div className={`mb-4 rounded-lg p-3 text-sm ${feedback.ok ? "bg-emerald-50 text-emerald-700 border border-emerald-100" : "bg-red-50 text-red-700 border border-red-100"}`}>
+            <div
+              className={`mb-4 rounded-lg p-3 text-sm ${feedback.ok ? "bg-emerald-50 text-emerald-700 border border-emerald-100" : "bg-red-50 text-red-700 border border-red-100"}`}
+            >
               {feedback.msg}
             </div>
           )}
@@ -137,7 +142,9 @@ export function ProfileModal({ open, onClose }: { open: boolean; onClose: () => 
             </div>
 
             <div className="pt-2 border-t border-slate-100">
-              <label className="mb-1 block text-sm font-medium text-slate-700">Ancien mot de passe</label>
+              <label className="mb-1 block text-sm font-medium text-slate-700">
+                Ancien mot de passe
+              </label>
               <input
                 type="password"
                 value={form.oldPassword}
@@ -148,7 +155,9 @@ export function ProfileModal({ open, onClose }: { open: boolean; onClose: () => 
             </div>
 
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">Nouveau mot de passe</label>
+              <label className="mb-1 block text-sm font-medium text-slate-700">
+                Nouveau mot de passe
+              </label>
               <input
                 type="password"
                 value={form.password}

@@ -133,14 +133,6 @@ def export_report_to_docx(report) -> io.BytesIO:
     if report.signed_at:
         doc.add_paragraph(f"Date de signature: {report.signed_at:%d/%m/%Y %H:%M}")
 
-    doc.add_paragraph("")
-    p = doc.add_paragraph()
-    p.add_run(
-        "Ce rapport est genere automatiquement par intelligence artificielle. "
-        "Il ne constitue pas un diagnostic medical et doit etre valide par un "
-        "ophtalmologue qualifie avant toute decision clinique."
-    ).italic = True
-
     _add_header_footer(doc, report.patient_id, report.pk)
 
     if report.ai_report_data:
