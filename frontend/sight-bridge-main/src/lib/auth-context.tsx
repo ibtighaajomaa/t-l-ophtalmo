@@ -462,8 +462,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return { ok: false, error: "Vous ne pouvez pas supprimer votre propre compte." };
         }
         try {
+          const token = localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
           const res = await fetch(`/api/users/delete/${id}/`, {
             method: "DELETE",
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
           });
           if (res.ok) {
             setUsers((prev) => prev.filter((u) => u.id !== id));
