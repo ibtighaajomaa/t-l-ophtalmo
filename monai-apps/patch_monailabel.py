@@ -1596,8 +1596,8 @@ if os.path.exists(DICOM_PY):
         new_dws_code = '''    # Limitation for DICOMWeb Client as it needs StudyInstanceUID to fetch series
     if not study_id:
         ### PATCH_HASH_SUFFIX ###
-        # Fix: handle hash-suffixed SeriesInstanceUID (e.g. ...UID.XYZ12345)
-        # and empty DICOMWeb search results gracefully
+        # Fix: handle hash-suffixed SeriesInstanceUID (e.g. ...UID.XYZ12345),
+        # empty DICOMWeb search results, and cross-patient collisions gracefully
         import re as _re
         search_results = client.search_for_series(search_filters={"SeriesInstanceUID": series_id})
         filtered = [
@@ -1622,6 +1622,17 @@ if os.path.exists(DICOM_PY):
         if not filtered:
             raise Exception(f"Series not found via DICOMWeb: {series_id[:60]}...")
 
+        # Handle cross-patient collisions: same SeriesInstanceUID across multiple studies
+        if len(filtered) > 1:
+            suids = [str(s.get('0020000D',{}).get('Value',['?'])[0])[:30] for s in filtered]
+            logger.warning(
+                f"DICOMWeb: {len(filtered)} studies share Series {series_id[:40]}... "
+                f"StudyInstanceUIDs: {suids[:5]}"
+            )
+            # Use the LAST result (most recently added in Orthanc ordering)
+            filtered = [filtered[-1]]
+            logger.info(f"DICOMWeb: using last StudyInstanceUID for {series_id[:40]}...")
+
         meta = Dataset.from_json(filtered[0])
         study_id = str(meta["StudyInstanceUID"].value)'''
 
@@ -1636,6 +1647,112 @@ if os.path.exists(DICOM_PY):
     else:
         patches_applied = True
         print("dicom.py: Patch 15 already applied")
+
+
+# Patch 16: Thread study_uid from infer request into DICOMWebDatastore
+# so dicom_web_download_series can filter by correct study when
+# multiple studies share the same SeriesInstanceUID.
+# Also adds cross-patient collision logging.
+if os.path.exists(DICOM_PY):
+    with open(DICOM_PY) as f:
+        content = f.read()
+
+    marker16 = "### PATCH_STUDY_HINT ###"
+    if marker16 not in content:
+        # --- DICOM_PY: Add _study_id_hint to DICOMWebDatastore ---
+        old_init = '''    def __init__(self, studies, cache_dir, client, fetch_by_frame=False, convert_to_nifti=True, search_filter=None):
+        super().__init__(studies, cache_dir, auto_reload=False)
+        self._client: DICOMwebClient = client
+        self._fetch_by_frame = fetch_by_frame
+        self._convert_to_nifti = convert_to_nifti
+        self._search_filter = search_filter or json.loads(os.environ.get("MONAI_LABEL_DICOMWEB_SEARCH_FILTER", "{}"))'''
+
+        new_init = '''    def __init__(self, studies, cache_dir, client, fetch_by_frame=False, convert_to_nifti=True, search_filter=None):
+        super().__init__(studies, cache_dir, auto_reload=False)
+        self._client: DICOMwebClient = client
+        self._fetch_by_frame = fetch_by_frame
+        self._convert_to_nifti = convert_to_nifti
+        self._search_filter = search_filter or json.loads(os.environ.get("MONAI_LABEL_DICOMWEB_SEARCH_FILTER", "{}"))
+        ### PATCH_STUDY_HINT ###
+        self._study_id_hint = None  # set by infer endpoint to disambiguate cross-patient collisions'''
+
+        if old_init in content:
+            content = content.replace(old_init, new_init)
+            with open(DICOM_PY, "w") as f:
+                f.write(content)
+            print("dicom.py: added _study_id_hint to DICOMWebDatastore")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 16A — DICOMWebDatastore __init__ pattern not found")
+
+        # --- DICOM_PY: Pass study_id_hint to dicom_web_download_series ---
+        old_get_uri = '''    def get_image_uri(self, image_id: str) -> str:
+        logger.info(f"Image ID: {image_id}")
+        image_dir = os.path.realpath(os.path.join(self._datastore.image_path(), image_id))
+        logger.info(f"Image Dir (cache): {image_dir}")
+
+        if not os.path.exists(image_dir) or not os.listdir(image_dir):
+            dicom_web_download_series(None, image_id, image_dir, self._client, self._fetch_by_frame)'''
+
+        new_get_uri = '''    def get_image_uri(self, image_id: str) -> str:
+        ### PATCH_STUDY_HINT ###
+        logger.info(f"Image ID: {image_id}")
+        image_dir = os.path.realpath(os.path.join(self._datastore.image_path(), image_id))
+        logger.info(f"Image Dir (cache): {image_dir}")
+
+        if not os.path.exists(image_dir) or not os.listdir(image_dir):
+            study_hint = getattr(self, '_study_id_hint', None)
+            if study_hint:
+                logger.info(f"Using study_id hint: {str(study_hint)[:40]}...")
+            dicom_web_download_series(study_hint, image_id, image_dir, self._client, self._fetch_by_frame)
+            # Clear hint after use
+            self._study_id_hint = None'''
+
+        if old_get_uri in content:
+            content = content.replace(old_get_uri, new_get_uri)
+            with open(DICOM_PY, "w") as f:
+                f.write(content)
+            print("dicom.py: get_image_uri uses study_id hint")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 16B — get_image_uri pattern not found in dicom.py")
+    else:
+        patches_applied = True
+        print("dicom.py: Patch 16 already applied")
+
+
+# Patch 17: Set study_id hint on datastore in infer.py before calling instance.infer()
+# The study_uid comes from the request params (p.get("study_uid") or request.get("study_uid"))
+if os.path.exists(INFER):
+    with open(INFER) as f:
+        content = f.read()
+
+    marker17 = "### PATCH_STUDY_HINT_INFER ###"
+    if marker17 not in content:
+        old_infer_call = '''    logger.info(f"Infer Request: {request}")
+    result = instance.infer(request)'''
+
+        new_infer_call = '''    ### PATCH_STUDY_HINT_INFER ###
+    logger.info(f"Infer Request: {request}")
+    # Pass study_uid as hint to DICOMWebDatastore to disambiguate
+    # cross-patient collisions when multiple studies share the same SeriesInstanceUID
+    study_uid_hint = p.get("study_uid") or request.get("study_uid")
+    ds = instance.datastore()
+    if hasattr(ds, '_study_id_hint') and study_uid_hint:
+        ds._study_id_hint = study_uid_hint
+    result = instance.infer(request)'''
+
+        if old_infer_call in content:
+            content = content.replace(old_infer_call, new_infer_call)
+            with open(INFER, "w") as f:
+                f.write(content)
+            print("infer.py: study_uid hint passed to DICOMWebDatastore before infer")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 17 — infer call pattern not found in infer.py")
+    else:
+        patches_applied = True
+        print("infer.py: Patch 17 already applied")
 
 
 if not patches_applied:
