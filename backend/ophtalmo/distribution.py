@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 MAX_CHARGE_PAR_MEDECIN = 30
 
 # Rôles éligibles pour recevoir des examens
-ROLES_MEDECIN = ['Medecin', 'Resident', 'RESIDENT']
+ROLES_MEDECIN = ['Medecin', 'Resident', 'RESIDENT', 'Chef']
 
 
 def get_medecins_disponibles():

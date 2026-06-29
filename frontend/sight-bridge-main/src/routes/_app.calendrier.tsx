@@ -68,7 +68,9 @@ function parseFrenchDate(dateStr: string): Date | null {
   }
 }
 
-const HOURS = Array.from({ length: 24 }, (_, i) => i); // 0 to 23
+const START_HOUR = 8;
+const END_HOUR = 23;
+const HOURS = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => i + START_HOUR);
 
 function CalendrierPage() {
   const { user } = useAuth();
@@ -99,6 +101,10 @@ function CalendrierPage() {
       .replace(/^(dr\.|pr|dr)\s+/i, "")
       .trim();
 
+  const getFullName = (title: string, first: string, last: string) => {
+    return `${title} ${first || ""} ${last || ""}`.trim().replace(/\s+/g, " ");
+  };
+
   const parsedPlanning = useMemo(() => {
     return MOCK_PLANNING.map((session) => {
       let parsed = parseFrenchDate(session.date);
@@ -124,6 +130,7 @@ function CalendrierPage() {
             data.sessions.map((s: any) => ({
               ...s,
               parsedDate: new Date(s.parsedDate),
+              doctorName: s.doctorName ? s.doctorName.replace(/\s+/g, " ").trim() : "",
             })),
           );
         }
@@ -151,7 +158,7 @@ function CalendrierPage() {
               u.is_disponible
             ) {
               const title = u.role === "Chef" ? "Pr" : "Dr";
-              const fullName = `${title} ${u.firstName} ${u.lastName}`;
+              const fullName = getFullName(title, u.firstName, u.lastName);
               docs.add(fullName);
               emails[fullName] = u.email;
             }
@@ -173,7 +180,7 @@ function CalendrierPage() {
       setSelectedDoctors(new Set(doctors));
     } else if (user?.firstName) {
       const title = user.role === "Chef" ? "Pr" : "Dr";
-      setSelectedDoctors(new Set([`${title} ${user.firstName} ${user.lastName}`]));
+      setSelectedDoctors(new Set([getFullName(title, user.firstName, user.lastName)]));
     } else {
       setSelectedDoctors(new Set(doctors));
     }
@@ -201,7 +208,7 @@ function CalendrierPage() {
   const goToday = () => setCurrentDate(new Date());
 
   const formatHour = (hour: number) => {
-    if (hour === 0) return "12 AM";
+    if (hour === 0 || hour === 24) return "12 AM";
     if (hour === 12) return "12 PM";
     if (hour > 12) return `${hour - 12} PM`;
     return `${hour} AM`;
@@ -398,7 +405,7 @@ function CalendrierPage() {
                           setNewSessionEndHour(Math.min(24, hour + 2));
                           const currentUserTitle = user?.role === "Chef" ? "Pr" : "Dr";
                           const currentUserFullName = user
-                            ? `${currentUserTitle} ${user.firstName} ${user.lastName}`
+                            ? getFullName(currentUserTitle, user.firstName, user.lastName)
                             : "";
                           setNewSessionDoctor(user?.role !== "Admin" ? currentUserFullName : "");
                           setNewSessionCount(1);
@@ -449,10 +456,13 @@ function CalendrierPage() {
                     });
 
                     return renderedSessions.map((session) => {
-                      const duration = Math.max(0.5, session._end - session._start);
-                      if (session._start >= 24) return null;
+                      const renderStart = Math.max(START_HOUR, session._start);
+                      const renderEnd = Math.min(END_HOUR + 1, session._end);
+                      
+                      if (renderStart >= renderEnd) return null;
 
-                      const topPos = session._start * 80;
+                      const duration = Math.max(0.5, renderEnd - renderStart);
+                      const topPos = (renderStart - START_HOUR) * 80;
                       const height = duration * 80;
                       // Use 85% of total width to always leave a 15% clickable area on the right
                       const widthPct = 85 / session._overlapCount;
@@ -475,7 +485,7 @@ function CalendrierPage() {
                             e.stopPropagation();
                             const currentUserTitle = user?.role === "Chef" ? "Pr" : "Dr";
                             const currentUserFullName = user
-                              ? `${currentUserTitle} ${user.firstName} ${user.lastName}`
+                              ? getFullName(currentUserTitle, user.firstName, user.lastName)
                               : "";
                             if (
                               user?.role !== "Admin" &&
@@ -567,7 +577,7 @@ function CalendrierPage() {
                   <SelectValue placeholder="Heure de fin" />
                 </SelectTrigger>
                 <SelectContent className="rounded-xl">
-                  {HOURS.filter((h) => h > newSessionStartHour).map((h) => (
+                  {[...HOURS, 24].filter((h) => h > newSessionStartHour).map((h) => (
                     <SelectItem key={h} value={h.toString()}>
                       {formatHour(h)}
                     </SelectItem>
@@ -675,6 +685,7 @@ function CalendrierPage() {
                           const updated = {
                             ...data.session,
                             parsedDate: new Date(data.session.parsedDate),
+                            doctorName: data.session.doctorName ? data.session.doctorName.replace(/\s+/g, " ").trim() : "",
                           };
                           setPlanning((prev) =>
                             prev.map((s) => (s.id === editingSessionId ? updated : s)),
@@ -710,6 +721,7 @@ function CalendrierPage() {
                             const newS = {
                               ...data.session,
                               parsedDate: new Date(data.session.parsedDate),
+                              doctorName: data.session.doctorName ? data.session.doctorName.replace(/\s+/g, " ").trim() : "",
                             };
                             setPlanning((prev) => [...prev, newS]);
                           } else if (data.error) {
