@@ -888,7 +888,7 @@ def generate_report(request):
                 'eye': eye,
                 'report_data': report_data,
             },
-            timeout=300,
+            timeout=600,
         )
         if llama_resp.status_code == 200:
             return Response(llama_resp.json())

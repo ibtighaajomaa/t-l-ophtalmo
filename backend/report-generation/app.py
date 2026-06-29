@@ -12,8 +12,9 @@ from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from huggingface_hub import snapshot_download
-from transformers import AutoModel, AutoTokenizer, pipeline
+from huggingface_hub import snapshot_download, hf_hub_download
+from transformers import AutoModel, AutoTokenizer
+from llama_cpp import Llama
 
 from report_generator import generate_report, _extract_json, _build_html_from_sections
 
@@ -312,24 +313,33 @@ volmo = VolmoEngine()
 
 
 # ---------------------------------------------------------
-# Lazy singleton for the LLaMA model (local text generation)
+# Lazy singleton for the LLaMA model (GGUF, CPU via llama.cpp)
 # ---------------------------------------------------------
+LLAMA_GGUF_REPO = "bartowski/Llama-3.2-3B-Instruct-GGUF"
+LLAMA_GGUF_FILE = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+
+
 class LlamaReportEngine:
     def __init__(self):
-        self.pipe = None
+        self.llm = None
 
     def load(self):
-        if self.pipe is not None:
+        if self.llm is not None:
             return
-        print("Loading LLaMA-3.2-3B-Instruct...")
-        self.pipe = pipeline(
-            "text-generation",
-            model="meta-llama/Llama-3.2-3B-Instruct",
-            torch_dtype=torch.float32,
-            device_map="cpu",
-            low_cpu_mem_usage=True,
+        print("Downloading LLaMA-3.2-3B-Instruct GGUF (Q4_K_M)...")
+        model_path = hf_hub_download(
+            repo_id=LLAMA_GGUF_REPO,
+            filename=LLAMA_GGUF_FILE,
+            cache_dir=MODEL_CACHE_DIR,
         )
-        print("LLaMA-3.2-3B-Instruct loaded on CPU")
+        print(f"Loading GGUF model from {model_path}...")
+        self.llm = Llama(
+            model_path=model_path,
+            n_ctx=4096,
+            n_threads=max(os.cpu_count() or 4, 2),
+            verbose=False,
+        )
+        print("LLaMA-3.2-3B-Instruct GGUF loaded on CPU")
 
     def generate_report(
         self,
@@ -417,13 +427,12 @@ Rédige une conclusion clinique qui synthétise le grade de rétinopathie diabé
             {"role": "user", "content": user_prompt},
         ]
 
-        outputs = self.pipe(
-            messages,
-            max_new_tokens=2048,
+        output = self.llm.create_chat_completion(
+            messages=messages,
+            max_tokens=1024,
             temperature=0.1,
-            do_sample=False,
         )
-        return outputs[0]["generated_text"][-1]["content"].strip()
+        return output["choices"][0]["message"]["content"].strip()
 
 
 llama_engine = LlamaReportEngine()

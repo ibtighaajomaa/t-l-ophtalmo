@@ -13,6 +13,7 @@ ENV DEVICE=auto
 # System deps required by Pillow / torch / transformers
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
+        cmake \
         libgl1 \
         libglib2.0-0 \
         git \
