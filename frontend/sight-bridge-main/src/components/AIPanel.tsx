@@ -9,6 +9,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   FileText,
+  Plus,
+  MessageSquare,
 } from "lucide-react";
 import type { AnalysisResult } from "@/lib/exam-api";
 import { runAIAnalysis, generateReport } from "@/lib/exam-api";
@@ -24,6 +26,8 @@ export function AIPanel({ studyInstanceUid, patientId }: AIPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [reportText, setReportText] = useState<string | null>(null);
   const [generatingReport, setGeneratingReport] = useState(false);
+  const [notes, setNotes] = useState<string[]>([]);
+  const [noteInput, setNoteInput] = useState("");
 
   async function handleRunAnalysis() {
     if (!studyInstanceUid) return;
@@ -54,6 +58,13 @@ export function AIPanel({ studyInstanceUid, patientId }: AIPanelProps) {
     }
   }
 
+  function handleAddNote() {
+    const trimmed = noteInput.trim();
+    if (!trimmed) return;
+    setNotes((prev) => [...prev, trimmed]);
+    setNoteInput("");
+  }
+
   const hasAnalysis = !!analysis;
 
   return (
@@ -63,36 +74,6 @@ export function AIPanel({ studyInstanceUid, patientId }: AIPanelProps) {
           <Brain className="h-4 w-4 text-blue-400" />
           AI Analysis Report
         </h2>
-        {studyInstanceUid && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleRunAnalysis}
-              disabled={loading || generatingReport}
-              className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition"
-            >
-              {loading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Play className="h-3.5 w-3.5" />
-              )}
-              {loading ? "Running…" : "Run AI Analysis"}
-            </button>
-            {hasAnalysis && (
-              <button
-                onClick={handleGenerateReport}
-                disabled={loading || generatingReport}
-                className="inline-flex items-center gap-1.5 rounded-md border border-blue-500 bg-transparent px-3 py-1.5 text-xs font-medium text-blue-400 hover:bg-blue-500/10 disabled:opacity-50 transition"
-              >
-                {generatingReport ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <FileText className="h-3.5 w-3.5" />
-                )}
-                {generatingReport ? "Generating…" : "Generate Report"}
-              </button>
-            )}
-          </div>
-        )}
       </div>
 
       <div className="p-5 space-y-5 flex-1 overflow-y-auto custom-scrollbar">
@@ -114,7 +95,7 @@ export function AIPanel({ studyInstanceUid, patientId }: AIPanelProps) {
           <div className="flex flex-col items-center gap-3 py-8 text-center">
             <Brain className="h-8 w-8 text-slate-600" />
             <p className="text-xs text-slate-500 max-w-[200px]">
-              Click &quot;Run AI Analysis&quot; to process this exam with the AI model.
+              Press &quot;Run AI Analysis&quot; below to process this exam with the AI model.
             </p>
           </div>
         )}
@@ -310,6 +291,78 @@ export function AIPanel({ studyInstanceUid, patientId }: AIPanelProps) {
               </div>
             )}
           </>
+        )}
+
+        {/* Notes */}
+        <section className="space-y-3 pt-4 border-t border-slate-700">
+          <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+            <MessageSquare className="h-3.5 w-3.5 text-blue-400" />
+            Notes
+          </h3>
+          <div className="flex gap-2">
+            <textarea
+              value={noteInput}
+              onChange={(e) => setNoteInput(e.target.value)}
+              placeholder="Add a note…"
+              className="flex-1 rounded-md border border-slate-700 bg-[#121936] px-3 py-2 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none"
+              rows={2}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleAddNote();
+                }
+              }}
+            />
+            <button
+              onClick={handleAddNote}
+              disabled={!noteInput.trim()}
+              className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition shrink-0 self-end"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Ajouter
+            </button>
+          </div>
+          {notes.length > 0 && (
+            <ul className="space-y-1.5">
+              {notes.map((note, i) => (
+                <li key={i} className="flex items-start gap-2 text-xs text-slate-300">
+                  <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />
+                  <span>{note}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {studyInstanceUid && (
+          <div className="flex items-center gap-2 pt-3 border-t border-slate-700">
+            <button
+              onClick={handleRunAnalysis}
+              disabled={loading || generatingReport}
+              className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition"
+            >
+              {loading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Play className="h-3.5 w-3.5" />
+              )}
+              {loading ? "Running…" : hasAnalysis ? "Run Analysis Again" : "Run AI Analysis"}
+            </button>
+            {hasAnalysis && (
+              <button
+                onClick={handleGenerateReport}
+                disabled={loading || generatingReport}
+                className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition"
+              >
+                {generatingReport ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <FileText className="h-3.5 w-3.5" />
+                )}
+                {generatingReport ? "Generating…" : "Generate Report"}
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>
