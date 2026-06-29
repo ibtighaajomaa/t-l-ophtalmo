@@ -1348,12 +1348,31 @@ def delete_user_view(request, user_id):
                 if target_user.profil.role in ('Admin', 'ADMIN_SYSTEME'):
                     return Response({'error': 'Vous ne pouvez pas supprimer un autre administrateur.'}, status=status.HTTP_403_FORBIDDEN)
                     
+            if target_user:
+                # Reset all pending or in-progress exams assigned to this user
+                from ophtalmo.models import Exam
+                exams_to_reset = Exam.objects.filter(
+                    assigned_to=target_user,
+                    status__in=[Exam.Status.EN_ATTENTE, Exam.Status.EN_COURS]
+                )
+                exams_to_reset.update(
+                    status=Exam.Status.EN_ATTENTE,
+                    assigned_to=None
+                )
+                
             keycloak_admin.delete_user(user_id)
             
             if email:
                 User.objects.filter(email=email).delete()
             if username:
                 User.objects.filter(username=username).delete()
+                
+            # Run automatic distribution to reassign the newly pending exams
+            try:
+                from ophtalmo.distribution import run_automatic_distribution
+                run_automatic_distribution()
+            except Exception as e:
+                print("Erreur lors de la redistribution:", e)
                 
             return Response({'success': True})
         except Exception as kc_err:
