@@ -1307,7 +1307,7 @@ def update_session(request, session_id):
 
 @api_view(['DELETE'])
 @authentication_classes([KeycloakAuthentication])
-def delete_user_view(request, email):
+def delete_user_view(request, user_id):
     is_admin = False
     try:
         roles = getattr(request, 'roles', [])
@@ -1320,9 +1320,6 @@ def delete_user_view(request, email):
     if not is_admin:
         return Response({'error': 'Seul un administrateur peut supprimer un utilisateur.'}, status=status.HTTP_403_FORBIDDEN)
         
-    if request.user.email == email:
-        return Response({'error': 'Vous ne pouvez pas supprimer votre propre compte.'}, status=status.HTTP_400_BAD_REQUEST)
-        
     try:
         keycloak_admin = KeycloakAdmin(
             server_url=settings.KEYCLOAK_SERVER_URL,
@@ -1332,11 +1329,25 @@ def delete_user_view(request, email):
             user_realm_name="master",
             verify=True
         )
-        user_id_kc = keycloak_admin.get_user_id(email)
-        if user_id_kc:
-            keycloak_admin.delete_user(user_id_kc)
+        
+        try:
+            user_info = keycloak_admin.get_user(user_id)
+            email = user_info.get('email')
+            username = user_info.get('username')
             
-        User.objects.filter(email=email).delete()
-        return Response({'success': True})
+            if email and request.user.email == email:
+                return Response({'error': 'Vous ne pouvez pas supprimer votre propre compte.'}, status=status.HTTP_400_BAD_REQUEST)
+                
+            keycloak_admin.delete_user(user_id)
+            
+            if email:
+                User.objects.filter(email=email).delete()
+            if username:
+                User.objects.filter(username=username).delete()
+                
+            return Response({'success': True})
+        except Exception as kc_err:
+            return Response({'error': f"Utilisateur introuvable ou erreur Keycloak: {str(kc_err)}"}, status=status.HTTP_404_NOT_FOUND)
+            
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

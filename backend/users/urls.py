@@ -24,5 +24,5 @@ urlpatterns = [
     path('api/users/sessions/', get_sessions, name='get_sessions'),
     path('api/users/delete-session/<int:session_id>/', delete_session, name='delete_session'),
     path('api/users/update-session/<int:session_id>/', update_session, name='update_session'),
-    path('api/users/delete/<str:email>/', delete_user_view, name='delete_user'),
+    path('api/users/delete/<str:user_id>/', delete_user_view, name='delete_user'),
 ]
