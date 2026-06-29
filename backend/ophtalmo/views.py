@@ -68,18 +68,13 @@ def exam_list(request):
             try:
                 profil = request.user.profil
                 if profil.role in ('Medecin', 'Resident', 'RESIDENT', 'Chef'):
-                    # Tous les rôles médicaux ne voient QUE les examens qui leur sont assignés (ou qu'ils ont perdu)
+                    # Le médecin ne visualise QUE les examens qui lui sont assignés
                     exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
                     
-                    # Le médecin ne visualise par défaut que les examens en attente/en cours
-                    # et les examens corrigés (Interprété) SEULEMENT s'ils datent d'aujourd'hui
+                    # ET il ne visualise QUE les examens assignés LE JOUR J (aujourd'hui)
                     from django.utils import timezone
                     today = timezone.now().date()
-                    exams = exams.exclude(
-                        Q(status='Interprété') &
-                        ~Q(updated_at__date=today) &
-                        ~Q(date_assignation__date=today)
-                    )
+                    exams = exams.filter(date_assignation__date=today)
                 # Admin : pas de filtre, voit tout
             except Exception:
                 pass
@@ -159,14 +154,10 @@ def exam_stats(request):
             if profil.role in ('Medecin', 'Resident', 'RESIDENT', 'Chef'):
                 exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
                 
-                # Appliquer la même restriction pour les stats
+                # Appliquer la même restriction pour les stats (seulement le jour J)
                 from django.utils import timezone
                 today = timezone.now().date()
-                exams = exams.exclude(
-                    Q(status='Interprété') &
-                    ~Q(updated_at__date=today) &
-                    ~Q(date_assignation__date=today)
-                )
+                exams = exams.filter(date_assignation__date=today)
         except Exception:
             pass
 
