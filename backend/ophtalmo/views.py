@@ -1,6 +1,8 @@
+import hashlib
 import json
 import logging
 import os
+import shutil
 from datetime import date, datetime
 from django.db.models import Q, Max
 import requests
@@ -560,6 +562,142 @@ def request_composite_segmentation(request):
         "overlay_width": result.get("overlay_width"),
         "overlay_height": result.get("overlay_height"),
         "analysis": analysis,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def run_analysis(request):
+    """
+    Triggers MONAI Label /infer/analyze for a given study and returns
+    the comprehensive AI analysis report (DR grade, lesions, optic disc/cup,
+    vessels, Grad-CAM, CLAHE).
+    Body: { "study_instance_uid": "..." }
+    """
+    study_uid = request.data.get('study_instance_uid')
+    if not study_uid:
+        return Response({'error': 'study_instance_uid is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Find the OP (fundus) series within the study.
+    logger.info(f"Looking up OP series for study: {study_uid}")
+    op_series_uid = None
+    op_orthanc_series_id = None
+    try:
+        study_resp = requests.get(f'{ORTHANC_URL}/studies/{study_uid}', timeout=10)
+        if study_resp.status_code != 200:
+            return Response(
+                {'error': f'Orthanc study lookup returned {study_resp.status_code}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        for sid in study_resp.json().get('Series', []):
+            sr = requests.get(f'{ORTHANC_URL}/series/{sid}', timeout=10)
+            if sr.status_code == 200:
+                s = sr.json()
+                if s.get('MainDicomTags', {}).get('Modality') == 'OP':
+                    op_series_uid = s.get('MainDicomTags', {}).get('SeriesInstanceUID')
+                    op_orthanc_series_id = sid
+                    logger.info(f"Found OP series: {op_series_uid} (Orthanc ID: {sid})")
+                    break
+    except requests.exceptions.ConnectionError:
+        return Response(
+            {'error': 'Orthanc server unreachable'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if not op_series_uid:
+        return Response(
+            {'error': 'No OP (fundus) series found in this study'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Pre-populate the MONAI Label DICOM cache so it finds the files
+    # locally instead of trying the DICOMweb endpoint (which may return 404).
+    monai_cache = os.environ.get('MONAI_CACHE_DIR', '/root/.cache/monailabel')
+    dicomweb_url = 'http://orthanc-container:8042/dicom-web'
+    cache_hash = hashlib.md5(dicomweb_url.encode()).hexdigest()
+    cache_dir = os.path.join(monai_cache, 'dicom', cache_hash, op_series_uid)
+    logger.info(f"Pre-populating MONAI Label cache at: {cache_dir}")
+
+    # Clear any stale cache for this series
+    if os.path.isdir(cache_dir):
+        shutil.rmtree(cache_dir, ignore_errors=True)
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # Download DICOM instances from Orthanc REST API
+    try:
+        series_detail = requests.get(
+            f'{ORTHANC_URL}/series/{op_orthanc_series_id}', timeout=30
+        )
+        if series_detail.status_code != 200:
+            return Response(
+                {'error': f'Failed to get series detail: {series_detail.status_code}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        instances = series_detail.json().get('Instances', [])
+        logger.info(f"Downloading {len(instances)} DICOM instances for series {op_series_uid}")
+        for instance_id in instances:
+            instance_resp = requests.get(
+                f'{ORTHANC_URL}/instances/{instance_id}/file', timeout=30
+            )
+            if instance_resp.status_code == 200:
+                out_path = os.path.join(cache_dir, f'{instance_id}.dcm')
+                with open(out_path, 'wb') as f:
+                    f.write(instance_resp.content)
+            else:
+                logger.warning(f"Failed to download instance {instance_id}: {instance_resp.status_code}")
+    except Exception as e:
+        logger.error(f"Failed to pre-populate MONAI Label cache: {e}")
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        return Response(
+            {'error': f'Failed to download DICOM files: {str(e)}'},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    logger.info(f"Triggering AI analysis for series: {op_series_uid} (study: {study_uid})")
+    monai_url = "http://monai-label:8000/infer/analyze"
+    try:
+        resp = requests.post(
+            monai_url,
+            json={"image": op_series_uid, "run_segmentation": True},
+            timeout=300,
+        )
+        logger.info(f"MONAI Label response status: {resp.status_code}")
+        if resp.status_code != 200:
+            logger.error(f"MONAI Label error: {resp.text}")
+            return Response(
+                {'error': f'MONAI Label /infer/analyze returned {resp.status_code}', 'detail': resp.text},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        result = resp.json()
+        logger.info(f"MONAI Label analysis result keys: {list(result.keys()) if isinstance(result, dict) else 'not dict'}")
+    except requests.exceptions.ConnectionError:
+        logger.error("MONAI Label server unreachable at monai-label:8000")
+        return Response(
+            {'error': 'MONAI Label server unreachable at monai-label:8000'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    except requests.exceptions.Timeout:
+        logger.error("MONAI Label analysis timed out after 300s")
+        return Response(
+            {'error': 'MONAI Label analysis timed out after 300s'},
+            status=status.HTTP_504_GATEWAY_TIMEOUT,
+        )
+
+    AnalysisReport.objects.create(
+        series_instance_uid=op_series_uid,
+        user=None,
+        report_json={
+            "source": "monai_label_analyze",
+            "status": "AI_ANALYZED",
+            "data": result,
+        },
+    )
+
+    return Response({
+        "status": "completed",
+        "study_instance_uid": study_uid,
+        "series_instance_uid": op_series_uid,
+        "analysis": result,
     })
 
 

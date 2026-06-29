@@ -33,7 +33,7 @@ interface ExamStats {
   total: number;
   "En attente": number;
   "En cours": number;
-  "Interprété": number;
+  Interprété: number;
   Urgent: number;
 }
 
@@ -132,10 +132,7 @@ export async function createExam(data: Partial<Exam>): Promise<Exam> {
   return toFrontendExam(api);
 }
 
-export async function updateExam(
-  id: string,
-  data: Partial<Exam>,
-): Promise<Exam> {
+export async function updateExam(id: string, data: Partial<Exam>): Promise<Exam> {
   const numericId = id.replace("EX-", "");
   const body: Record<string, unknown> = {};
   if (data.status) body.status = data.status;
@@ -143,8 +140,7 @@ export async function updateExam(
   if (data.assignedTo !== undefined) body.assigned_to_name = data.assignedTo;
   if (data.region !== undefined) body.region = data.region;
   if (data.notes !== undefined) body.notes = data.notes;
-  if (data.studyInstanceUid !== undefined)
-    body.study_instance_uid = data.studyInstanceUid;
+  if (data.studyInstanceUid !== undefined) body.study_instance_uid = data.studyInstanceUid;
 
   const res = await fetch(`${BASE}/${numericId}/`, {
     method: "PUT",
@@ -190,6 +186,71 @@ export async function getExam(id: string): Promise<Exam> {
   if (!res.ok) throw new Error("Exam not found");
   const api: ApiExam = await res.json();
   return toFrontendExam(api);
+}
+
+export interface AnalysisResult {
+  dr_classification: {
+    grade: string;
+    confidence: number;
+    probabilities: { label: string; score: number }[];
+  };
+  lesions: {
+    microaneurysms: number;
+    hemorrhages: number;
+    exudates: number;
+    coverage_pct: number;
+  };
+  optic_disc_cup: {
+    disc_area_px: number;
+    cup_area_px: number;
+    cup_disc_ratio: number;
+  };
+  glaucoma: {
+    vcdr: number;
+    risk: string;
+    disc_area_px: number;
+    cup_area_px: number;
+  };
+  vessels: {
+    coverage_pct: number;
+    pixel_count: number;
+  };
+  gradcam_image: string | null;
+  clahe_image: string | null;
+}
+
+export async function runAIAnalysis(
+  studyInstanceUid: string,
+): Promise<{ status: string; analysis: AnalysisResult }> {
+  const res = await fetch(`${BASE}/run-analysis/`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({ study_instance_uid: studyInstanceUid }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "AI analysis failed");
+  }
+  return res.json();
+}
+
+export async function generateReport(
+  analysisData: AnalysisResult,
+  patientId: string,
+): Promise<{ report_text: string; report_html: string }> {
+  const res = await fetch(`${BASE}/generate-report/`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({
+      report_data: analysisData,
+      patient_id: patientId,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Report generation failed");
+  }
+  return res.json();
 }
 
 export async function syncWithOrthanc(): Promise<{

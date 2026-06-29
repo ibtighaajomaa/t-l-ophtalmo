@@ -8,6 +8,7 @@ urlpatterns = [
     path('api/exams/orthanc-webhook/', views.orthanc_webhook, name='orthanc-webhook'),
     path('api/exams/monai-webhook/', views.monai_inference_webhook, name='monai-inference-webhook'),
     path('api/exams/composite-segmentation/', views.request_composite_segmentation, name='request-composite-segmentation'),
+    path('api/exams/run-analysis/', views.run_analysis, name='run-analysis'),
     path('api/exams/distribuer/', views.distribuer_manuellement, name='distribuer-examens'),
     path('api/exams/mes-examens/', views.mes_examens, name='mes-examens'),
     path('api/exams/save-analysis/', views.save_analysis, name='save-analysis'),
