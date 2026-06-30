@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type { AnalysisResult, DoctorNote } from "@/lib/exam-api";
 import { runAIAnalysis, generateReport, fetchDoctorNotes, createDoctorNote } from "@/lib/exam-api";
+import { RichTextEditor } from "@/components/RichTextEditor";
 
 interface AIPanelProps {
   studyInstanceUid?: string;
@@ -32,6 +33,7 @@ export function AIPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reportText, setReportText] = useState<string | null>(null);
+  const [reportHtml, setReportHtml] = useState<string | null>(null);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [noteInput, setNoteInput] = useState("");
   const [eyeRight, setEyeRight] = useState(false);
@@ -66,6 +68,7 @@ export function AIPanel({
     setLoading(true);
     setError(null);
     setReportText(null);
+    setReportHtml(null);
     try {
       const result = await runAIAnalysis(studyInstanceUid);
       setAnalysis(result.analysis);
@@ -94,6 +97,7 @@ export function AIPanel({
         eye: eyeLabel,
       });
       setReportText(result.report_text);
+      setReportHtml(result.report_html || result.report_text.replace(/\n/g, "<br>"));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Report generation failed");
     } finally {
@@ -333,17 +337,13 @@ export function AIPanel({
               Analysis completed
             </div>
 
-            {reportText && (
+            {reportText && reportHtml && (
               <section className="space-y-2">
                 <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
                   <FileText className="h-3.5 w-3.5 text-blue-400" />
                   Clinical Report
                 </h3>
-                <div className="rounded-lg bg-[#121936] border border-slate-700 p-3">
-                  <pre className="text-xs text-slate-300 whitespace-pre-wrap font-sans leading-relaxed">
-                    {reportText}
-                  </pre>
-                </div>
+                <RichTextEditor value={reportHtml} onChange={setReportHtml} />
               </section>
             )}
 
