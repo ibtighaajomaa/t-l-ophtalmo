@@ -366,7 +366,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                         <div className="flex items-center justify-end gap-2">
                           {dicomStudyInstanceUid && (
                             <a
-                              href={`/ohif/monai-label?StudyInstanceUIDs=${encodeURIComponent(
+                              href={`/ohif/viewer?StudyInstanceUIDs=${encodeURIComponent(
                                 dicomStudyInstanceUid,
                               )}`}
                               target="_blank"
