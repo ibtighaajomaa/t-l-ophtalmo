@@ -972,6 +972,9 @@ def assign_session(request):
                 user = User.objects.get(email__iexact=email)
             except User.DoesNotExist:
                 return Response({'error': 'Utilisateur introuvable'}, status=404)
+        
+        if not user.is_active:
+            return Response({'error': 'Cet utilisateur est désactivé'}, status=400)
 
         if date_str:
             try:
@@ -1202,6 +1205,9 @@ def update_session(request, session_id):
         from django.utils import timezone
         today = timezone.localdate()
         
+        if diff > 0 and not session_obj.doctor.is_active:
+            return Response({'error': 'Cet utilisateur est désactivé'}, status=400)
+            
         # N'assigner immédiatement des examens QUE si la session est pour aujourd'hui
         if diff > 0 and session_obj.date == today:
             from django.db.models import Count
@@ -1358,7 +1364,8 @@ def delete_user_view(request, user_id):
                 )
                 exams_to_reset.update(
                     status=Exam.Status.EN_ATTENTE,
-                    assigned_to=None
+                    assigned_to=None,
+                    date_assignation=None
                 )
                 
                 # Delete future CalendarSessions, keep past ones for traceability
@@ -1366,6 +1373,11 @@ def delete_user_view(request, user_id):
                     doctor=target_user,
                     date__gt=date.today()
                 ).delete()
+                
+                if hasattr(target_user, 'profil'):
+                    target_user.profil.is_disponible = False
+                    target_user.profil.charge_actuelle = 0
+                    target_user.profil.save(update_fields=['is_disponible', 'charge_actuelle'])
                 
             keycloak_admin.delete_user(user_id)
             

@@ -250,6 +250,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'ophtalmo.tasks.tache_auto_segmentation',
         'schedule': timedelta(minutes=5),
     },
+    'auto-quality': {
+        'task': 'ophtalmo.tasks.tache_auto_quality',
+        'schedule': timedelta(seconds=60),
+    },
 }
 
 # Distribution settings

@@ -20,6 +20,20 @@ interface ApiExam {
   updated_at: string;
   is_reassigned_24h?: boolean;
   reassigned_from_name?: string | null;
+  quality_status?: "pending" | "in_progress" | "completed" | "failed";
+  quality_score?: number | null;
+  quality_category?: "good" | "acceptable" | "bad" | "";
+  quality_error?: string;
+  image_quality_results?: Array<{
+    orthanc_instance_id: string;
+    study_instance_uid: string;
+    series_instance_uid: string;
+    sop_instance_uid: string;
+    patient_id: string;
+    score: number;
+    category: "good" | "acceptable" | "bad";
+    label: string;
+  }>;
 }
 
 interface PaginatedResponse {
@@ -73,6 +87,20 @@ function toFrontendExam(api: ApiExam): Exam {
     studyInstanceUid: api.study_instance_uid ?? undefined,
     isReassigned24h: api.is_reassigned_24h,
     reassignedFromName: api.reassigned_from_name,
+    qualityStatus: api.quality_status,
+    qualityScore: api.quality_score,
+    qualityCategory: api.quality_category || undefined,
+    qualityError: api.quality_error,
+    imageQualityResults: api.image_quality_results?.map((result) => ({
+      orthancInstanceId: result.orthanc_instance_id,
+      studyInstanceUid: result.study_instance_uid,
+      seriesInstanceUid: result.series_instance_uid,
+      sopInstanceUid: result.sop_instance_uid,
+      patientId: result.patient_id,
+      score: result.score,
+      category: result.category,
+      label: result.label,
+    })),
   };
 }
 

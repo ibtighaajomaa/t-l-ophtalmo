@@ -4,6 +4,7 @@ Tâches Celery pour le système de distribution des examens.
 - tache_verification_24h : vérification périodique des examens en retard (toutes les 24h)
 - tache_recalcul_charges : recalcul de sécurité des charges médecins
 - tache_sync_orthanc_incremental : synchronisation incrémentale depuis Orthanc (toutes les 60s)
+- tache_auto_quality : évaluation automatique FTHNet des images OP
 - tache_auto_segmentation : segmentation automatique des nouvelles études OP par MONAI Label
 """
 import os
@@ -18,6 +19,16 @@ from django.core.cache import cache
 logger = logging.getLogger(__name__)
 
 ORTHANC_URL = os.environ.get('ORTHANC_URL', 'http://orthanc-container:8042')
+_fthnet_predictor = None
+
+
+def _get_fthnet_predictor():
+    """Load FTHNet once per Celery worker process."""
+    global _fthnet_predictor
+    if _fthnet_predictor is None:
+        from .fthnet_cpu import FTHNetCPU
+        _fthnet_predictor = FTHNetCPU()
+    return _fthnet_predictor
 
 
 def inject_op_geometry(orthanc_url, orthanc_series_id, monai_cache_dir=None, orthanc_study_id=None):
@@ -446,9 +457,8 @@ def tache_sync_orthanc_incremental():
     cache.set('orthanc_changes_seq', new_seq, timeout=None)
 
     if created > 0:
-        # Déclencher la segmentation automatique pour les nouvelles études
-        # (la distribution sera déclenchée après la segmentation)
-        tache_auto_segmentation.delay()
+        # FTHNet runs first; it starts segmentation when quality is persisted.
+        tache_auto_quality.delay()
 
     logger.info(
         f"[OrthancSync] created={created} deleted={deleted} skipped={skipped} "
@@ -461,6 +471,109 @@ def tache_sync_orthanc_incremental():
         'skipped': skipped,
         'seq': new_seq,
     }
+
+
+@shared_task(name='ophtalmo.tasks.tache_auto_quality')
+def tache_auto_quality():
+    """Evaluate every OP instance in new Orthanc exams with FTHNet on CPU."""
+    from .models import Exam, ImageQualityAssessment
+
+    exams = Exam.objects.filter(
+        quality_status='pending',
+        exam_type='Rétinographie',
+    ).exclude(
+        study_instance_uid__isnull=True,
+    ).exclude(
+        study_instance_uid__exact='',
+    )[:10]
+
+    if not exams:
+        return {'status': 'no_pending_exams'}
+
+    predictor = _get_fthnet_predictor()
+    processed = 0
+    images_analyzed = 0
+
+    for exam in exams:
+        exam.quality_status = 'in_progress'
+        exam.quality_error = ''
+        exam.save(update_fields=['quality_status', 'quality_error'])
+
+        try:
+            study_response = requests.get(
+                f'{ORTHANC_URL}/studies/{exam.study_instance_uid}',
+                timeout=30,
+            )
+            study_response.raise_for_status()
+            instance_ids = []
+
+            for series_id in study_response.json().get('Series', []):
+                series_response = requests.get(
+                    f'{ORTHANC_URL}/series/{series_id}', timeout=30
+                )
+                series_response.raise_for_status()
+                series = series_response.json()
+                modality = str(
+                    series.get('MainDicomTags', {}).get('Modality', '')
+                ).upper()
+                if modality == 'OP':
+                    instance_ids.extend(series.get('Instances', []))
+
+            if not instance_ids:
+                raise ValueError('Aucune instance DICOM de modalité OP trouvée')
+
+            results = []
+            for instance_id in instance_ids:
+                result = predictor.predict_orthanc_instance(
+                    instance_id, ORTHANC_URL
+                )
+                sop_uid = result.get('sop_instance_uid')
+                if not sop_uid:
+                    raise ValueError(
+                        f'SOPInstanceUID absent pour instance {instance_id}'
+                    )
+                ImageQualityAssessment.objects.update_or_create(
+                    sop_instance_uid=sop_uid,
+                    defaults={
+                        'exam': exam,
+                        'orthanc_instance_id': instance_id,
+                        'study_instance_uid': result.get('study_instance_uid', ''),
+                        'series_instance_uid': result.get('series_instance_uid', ''),
+                        'patient_id': result.get('patient_id', ''),
+                        'modality': 'OP',
+                        'score': result['score'],
+                        'category': result['category'],
+                    },
+                )
+                results.append(result)
+                images_analyzed += 1
+
+            summary = min(results, key=lambda item: item['score'])
+            exam.quality_score = summary['score']
+            exam.quality_category = summary['category']
+            exam.quality_status = 'completed'
+            exam.quality_error = ''
+            exam.save(update_fields=[
+                'quality_score', 'quality_category',
+                'quality_status', 'quality_error',
+            ])
+            processed += 1
+            logger.info(
+                f"[FTHNet] Exam {exam.id}: {len(results)} OP image(s), "
+                f"minimum score={summary['score']} ({summary['category']})"
+            )
+        except Exception as exc:
+            exam.quality_status = 'failed'
+            exam.quality_error = str(exc)[:1000]
+            exam.save(update_fields=['quality_status', 'quality_error'])
+            logger.exception(f"[FTHNet] Quality analysis failed for exam {exam.id}")
+            processed += 1
+
+    # A quality failure does not block the existing clinical segmentation.
+    if processed:
+        tache_auto_segmentation.delay()
+
+    return {'processed': processed, 'images_analyzed': images_analyzed}
 
 
 @shared_task(name='ophtalmo.tasks.tache_auto_segmentation')
@@ -480,9 +593,17 @@ def tache_auto_segmentation():
     SEG_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
     MONAI_LABEL = "http://monai-label:8000"
 
+    # MONAI's DICOM cache and the Orthanc SEG snapshot are shared resources.
+    # Prevent Celery Beat and a chained backfill task from processing two
+    # batches concurrently and racing over that cache.
+    lock_key = 'ophtalmo:auto_segmentation_running'
+    if not cache.add(lock_key, '1', timeout=20 * 60):
+        return {'status': 'already_running'}
+
     exams = Exam.objects.filter(
         segmentation_status='pending',
         exam_type='Rétinographie',
+        quality_status__in=['completed', 'failed'],
     ).exclude(
         study_instance_uid__isnull=True,
     ).exclude(
@@ -490,6 +611,7 @@ def tache_auto_segmentation():
     )[:10]
 
     if not exams:
+        cache.delete(lock_key)
         return {'status': 'no_pending_exams'}
 
     device = "cuda" if os.environ.get("USE_CUDA", "false") == "true" else "cpu"
@@ -653,4 +775,20 @@ def tache_auto_segmentation():
     if processed > 0:
         tache_distribution.delay()
 
+    # This task intentionally processes at most 10 exams per invocation. Keep
+    # draining the queue so a backfill of existing OP studies does not stop
+    # after the first batch.
+    more_pending = Exam.objects.filter(
+        segmentation_status='pending',
+        exam_type='Rétinographie',
+        quality_status__in=['completed', 'failed'],
+    ).exclude(
+        study_instance_uid__isnull=True,
+    ).exclude(
+        study_instance_uid__exact='',
+    ).exists()
+    if more_pending:
+        tache_auto_segmentation.apply_async(countdown=2)
+
+    cache.delete(lock_key)
     return {'processed': processed}

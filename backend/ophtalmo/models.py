@@ -25,6 +25,12 @@ class Exam(models.Model):
         COMPLETED = "completed", "Terminé"
         FAILED = "failed", "Échec"
 
+    class QualityStatus(models.TextChoices):
+        PENDING = "pending", "En attente"
+        IN_PROGRESS = "in_progress", "En cours"
+        COMPLETED = "completed", "Terminé"
+        FAILED = "failed", "Échec"
+
     study_instance_uid = models.CharField(max_length=255, unique=True, blank=True, null=True)
     patient_name = models.CharField(max_length=255)
     patient_age = models.IntegerField(blank=True, null=True)
@@ -62,6 +68,15 @@ class Exam(models.Model):
     segmentation_error = models.TextField(blank=True, default="")
     segmentation_models_status = models.JSONField(null=True, blank=True)
 
+    quality_status = models.CharField(
+        max_length=20,
+        choices=QualityStatus.choices,
+        default=QualityStatus.PENDING,
+    )
+    quality_score = models.FloatField(null=True, blank=True)
+    quality_category = models.CharField(max_length=20, blank=True, default="")
+    quality_error = models.TextField(blank=True, default="")
+
     is_reassigned_24h = models.BooleanField(default=False)
     reassigned_from = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -78,6 +93,34 @@ class Exam(models.Model):
 
     def __str__(self):
         return f"{self.patient_name} — {self.exam_type} ({self.date})"
+
+
+class ImageQualityAssessment(models.Model):
+    class Category(models.TextChoices):
+        GOOD = "good", "Bonne qualité"
+        ACCEPTABLE = "acceptable", "Qualité acceptable"
+        BAD = "bad", "Qualité mauvaise"
+
+    exam = models.ForeignKey(
+        Exam,
+        on_delete=models.CASCADE,
+        related_name="image_quality_results",
+    )
+    orthanc_instance_id = models.CharField(max_length=255, db_index=True)
+    study_instance_uid = models.CharField(max_length=255, blank=True, default="")
+    series_instance_uid = models.CharField(max_length=255, blank=True, default="")
+    sop_instance_uid = models.CharField(max_length=255, unique=True)
+    patient_id = models.CharField(max_length=255, blank=True, default="")
+    modality = models.CharField(max_length=16, default="OP")
+    score = models.FloatField()
+    category = models.CharField(max_length=20, choices=Category.choices)
+    analyzed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["series_instance_uid", "sop_instance_uid"]
+
+    def __str__(self):
+        return f"{self.sop_instance_uid} — {self.score:.2f} ({self.category})"
 
 
 class AnalysisReport(models.Model):

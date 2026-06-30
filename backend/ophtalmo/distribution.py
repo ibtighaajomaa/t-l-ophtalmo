@@ -39,6 +39,7 @@ def get_medecins_disponibles():
     return Profil.objects.filter(
         is_disponible=True,
         role__in=ROLES_MEDECIN,
+        user__is_active=True,
     ).select_related('user').order_by('charge_actuelle')
 
 

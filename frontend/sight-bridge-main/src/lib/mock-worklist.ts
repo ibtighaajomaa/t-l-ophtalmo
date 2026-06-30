@@ -2,6 +2,19 @@
 export type ExamStatus = "En attente" | "En cours" | "Interprété";
 export type ExamPriority = "Urgent" | "Normal";
 export type ExamType = "Rétinographie" | "OCT" | "Champ visuel" | "Angiographie";
+export type QualityCategory = "good" | "acceptable" | "bad";
+export type QualityStatus = "pending" | "in_progress" | "completed" | "failed";
+
+export interface ImageQualityResult {
+  orthancInstanceId: string;
+  studyInstanceUid: string;
+  seriesInstanceUid: string;
+  sopInstanceUid: string;
+  patientId: string;
+  score: number;
+  category: QualityCategory;
+  label: string;
+}
 
 export interface Exam {
   id: string;
@@ -21,6 +34,11 @@ export interface Exam {
   studyInstanceUid?: string;
   isReassigned24h?: boolean;
   reassignedFromName?: string | null;
+  qualityStatus?: QualityStatus;
+  qualityScore?: number | null;
+  qualityCategory?: QualityCategory;
+  qualityError?: string;
+  imageQualityResults?: ImageQualityResult[];
 }
 
 export const MOCK_EXAMS: Exam[] = [

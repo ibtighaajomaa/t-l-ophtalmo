@@ -4,20 +4,24 @@ import django
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
+from django.contrib.auth.models import User
 from ophtalmo.models import Exam
 from users.models import Profil
 
-exams = Exam.objects.filter(status='En cours')
-c = 0
-for e in exams:
-    e.status = 'En attente'
-    e.assigned_to = None
-    e.date_assignation = None
-    e.save(update_fields=['status', 'assigned_to', 'date_assignation'])
-    c += 1
+inactive_users = User.objects.filter(is_active=False)
 
-for p in Profil.objects.all():
-    p.charge_actuelle = 0
-    p.save(update_fields=['charge_actuelle'])
+for user in inactive_users:
+    if hasattr(user, 'profil'):
+        user.profil.is_disponible = False
+        user.profil.charge_actuelle = 0
+        user.profil.save()
+    
+    exams = Exam.objects.filter(assigned_to=user, status__in=['En cours', 'En attente'])
+    count = exams.count()
+    if count > 0:
+        print(f"Unassigning {count} exams from {user.username}")
+        exams.update(status='En attente', assigned_to=None, date_assignation=None)
 
-print(f"{c} examens remis en attente")
+from ophtalmo.distribution import distribuer_examens
+distribuer_examens()
+print("Done")

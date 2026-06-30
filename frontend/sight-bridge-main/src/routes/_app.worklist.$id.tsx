@@ -330,6 +330,20 @@ function ExamDetail() {
             </div>
             <div className="flex-1" />
             <span className="text-xs text-slate-400">{exam.type}</span>
+            {exam.qualityCategory && exam.qualityScore != null && (
+              <span
+                className={`inline-flex rounded px-2 py-0.5 text-[11px] font-bold ring-1 ${
+                  exam.qualityCategory === "good"
+                    ? "bg-emerald-900/60 text-emerald-300 ring-emerald-700"
+                    : exam.qualityCategory === "acceptable"
+                      ? "bg-amber-900/60 text-amber-300 ring-amber-700"
+                      : "bg-red-900/60 text-red-300 ring-red-700"
+                }`}
+              >
+                Qualité {exam.qualityCategory === "good" ? "bonne" : exam.qualityCategory === "acceptable" ? "acceptable" : "mauvaise"}
+                {" · "}{exam.qualityScore.toFixed(1)}/100
+              </span>
+            )}
             <span className="inline-flex rounded px-2 py-0.5 text-[11px] font-bold bg-cyan-900/60 text-cyan-300 ring-1 ring-cyan-700">
               SEG\OP
             </span>

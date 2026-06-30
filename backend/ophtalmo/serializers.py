@@ -1,11 +1,27 @@
 from rest_framework import serializers
-from .models import Exam, AnalysisReport, MedicalReport, MedicalReportVersion, DoctorNote
+from .models import (
+    Exam, ImageQualityAssessment, AnalysisReport, MedicalReport,
+    MedicalReportVersion, DoctorNote,
+)
+
+
+class ImageQualityAssessmentSerializer(serializers.ModelSerializer):
+    label = serializers.CharField(source="get_category_display", read_only=True)
+
+    class Meta:
+        model = ImageQualityAssessment
+        fields = [
+            "orthanc_instance_id", "study_instance_uid", "series_instance_uid",
+            "sop_instance_uid", "patient_id", "modality", "score", "category",
+            "label", "analyzed_at",
+        ]
 
 
 class ExamSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
     reassigned_from_name = serializers.SerializerMethodField()
+    image_quality_results = ImageQualityAssessmentSerializer(many=True, read_only=True)
 
     class Meta:
         model = Exam
@@ -17,6 +33,8 @@ class ExamSerializer(serializers.ModelSerializer):
             'region', 'modality_ip', 'notes',
             'is_reassigned_24h', 'reassigned_from', 'reassigned_from_name',
             'created_at', 'updated_at',
+            'quality_status', 'quality_score', 'quality_category',
+            'quality_error', 'image_quality_results',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'assigned_to_name', 'created_by_name', 'reassigned_from_name']
 

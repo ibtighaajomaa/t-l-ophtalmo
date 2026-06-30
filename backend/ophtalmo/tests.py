@@ -1,8 +1,11 @@
+import json
 from datetime import date
 from django.test import TestCase, override_settings
 from unittest.mock import patch, MagicMock
+from rest_framework.test import APIRequestFactory
 from ophtalmo.models import Exam
 from ophtalmo.tasks import tache_auto_segmentation
+from ophtalmo.views import request_composite_segmentation
 from ophtalmo.distribution import get_examens_en_attente, distribuer_examens
 
 
@@ -31,6 +34,75 @@ class SegmentationModelTest(TestCase):
                 date=TODAY,
             )
             self.assertEqual(exam.segmentation_status, status_code)
+
+
+class ManualSegmentationAssociationTest(TestCase):
+    @patch('ophtalmo.tasks._fix_seg_association')
+    @patch('ophtalmo.tasks._snapshot_seg_series')
+    @patch('ophtalmo.tasks.inject_op_geometry')
+    @patch('ophtalmo.views.requests.post')
+    @patch('ophtalmo.views.requests.get')
+    def test_passes_source_study_and_fixes_new_seg_series(
+        self,
+        mock_get,
+        mock_post,
+        mock_inject_geometry,
+        mock_snapshot,
+        mock_fix_association,
+    ):
+        source_study_uid = '1.2.840.10008.10'
+        source_series_uid = '1.2.840.10008.20'
+        patient_id = 'PAT_CORRECT'
+
+        def get_side_effect(url, **kwargs):
+            response = MagicMock(status_code=200)
+            if '/studies/' in url:
+                response.json.return_value = {
+                    'Series': ['orthanc-op-series'],
+                    'MainDicomTags': {'StudyInstanceUID': source_study_uid},
+                    'PatientMainDicomTags': {'PatientID': patient_id},
+                }
+            else:
+                response.json.return_value = {
+                    'MainDicomTags': {
+                        'Modality': 'OP',
+                        'SeriesInstanceUID': source_series_uid,
+                    },
+                }
+            return response
+
+        mock_get.side_effect = get_side_effect
+        mock_inject_geometry.return_value = (True, source_series_uid)
+        mock_snapshot.side_effect = [
+            {'old-seg-series'},
+            {'old-seg-series', 'new-seg-1', 'new-seg-2', 'new-seg-3'},
+        ]
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            'overlay_base64': 'overlay',
+            'analysis': {},
+        }
+
+        request = APIRequestFactory().post(
+            '/api/exams/composite-segmentation/',
+            {'study_instance_uid': source_study_uid},
+            format='json',
+        )
+        response = request_composite_segmentation(request)
+
+        self.assertEqual(response.status_code, 200)
+        params = json.loads(mock_post.call_args.kwargs['data']['params'])
+        self.assertEqual(params['study_uid'], source_study_uid)
+        self.assertEqual(
+            mock_post.call_args.kwargs['data']['image'],
+            source_series_uid,
+        )
+        mock_fix_association.assert_called_once_with(
+            'http://orthanc-container:8042',
+            {'new-seg-1', 'new-seg-2', 'new-seg-3'},
+            patient_id,
+            source_study_uid,
+        )
 
 
 class DistributionFilterTest(TestCase):
@@ -124,6 +196,7 @@ class AutoSegmentationTaskTest(TestCase):
             study_instance_uid='1.2.3.4.5.6.7.8.9.99',
             patient_name='Progress Test',
             segmentation_status='pending',
+            quality_status='completed',
             exam_type='Rétinographie',
             date=TODAY,
         )
@@ -140,6 +213,7 @@ class AutoSegmentationTaskTest(TestCase):
             study_instance_uid='1.2.3.4.5.6.7.8.9.98',
             patient_name='Orthanc Down',
             segmentation_status='pending',
+            quality_status='completed',
             exam_type='Rétinographie',
             date=TODAY,
         )
@@ -169,6 +243,7 @@ class AutoSegmentationTaskTest(TestCase):
             study_instance_uid='1.2.3.4.5.6.7.8.9.97',
             patient_name='No OP',
             segmentation_status='pending',
+            quality_status='completed',
             exam_type='Rétinographie',
             date=TODAY,
         )
@@ -207,6 +282,7 @@ class AutoSegmentationTaskTest(TestCase):
             study_instance_uid='1.2.3.4.5.6.7.8.9.96',
             patient_name='All Succeed',
             segmentation_status='pending',
+            quality_status='completed',
             exam_type='Rétinographie',
             date=TODAY,
         )
@@ -264,6 +340,7 @@ class AutoSegmentationTaskTest(TestCase):
             study_instance_uid='1.2.3.4.5.6.7.8.9.95',
             patient_name='One Fails',
             segmentation_status='pending',
+            quality_status='completed',
             exam_type='Rétinographie',
             date=TODAY,
         )
@@ -302,6 +379,7 @@ class AutoSegmentationTaskTest(TestCase):
             study_instance_uid='1.2.3.4.5.6.7.8.9.94',
             patient_name='Max Retries',
             segmentation_status='pending',
+            quality_status='completed',
             segmentation_retries=2,
             exam_type='Rétinographie',
             date=TODAY,

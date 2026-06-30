@@ -1755,6 +1755,109 @@ if os.path.exists(INFER):
         print("infer.py: Patch 17 already applied")
 
 
+# Patch 18: A study hint must invalidate the series-only cache before inference.
+# Legacy OP data can reuse one SeriesInstanceUID in many studies, so retaining
+# that cache silently serves the previously segmented patient's DICOM.
+if os.path.exists(INFER):
+    with open(INFER) as f:
+        content = f.read()
+
+    marker18 = "### PATCH_STUDY_CACHE_ISOLATION ###"
+    if marker18 not in content:
+        old_hint = '''    if hasattr(ds, '_study_id_hint') and study_uid_hint:
+        ds._study_id_hint = study_uid_hint
+    result = instance.infer(request)'''
+
+        new_hint = '''    if hasattr(ds, '_study_id_hint') and study_uid_hint:
+        ### PATCH_STUDY_CACHE_ISOLATION ###
+        ds._study_id_hint = study_uid_hint
+        # The default cache key is only SeriesInstanceUID. Purge it so
+        # get_image_uri() must download from the explicitly requested study.
+        try:
+            _study_cache_image = request.get("image") or image
+            _study_cache_dir = os.path.realpath(
+                os.path.join(ds._datastore.image_path(), _study_cache_image)
+            )
+            _study_cache_nifti = os.path.realpath(
+                os.path.join(ds._datastore.image_path(), f"{_study_cache_image}.nii.gz")
+            )
+            if os.path.isdir(_study_cache_dir):
+                shutil.rmtree(_study_cache_dir, ignore_errors=True)
+            if os.path.isfile(_study_cache_nifti):
+                os.unlink(_study_cache_nifti)
+            logger.info(
+                f"Cleared series-only cache for study-specific inference: "
+                f"{str(study_uid_hint)[:40]}..."
+            )
+        except Exception as cache_error:
+            logger.warning(f"Could not clear study-specific DICOM cache: {cache_error}")
+    result = instance.infer(request)'''
+
+        if old_hint in content:
+            content = content.replace(old_hint, new_hint)
+            with open(INFER, "w") as f:
+                f.write(content)
+            print("infer.py: study-specific requests now invalidate series-only cache")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 18 — study hint block not found in infer.py")
+    else:
+        patches_applied = True
+        print("infer.py: Patch 18 already applied")
+
+
+# Patch 19: Patch 16 used the constructor signature from an older MONAI Label.
+# Current images accept (client, search_filter, cache_path, ...).
+DATASTORE_DICOM_PY = (
+    "/usr/local/lib/python3.10/dist-packages/monailabel/datastore/dicom.py"
+)
+if os.path.exists(DATASTORE_DICOM_PY):
+    with open(DATASTORE_DICOM_PY) as f:
+        content = f.read()
+
+    marker19 = "### PATCH_CURRENT_STUDY_HINT ###"
+    if marker19 not in content:
+        current_init = '''        self._convert_to_nifti = convert_to_nifti
+
+        uri_hash = md5_digest(self._client.base_url)'''
+        current_init_patched = '''        self._convert_to_nifti = convert_to_nifti
+        ### PATCH_CURRENT_STUDY_HINT ###
+        self._study_id_hint = None
+
+        uri_hash = md5_digest(self._client.base_url)'''
+
+        current_download = (
+            "            dicom_web_download_series(None, image_id, image_dir, "
+            "self._client, self._fetch_by_frame)"
+        )
+        current_download_patched = '''            study_hint = getattr(self, "_study_id_hint", None)
+            if study_hint:
+                logger.info(f"Using explicit StudyInstanceUID: {study_hint}")
+            dicom_web_download_series(
+                study_hint, image_id, image_dir, self._client, self._fetch_by_frame
+            )
+            self._study_id_hint = None'''
+
+        changed19 = False
+        if current_init in content:
+            content = content.replace(current_init, current_init_patched, 1)
+            changed19 = True
+        if current_download in content:
+            content = content.replace(current_download, current_download_patched, 1)
+            changed19 = True
+
+        if changed19:
+            with open(DATASTORE_DICOM_PY, "w") as f:
+                f.write(content)
+            print("dicom.py: current datastore now consumes explicit study hint")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 19 — current DICOM datastore patterns not found")
+    else:
+        patches_applied = True
+        print("dicom.py: Patch 19 already applied")
+
+
 if not patches_applied:
     print("No patches needed (already applied or versions mismatch)")
 else:

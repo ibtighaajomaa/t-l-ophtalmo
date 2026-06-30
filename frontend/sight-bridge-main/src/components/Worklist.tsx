@@ -25,6 +25,31 @@ const STATUS_STYLES: Record<ExamStatus, string> = {
   Interprété: "bg-green-100 text-green-700 ring-green-200",
 };
 
+function QualityBadge({ exam }: { exam: Exam }) {
+  if (exam.qualityStatus === "pending" || exam.qualityStatus === "in_progress") {
+    return <span className="text-xs text-slate-400">Analyse IA…</span>;
+  }
+  if (exam.qualityStatus === "failed") {
+    return <span className="text-xs text-red-600">Échec qualité</span>;
+  }
+  if (!exam.qualityCategory || exam.qualityScore == null) return <span>—</span>;
+  const styles = {
+    good: "bg-emerald-100 text-emerald-700 ring-emerald-200",
+    acceptable: "bg-amber-100 text-amber-700 ring-amber-200",
+    bad: "bg-red-100 text-red-700 ring-red-200",
+  };
+  const labels = {
+    good: "Bonne",
+    acceptable: "Acceptable",
+    bad: "Mauvaise",
+  };
+  return (
+    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${styles[exam.qualityCategory]}`}>
+      {labels[exam.qualityCategory]} · {exam.qualityScore.toFixed(1)}
+    </span>
+  );
+}
+
 const TODAY = "2026-06-12";
 
 interface WorklistProps {
@@ -255,6 +280,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                 <th className="px-4 py-3 text-left font-semibold">Date</th>
                 <th className="px-4 py-3 text-left font-semibold">Priorité</th>
                 <th className="px-4 py-3 text-left font-semibold">Région</th>
+                <th className="px-4 py-3 text-left font-semibold">Qualité IA</th>
                 <th className="px-4 py-3 text-left font-semibold">Statut</th>
                 {showAssignedTo && <th className="px-4 py-3 text-left font-semibold">Assigné à</th>}
                 <th className="px-4 py-3 text-right font-semibold">Actions</th>
@@ -263,7 +289,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-slate-500">
+                  <td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-500">
                     <Loader2 className="inline h-5 w-5 animate-spin mr-2" />
                     Chargement des examens…
                   </td>
@@ -300,6 +326,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                         </span>
                       </td>
                       <td className="px-4 py-3 text-slate-700">{exam.region || "—"}</td>
+                      <td className="px-4 py-3"><QualityBadge exam={exam} /></td>
                       <td className="px-4 py-3">
                         {isOldDoctor && exam.isReassigned24h ? (
                           <span className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 bg-red-100 text-red-700 ring-red-200">
@@ -352,7 +379,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
               )}
               {!loading && filtered.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-slate-500">
+                  <td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-500">
                     Aucun examen ne correspond aux filtres.
                   </td>
                 </tr>

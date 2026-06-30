@@ -347,15 +347,20 @@ def sync_orthanc(request):
             )
             created += 1
 
-    # Déclencher la distribution automatique après la sync
-    # Toujours distribuer pour assigner les examens en attente
+    # New studies go through FTHNet, then segmentation and distribution.
+    # With no new study, retain the normal distribution behavior.
     try:
-        from .tasks import tache_distribution
-        tache_distribution.delay()
+        from .tasks import tache_auto_quality, tache_distribution
+        if created:
+            tache_auto_quality.delay()
+        else:
+            tache_distribution.delay()
     except Exception:
-        # Si Celery n'est pas dispo, distribuer en synchrone
-        from .distribution import distribuer_examens
-        distribuer_examens()
+        if created:
+            tache_auto_quality()
+        else:
+            from .distribution import distribuer_examens
+            distribuer_examens()
 
     # Nettoyage : supprimer les Exam dont l'étude n'existe plus dans Orthanc
     orthanc_study_ids = set(study_ids)
@@ -460,11 +465,10 @@ def orthanc_webhook(request):
         notes='',
     )
 
-    # Déclencher la segmentation automatique via MONAI Label
-    # (la distribution sera déclenchée après la segmentation terminée)
+    # Évaluer d'abord la qualité; cette tâche déclenche ensuite la segmentation.
     try:
-        from .tasks import tache_auto_segmentation
-        tache_auto_segmentation.delay()
+        from .tasks import tache_auto_quality
+        tache_auto_quality.delay()
     except Exception:
         pass
 
@@ -539,26 +543,53 @@ def request_composite_segmentation(request):
     if not study_uid:
         return Response({'error': 'study_instance_uid is required'}, status=status.HTTP_400_BAD_REQUEST)
 
+    expected_patient_id = ''
+    expected_study_uid = ''
+    seg_ids_before = set()
+
     # Inject synthetic geometry into source OP DICOMs so that the generated SEG
     # shares the same FrameOfReferenceUID and OHIF can spatially align the overlay.
     # Also makes SeriesInstanceUID unique to prevent cross-patient collisions.
     try:
-        from .tasks import inject_op_geometry, ORTHANC_URL
+        from .tasks import (
+            ORTHANC_URL,
+            _fix_seg_association,
+            _snapshot_seg_series,
+            inject_op_geometry,
+        )
         monai_cache = os.environ.get('MONAI_CACHE_DIR', '/root/.cache/monailabel')
         study_resp = requests.get(f'{ORTHANC_URL}/studies/{study_uid}', timeout=10)
         if study_resp.status_code == 200:
-            for sid in study_resp.json().get('Series', []):
+            study_data = study_resp.json()
+            expected_study_uid = (
+                study_data.get('MainDicomTags', {}).get('StudyInstanceUID') or study_uid
+            )
+            expected_patient_id = (
+                study_data.get('PatientMainDicomTags', {}).get('PatientID', '')
+            )
+            for sid in study_data.get('Series', []):
                 sr = requests.get(f'{ORTHANC_URL}/series/{sid}', timeout=10)
                 if sr.status_code == 200 and sr.json().get('MainDicomTags', {}).get('Modality') == 'OP':
                     _, new_series_uid = inject_op_geometry(ORTHANC_URL, sid, monai_cache)
                     if new_series_uid:
                         image_id = new_series_uid
                     break
+            seg_ids_before = _snapshot_seg_series(ORTHANC_URL)
+        else:
+            logger.warning(
+                "Could not resolve Orthanc study %s before manual segmentation: HTTP %s",
+                study_uid,
+                study_resp.status_code,
+            )
     except Exception as e:
         logger.warning(f"Geometry injection skipped for study {study_uid}: {e}")
 
     monai_url = "http://monai-label:8000/infer/composite_seg?output=json"
     monai_params = {"device": "cuda" if os.environ.get("USE_CUDA", "false") == "true" else "cpu"}
+    if expected_study_uid:
+        # MONAI uses this value when writing each generated DICOM-SEG. Without
+        # it, a stale cached source can make every SEG inherit another study.
+        monai_params["study_uid"] = expected_study_uid
     try:
         resp = requests.post(
             monai_url,
@@ -581,6 +612,27 @@ def request_composite_segmentation(request):
             {'error': 'MONAI Label inference timed out after 120s'},
             status=status.HTTP_504_GATEWAY_TIMEOUT,
         )
+
+    # Safety net: associate only the SEG series created by this request with
+    # the patient/study selected in the worklist.
+    try:
+        seg_ids_after = _snapshot_seg_series(ORTHANC_URL)
+        new_seg_ids = seg_ids_after - seg_ids_before
+        if new_seg_ids:
+            _fix_seg_association(
+                ORTHANC_URL,
+                new_seg_ids,
+                expected_patient_id,
+                expected_study_uid,
+            )
+            logger.info(
+                "Checked %s manual SEG series for patient %s, study %s",
+                len(new_seg_ids),
+                expected_patient_id,
+                expected_study_uid,
+            )
+    except Exception as e:
+        logger.warning(f"Manual SEG association fix failed for study {study_uid}: {e}")
 
     overlay_base64 = result.get("overlay_base64") or result.get("params", {}).get("overlay_base64")
     payload = result if "overlay_base64" in result else result.get("params", {})
@@ -629,6 +681,7 @@ def run_analysis(request):
     logger.info(f"Looking up OP series for study: {study_uid}")
     op_series_uid = None
     op_orthanc_series_id = None
+    expected_patient_id = ''
     try:
         study_resp = requests.get(f'{ORTHANC_URL}/studies/{study_uid}', timeout=10)
         if study_resp.status_code != 200:
@@ -638,6 +691,9 @@ def run_analysis(request):
             )
         study_data = study_resp.json()
         study_instance_dicom_uid = study_data.get('MainDicomTags', {}).get('StudyInstanceUID')
+        expected_patient_id = (
+            study_data.get('PatientMainDicomTags', {}).get('PatientID', '')
+        )
         for sid in study_data.get('Series', []):
             sr = requests.get(f'{ORTHANC_URL}/series/{sid}', timeout=10)
             if sr.status_code == 200:
@@ -704,6 +760,8 @@ def run_analysis(request):
 
     logger.info(f"Triggering AI analysis for series: {op_series_uid} (study: {study_uid})")
     monai_url = "http://monai-label:8000/infer/analyze"
+    from .tasks import _fix_seg_association, _snapshot_seg_series
+    seg_ids_before = _snapshot_seg_series(ORTHANC_URL)
     try:
         resp = requests.post(
             monai_url,
@@ -723,6 +781,23 @@ def run_analysis(request):
             )
         result = resp.json()
         logger.info(f"MONAI Label analysis result keys: {list(result.keys()) if isinstance(result, dict) else 'not dict'}")
+
+        # /infer/analyze creates the three DICOM-SEG series. Ensure they stay
+        # with the OP source patient/study even if MONAI had stale cache data.
+        new_seg_ids = _snapshot_seg_series(ORTHANC_URL) - seg_ids_before
+        if new_seg_ids:
+            _fix_seg_association(
+                ORTHANC_URL,
+                new_seg_ids,
+                expected_patient_id,
+                study_instance_dicom_uid or study_uid,
+            )
+            logger.info(
+                "Checked %s analysis SEG series for patient %s, study %s",
+                len(new_seg_ids),
+                expected_patient_id,
+                study_instance_dicom_uid or study_uid,
+            )
     except requests.exceptions.ConnectionError:
         logger.error("MONAI Label server unreachable at monai-label:8000")
         return Response(
@@ -1225,4 +1300,3 @@ def export_report_docx(request, pk):
     buffer = export_report_to_docx(report)
     filename = f"rapport-{report.patient_id}-{report.pk}.docx"
     return FileResponse(buffer, as_attachment=True, filename=filename)
-
