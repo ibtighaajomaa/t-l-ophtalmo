@@ -298,6 +298,9 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                 paginatedExams.map((exam) => {
                   const isOldDoctor =
                     user && exam.reassignedFromName === `Dr. ${user.firstName} ${user.lastName}`;
+                  const dicomStudyInstanceUid =
+                    exam.imageQualityResults?.find((result) => result.studyInstanceUid)
+                      ?.studyInstanceUid || exam.studyInstanceUid;
                   const rowClass = exam.isReassigned24h
                     ? "bg-red-50/50 hover:bg-red-100/50"
                     : "hover:bg-slate-50/60";
@@ -361,9 +364,11 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                       )}
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-2">
-                          {exam.studyInstanceUid && (
+                          {dicomStudyInstanceUid && (
                             <a
-                              href="/ohif/"
+                              href={`/ohif/monai-label?StudyInstanceUIDs=${encodeURIComponent(
+                                dicomStudyInstanceUid,
+                              )}`}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 transition"
