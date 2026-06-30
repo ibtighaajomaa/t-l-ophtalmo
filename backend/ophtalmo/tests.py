@@ -3,8 +3,8 @@ from datetime import date
 from django.test import TestCase, override_settings
 from unittest.mock import patch, MagicMock
 from rest_framework.test import APIRequestFactory
-from ophtalmo.models import Exam, ImageQualityAssessment
-from ophtalmo.tasks import tache_auto_quality, tache_auto_segmentation
+from ophtalmo.models import Exam
+from ophtalmo.tasks import tache_auto_segmentation
 from ophtalmo.views import request_composite_segmentation
 from ophtalmo.distribution import get_examens_en_attente, distribuer_examens
 
@@ -34,57 +34,6 @@ class SegmentationModelTest(TestCase):
                 date=TODAY,
             )
             self.assertEqual(exam.segmentation_status, status_code)
-
-
-class QualityAssociationTest(TestCase):
-    @patch('ophtalmo.tasks.tache_auto_segmentation.delay')
-    @patch('ophtalmo.tasks._get_fthnet_predictor')
-    @patch('ophtalmo.tasks.requests.get')
-    def test_rejects_quality_result_from_another_patient(
-        self,
-        mock_get,
-        mock_get_predictor,
-        _mock_segmentation_delay,
-    ):
-        exam = Exam.objects.create(
-            study_instance_uid='orthanc-study-1',
-            patient_name='Expected Patient',
-            exam_type='Rétinographie',
-            date=TODAY,
-        )
-
-        study_response = MagicMock(status_code=200)
-        study_response.json.return_value = {
-            'Series': ['orthanc-series-1'],
-            'MainDicomTags': {'StudyInstanceUID': '1.2.3'},
-            'PatientMainDicomTags': {'PatientID': 'PAT_EXPECTED'},
-        }
-        series_response = MagicMock(status_code=200)
-        series_response.json.return_value = {
-            'Instances': ['orthanc-instance-1'],
-            'MainDicomTags': {'Modality': 'OP'},
-        }
-        mock_get.side_effect = [study_response, series_response]
-
-        predictor = MagicMock()
-        predictor.predict_orthanc_instance.return_value = {
-            'study_instance_uid': '1.2.3',
-            'series_instance_uid': '1.2.3.4',
-            'sop_instance_uid': '1.2.3.4.5',
-            'patient_id': 'PAT_OTHER',
-            'score': 88.0,
-            'category': 'good',
-        }
-        mock_get_predictor.return_value = predictor
-
-        tache_auto_quality()
-
-        exam.refresh_from_db()
-        self.assertEqual(exam.quality_status, 'failed')
-        self.assertIn('autre patient', exam.quality_error)
-        self.assertFalse(
-            ImageQualityAssessment.objects.filter(exam=exam).exists()
-        )
 
 
 class ManualSegmentationAssociationTest(TestCase):

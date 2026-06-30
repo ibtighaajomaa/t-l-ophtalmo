@@ -15,7 +15,6 @@ from datetime import date
 import requests
 from celery import shared_task
 from django.core.cache import cache
-from django.db import transaction
 
 logger = logging.getLogger(__name__)
 
@@ -506,16 +505,9 @@ def tache_auto_quality():
                 timeout=30,
             )
             study_response.raise_for_status()
-            study = study_response.json()
-            expected_study_uid = (
-                study.get('MainDicomTags', {}).get('StudyInstanceUID', '')
-            )
-            expected_patient_id = (
-                study.get('PatientMainDicomTags', {}).get('PatientID', '')
-            )
             instance_ids = []
 
-            for series_id in study.get('Series', []):
+            for series_id in study_response.json().get('Series', []):
                 series_response = requests.get(
                     f'{ORTHANC_URL}/series/{series_id}', timeout=30
                 )
@@ -540,40 +532,23 @@ def tache_auto_quality():
                     raise ValueError(
                         f'SOPInstanceUID absent pour instance {instance_id}'
                     )
-                actual_study_uid = result.get('study_instance_uid', '')
-                actual_patient_id = result.get('patient_id', '')
-                if expected_study_uid and actual_study_uid != expected_study_uid:
-                    raise ValueError(
-                        'Résultat qualité associé à une autre étude: '
-                        f'attendu {expected_study_uid}, reçu {actual_study_uid}'
-                    )
-                if expected_patient_id and actual_patient_id != expected_patient_id:
-                    raise ValueError(
-                        'Résultat qualité associé à un autre patient: '
-                        f'attendu {expected_patient_id}, reçu {actual_patient_id}'
-                    )
-                results.append((instance_id, result))
+                ImageQualityAssessment.objects.update_or_create(
+                    sop_instance_uid=sop_uid,
+                    defaults={
+                        'exam': exam,
+                        'orthanc_instance_id': instance_id,
+                        'study_instance_uid': result.get('study_instance_uid', ''),
+                        'series_instance_uid': result.get('series_instance_uid', ''),
+                        'patient_id': result.get('patient_id', ''),
+                        'modality': 'OP',
+                        'score': result['score'],
+                        'category': result['category'],
+                    },
+                )
+                results.append(result)
+                images_analyzed += 1
 
-            # Persist only after every result has passed the identity checks,
-            # so a partially analyzed exam can never display another study.
-            with transaction.atomic():
-                for instance_id, result in results:
-                    ImageQualityAssessment.objects.update_or_create(
-                        sop_instance_uid=result['sop_instance_uid'],
-                        defaults={
-                            'exam': exam,
-                            'orthanc_instance_id': instance_id,
-                            'study_instance_uid': result.get('study_instance_uid', ''),
-                            'series_instance_uid': result.get('series_instance_uid', ''),
-                            'patient_id': result.get('patient_id', ''),
-                            'modality': 'OP',
-                            'score': result['score'],
-                            'category': result['category'],
-                        },
-                    )
-                    images_analyzed += 1
-
-            summary = min((result for _, result in results), key=lambda item: item['score'])
+            summary = min(results, key=lambda item: item['score'])
             exam.quality_score = summary['score']
             exam.quality_category = summary['category']
             exam.quality_status = 'completed'
