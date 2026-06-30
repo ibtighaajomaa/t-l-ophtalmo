@@ -25,6 +25,40 @@ from .report_generator import ReportGenerator
 logger = logging.getLogger(__name__)
 
 
+def _mark_exam_interpreted(study_instance_uid=None, series_instance_uid=None):
+    """Mark the exam linked to a saved medical report as interpreted."""
+    exam = None
+    if study_instance_uid:
+        exam = Exam.objects.filter(study_instance_uid=study_instance_uid).first()
+    if not exam and series_instance_uid:
+        exam = (
+            Exam.objects.filter(
+                image_quality_results__series_instance_uid=series_instance_uid
+            )
+            .distinct()
+            .first()
+        )
+
+    if not exam or exam.status != Exam.Status.EN_COURS:
+        return exam
+
+    exam.status = Exam.Status.INTERPRETE
+    exam.save(update_fields=['status', 'updated_at'])
+
+    if exam.assigned_to_id:
+        try:
+            profil = exam.assigned_to.profil
+            profil.charge_actuelle = max(0, profil.charge_actuelle - 1)
+            profil.save(update_fields=['charge_actuelle'])
+        except Exception:
+            logger.exception(
+                "Unable to decrement doctor workload for interpreted exam %s",
+                exam.pk,
+            )
+
+    return exam
+
+
 @api_view(['GET', 'POST'])
 @authentication_classes([KeycloakAuthentication])
 @permission_classes([AllowAny])
@@ -1173,6 +1207,7 @@ def medical_report_list(request):
     elif request.method == 'POST':
         patient_id = request.data.get('patient_id')
         examination_id = request.data.get('examination_id')
+        study_instance_uid = request.data.get('study_instance_uid')
         ai_content = request.data.get('ai_content', '')
         ai_confidence = request.data.get('ai_confidence')
         ai_report_data = request.data.get('ai_report_data')
@@ -1198,6 +1233,10 @@ def medical_report_list(request):
             version_type=MedicalReportVersion.VersionType.AI,
             modified_by=request.user if request.user.is_authenticated else None,
         )
+        _mark_exam_interpreted(
+            study_instance_uid=study_instance_uid,
+            series_instance_uid=examination_id,
+        )
         serializer = MedicalReportSerializer(report)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -1217,6 +1256,7 @@ def medical_report_detail(request, pk):
 
     elif request.method == 'PUT':
         doctor_content = request.data.get('doctor_content')
+        study_instance_uid = request.data.get('study_instance_uid')
         if doctor_content is None:
             return Response(
                 {'error': 'doctor_content is required'},
@@ -1234,6 +1274,10 @@ def medical_report_detail(request, pk):
             content=doctor_content,
             version_type=MedicalReportVersion.VersionType.DOCTOR,
             modified_by=request.user if request.user.is_authenticated else None,
+        )
+        _mark_exam_interpreted(
+            study_instance_uid=study_instance_uid,
+            series_instance_uid=report.examination_id,
         )
 
         serializer = MedicalReportSerializer(report)

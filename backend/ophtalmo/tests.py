@@ -356,7 +356,7 @@ class AutoSegmentationTaskTest(TestCase):
         )
         self.assertEqual(
             exam.segmentation_models_status.get('dr_classification'),
-            'ok',
+            'manual',
         )
 
     @patch('ophtalmo.tasks.requests.get')

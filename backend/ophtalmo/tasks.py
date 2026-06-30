@@ -239,7 +239,13 @@ def _snapshot_seg_series(orthanc_url):
     return seg_ids
 
 
-def _fix_seg_association(orthanc_url, candidate_ids, expected_patient_id, expected_study_uid):
+def _fix_seg_association(
+    orthanc_url,
+    candidate_ids,
+    expected_patient_id,
+    expected_study_uid,
+    expected_series_uid=None,
+):
     """Enforce correct PatientID and StudyInstanceUID on candidate SEG series.
 
     Uses Orthanc /series/{id}/modify (creates corrected copy), then removes
@@ -255,6 +261,30 @@ def _fix_seg_association(orthanc_url, candidate_ids, expected_patient_id, expect
             s = sr.json()
             if s.get('MainDicomTags', {}).get('Modality') != 'SEG':
                 continue
+
+            # Never modify a SEG that explicitly references another source
+            # series. This protects unrelated studies if another producer adds
+            # a SEG between the before/after snapshots.
+            if expected_series_uid and s.get('Instances'):
+                tags_resp = requests.get(
+                    f"{orthanc_url}/instances/{s['Instances'][0]}/tags?simplify",
+                    timeout=10,
+                )
+                if tags_resp.status_code == 200:
+                    referenced_uids = {
+                        item.get('SeriesInstanceUID')
+                        for item in tags_resp.json().get('ReferencedSeriesSequence', [])
+                        if isinstance(item, dict)
+                    }
+                    referenced_uids.discard(None)
+                    if referenced_uids and expected_series_uid not in referenced_uids:
+                        logger.warning(
+                            "[SegFix] Ignoring SEG %s: references %s, expected %s",
+                            sid,
+                            sorted(referenced_uids),
+                            expected_series_uid,
+                        )
+                        continue
 
             dt = s.get('MainDicomTags', {})
             replace = {}
@@ -605,7 +635,8 @@ def tache_auto_quality():
 def tache_auto_segmentation():
     """
     Parcourt les examens OP en segmentation_status='pending' et déclenche
-    la segmentation MONAI Label (OD/OC, vaisseaux, lésions) + classification DR.
+    la segmentation MONAI Label (OD/OC, vaisseaux, lésions).
+    La classification DR reste manuelle depuis le bouton « Run AI Analysis ».
     Les résultats DICOM-SEG sont automatiquement poussés dans Orthanc
     via le pipeline patché de MONAI Label.
 
@@ -699,8 +730,39 @@ def tache_auto_segmentation():
                 if os.path.isdir(dicom_root):
                     shutil.rmtree(dicom_root, ignore_errors=True)
                     logger.info(f"[AutoSeg] Cleared MONAI DICOM cache: {dicom_root}")
+
+                # SeriesInstanceUID is not always unique in imported synthetic
+                # OP files. Populate MONAI's cache from this exact Orthanc
+                # series so DICOMweb cannot select the same UID from another
+                # patient/study.
+                dicomweb_url = 'http://orthanc-container:8042/dicom-web'
+                cache_hash = hashlib.md5(dicomweb_url.encode()).hexdigest()
+                cache_dir = os.path.join(dicom_root, cache_hash, op_series_uid)
+                os.makedirs(cache_dir, exist_ok=True)
+                series_detail = requests.get(
+                    f'{ORTHANC_URL}/series/{op_orthanc_series_id}',
+                    timeout=30,
+                )
+                series_detail.raise_for_status()
+                for instance_id in series_detail.json().get('Instances', []):
+                    instance_resp = requests.get(
+                        f'{ORTHANC_URL}/instances/{instance_id}/file',
+                        timeout=30,
+                    )
+                    instance_resp.raise_for_status()
+                    with open(os.path.join(cache_dir, f'{instance_id}.dcm'), 'wb') as output:
+                        output.write(instance_resp.content)
+                logger.info(
+                    "[AutoSeg] Cached exact source series %s from study %s",
+                    op_series_uid,
+                    study_id,
+                )
             except Exception as e:
-                logger.warning(f"[AutoSeg] Could not clear DICOM cache: {e}")
+                exam.segmentation_status = 'failed'
+                exam.segmentation_error = f'Could not prepare exact MONAI source: {str(e)[:200]}'
+                exam.save(update_fields=['segmentation_status', 'segmentation_error'])
+                logger.exception("[AutoSeg] Could not prepare exact MONAI source")
+                continue
 
         # Get the DICOM StudyInstanceUID to ensure SEG lands in the same study
         op_study_uid = orthanc_meta.get('MainDicomTags', {}).get('StudyInstanceUID', '')
@@ -712,7 +774,8 @@ def tache_auto_segmentation():
         # Snapshot existing SEG series so we can find only the new one after inference
         seg_ids_before = _snapshot_seg_series(ORTHANC_URL)
 
-        # Run all segmentation models
+        # Automatic processing is limited to segmentation. DR classification
+        # remains manual and runs only from the "Run AI Analysis" button.
         models_status = {}
         all_ok = True
 
@@ -737,33 +800,28 @@ def tache_auto_segmentation():
                 logger.error(f"[AutoSeg] {model} failed for study {study_id}: {e}")
                 all_ok = False
 
-        # Run DR classification
-        try:
-            logger.info(f"[AutoSeg] Running dr_classification on series {op_series_uid[:50]}...")
-            resp = requests.post(
-                f"{MONAI_LABEL}/infer/dr_classification",
-                params={"image": op_series_uid},
-                data={"params": json.dumps(base_params)},
-                timeout=120,
-            )
-            if resp.status_code == 200:
-                models_status['dr_classification'] = 'ok'
-                logger.info(f"[AutoSeg] dr_classification succeeded for study {study_id}")
-            else:
-                models_status['dr_classification'] = f'failed (HTTP {resp.status_code})'
-                logger.warning(f"[AutoSeg] dr_classification returned {resp.status_code}")
-        except Exception as e:
-            models_status['dr_classification'] = f'failed ({str(e)[:100]})'
-            logger.error(f"[AutoSeg] dr_classification failed for study {study_id}: {e}")
+        models_status['dr_classification'] = 'manual'
 
         # Fix SEG patient/study association in Orthanc — safety net for any patch failures
         try:
             seg_ids_after = _snapshot_seg_series(ORTHANC_URL)
             new_seg_ids = seg_ids_after - seg_ids_before
             if new_seg_ids:
-                _fix_seg_association(ORTHANC_URL, new_seg_ids, expected_patient_id, op_study_uid)
+                _fix_seg_association(
+                    ORTHANC_URL,
+                    new_seg_ids,
+                    expected_patient_id,
+                    op_study_uid,
+                    op_series_uid,
+                )
                 logger.info(f"[AutoSeg] Checked {len(new_seg_ids)} new SEG series for study {study_id}")
+            else:
+                all_ok = False
+                models_status['dicom_seg'] = 'failed (no DICOM-SEG created)'
+                logger.error("[AutoSeg] MONAI returned success but created no DICOM-SEG for %s", study_id)
         except Exception as e:
+            all_ok = False
+            models_status['dicom_seg'] = f'failed ({str(e)[:100]})'
             logger.warning(f"[AutoSeg] SEG association fix failed for study {study_id}: {e}")
 
         # Update exam based on results
@@ -778,7 +836,11 @@ def tache_auto_segmentation():
             # Partial failure: retry up to MAX_RETRIES times
             if exam.segmentation_retries >= MAX_RETRIES:
                 exam.segmentation_status = 'failed'
-                failed_models = [m for m, s in models_status.items() if s != 'ok']
+                failed_models = [
+                    model
+                    for model, model_status in models_status.items()
+                    if model_status not in ('ok', 'manual')
+                ]
                 exam.segmentation_error = f'Échec après {MAX_RETRIES} tentatives: {", ".join(failed_models)}'
                 logger.warning(
                     f"[AutoSeg] Giving up on study {study_id} after {MAX_RETRIES} retries. "

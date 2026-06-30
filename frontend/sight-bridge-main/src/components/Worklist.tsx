@@ -121,6 +121,17 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
     loadExams();
   }, [loadExams]);
 
+  useEffect(() => {
+    const handleExamStatusUpdate = (event: StorageEvent) => {
+      if (event.key === "teleoph.exam-status-updated") {
+        loadExams();
+      }
+    };
+
+    window.addEventListener("storage", handleExamStatusUpdate);
+    return () => window.removeEventListener("storage", handleExamStatusUpdate);
+  }, [loadExams]);
+
   // On affiche la colonne "Assigné à" uniquement pour les admins (les autres médecins ne voient que leurs propres examens)
   const showAssignedTo = user?.role === "Admin";
 
