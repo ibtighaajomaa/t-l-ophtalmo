@@ -36,7 +36,7 @@ def run_segmentations(app, image_id):
 
 
 def quantify_optic_disc_cup(label_path):
-    """Compute cup/disc ratio from optic_disc_cup segmentation NRRD."""
+    """Compute cup/disc measurements and eye laterality from the NRRD mask."""
     try:
         import nrrd
         data, header = nrrd.read(label_path)
@@ -45,14 +45,33 @@ def quantify_optic_disc_cup(label_path):
         disc_pixels = int(np.sum(data == 1))
         cup_pixels = int(np.sum(data == 2))
         ratio = cup_pixels / disc_pixels if disc_pixels > 0 else 0.0
+        optic_mask = np.isin(data, (1, 2))
+        # pynrrd preserves the NRRD (x, y) axis order, so axis 0 is horizontal.
+        optic_columns = np.where(optic_mask)[0] if data.ndim == 2 else np.array([])
+        disc_center_x = float(np.mean(optic_columns)) if optic_columns.size else None
+        image_center_x = (data.shape[0] - 1) / 2 if data.ndim == 2 else None
+        laterality = (
+            "OS" if disc_center_x is not None and disc_center_x < image_center_x
+            else "OD" if disc_center_x is not None
+            else "UNKNOWN"
+        )
+
         return {
             "disc_area_px": disc_pixels,
             "cup_area_px": cup_pixels,
             "cup_disc_ratio": round(ratio, 4),
+            "disc_center_x": round(disc_center_x, 2) if disc_center_x is not None else None,
+            "laterality": laterality,
         }
     except Exception as e:
         logger.error(f"quantify_optic_disc_cup failed: {e}")
-        return {"disc_area_px": 0, "cup_area_px": 0, "cup_disc_ratio": 0.0}
+        return {
+            "disc_area_px": 0,
+            "cup_area_px": 0,
+            "cup_disc_ratio": 0.0,
+            "disc_center_x": None,
+            "laterality": "UNKNOWN",
+        }
 
 
 def quantify_vessels(label_path):

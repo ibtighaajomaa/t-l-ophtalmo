@@ -481,16 +481,45 @@ async def analyze(request: dict):
     image = request.get("image_uid") or request.get("image")
     if not image:
         raise HTTPException(status_code=400, detail="image_uid is required")
+    study_uid = request.get("study_uid")
+    if not study_uid:
+        raise HTTPException(status_code=400, detail="study_uid is required")
 
     run_seg = request.get("run_segmentation", True)
     instance = app_instance()
     SEG_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
 
+    # A SeriesInstanceUID alone is not sufficient for legacy data where the
+    # same series UID can occur in multiple studies. Pin the datastore to the
+    # study currently open in OHIF and invalidate the series-only cache.
+    datastore = instance.datastore()
+    if hasattr(datastore, "_study_id_hint"):
+        datastore._study_id_hint = study_uid
+    try:
+        cache_image = os.path.realpath(
+            os.path.join(datastore._datastore.image_path(), image)
+        )
+        cache_nifti = os.path.realpath(
+            os.path.join(datastore._datastore.image_path(), f"{image}.nii.gz")
+        )
+        if os.path.isdir(cache_image):
+            import shutil
+            shutil.rmtree(cache_image, ignore_errors=True)
+        if os.path.isfile(cache_nifti):
+            os.unlink(cache_nifti)
+        logger.info(
+            "Analyze pinned to active study=%s series=%s",
+            study_uid,
+            image,
+        )
+    except Exception as cache_error:
+        logger.warning("Could not clear study-specific analysis cache: %s", cache_error)
+
     labels = {}
     if run_seg:
         for m in SEG_MODELS:
             try:
-                r = instance.infer({"model": m, "image": image, "result_extension": ".nrrd", "result_dtype": "uint8", "result_compress": False})
+                r = instance.infer({"model": m, "image": image, "study_uid": study_uid, "result_extension": ".nrrd", "result_dtype": "uint8", "result_compress": False})
                 f = r.get("file") or r.get("label")
                 if f and os.path.exists(f):
                     labels[m] = f
@@ -498,7 +527,7 @@ async def analyze(request: dict):
             except Exception as e:
                 logger.error("Segmentation %s failed: %s", m, e)
 
-    optic = {"disc_area_px": 0, "cup_area_px": 0, "cup_disc_ratio": 0.0}
+    optic = {"disc_area_px": 0, "cup_area_px": 0, "cup_disc_ratio": 0.0, "disc_center_x": None, "laterality": "UNKNOWN"}
     if "optic_disc_cup" in labels:
         try:
             import nrrd
@@ -508,7 +537,23 @@ async def analyze(request: dict):
             disc = int(np.sum(data == 1))
             cup = int(np.sum(data == 2))
             ratio = cup / disc if disc > 0 else 0.0
-            optic = {"disc_area_px": disc, "cup_area_px": cup, "cup_disc_ratio": round(ratio, 4)}
+            optic_mask = np.isin(data, (1, 2))
+            # pynrrd preserves the NRRD (x, y) axis order, so axis 0 is horizontal.
+            optic_columns = np.where(optic_mask)[0] if data.ndim == 2 else np.array([])
+            disc_center_x = float(np.mean(optic_columns)) if optic_columns.size else None
+            image_center_x = (data.shape[0] - 1) / 2 if data.ndim == 2 else None
+            laterality = (
+                "OS" if disc_center_x is not None and disc_center_x < image_center_x
+                else "OD" if disc_center_x is not None
+                else "UNKNOWN"
+            )
+            optic = {
+                "disc_area_px": disc,
+                "cup_area_px": cup,
+                "cup_disc_ratio": round(ratio, 4),
+                "disc_center_x": round(disc_center_x, 2) if disc_center_x is not None else None,
+                "laterality": laterality,
+            }
         except Exception as e:
             logger.error("Optic disc/cup quantification failed: %s", e)
 
@@ -570,7 +615,7 @@ async def analyze(request: dict):
 
     dr = {"grade": "Unknown", "confidence": 0.0, "probabilities": []}
     try:
-        r = instance.infer({"model": "dr_classification", "image": image})
+        r = instance.infer({"model": "dr_classification", "image": image, "study_uid": study_uid})
         if r:
             p = r.get("params", {})
             predictions = p.get("prediction", [])
@@ -598,6 +643,10 @@ async def analyze(request: dict):
             logger.warning("CLAHE unavailable: %s", str(e)[:200])
 
     report = {
+        "source": {
+            "study_instance_uid": study_uid,
+            "series_instance_uid": image,
+        },
         "dr_classification": dr,
         "lesions": lesion,
         "optic_disc_cup": optic,
