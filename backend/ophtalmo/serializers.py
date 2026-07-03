@@ -26,7 +26,8 @@ class ExamSerializer(serializers.ModelSerializer):
     class Meta:
         model = Exam
         fields = [
-            'id', 'study_instance_uid', 'patient_name', 'patient_age',
+            'id', 'study_instance_uid', 'patient_id', 'patient_name',
+            'patient_birth_date', 'patient_age', 'patient_history',
             'exam_type', 'date', 'priority', 'status',
             'assigned_to', 'assigned_to_name',
             'created_by', 'created_by_name',

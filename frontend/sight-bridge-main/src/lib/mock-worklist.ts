@@ -10,7 +10,7 @@ export interface ImageQualityResult {
   studyInstanceUid: string;
   seriesInstanceUid: string;
   sopInstanceUid: string;
-  patientId: string;
+  patientId?: string;
   score: number;
   category: QualityCategory;
   label: string;
@@ -18,8 +18,11 @@ export interface ImageQualityResult {
 
 export interface Exam {
   id: string;
+  patientId: string;
   patientName: string;
   patientAge: number;
+  patientBirthDate?: string;
+  patientHistory?: string;
   type: ExamType;
   date: string;
   priority: ExamPriority;

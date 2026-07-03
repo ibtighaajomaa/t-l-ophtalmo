@@ -3,8 +3,11 @@ import type { Exam, ExamStatus } from "@/lib/mock-worklist";
 interface ApiExam {
   id: number;
   study_instance_uid: string | null;
+  patient_id: string;
   patient_name: string;
+  patient_birth_date: string | null;
   patient_age: number | null;
+  patient_history: string;
   exam_type: string;
   date: string;
   priority: string;
@@ -71,11 +74,26 @@ function toFrontendExam(api: ApiExam): Exam {
   if (!api.assigned_to_name && status === "En cours") {
     status = "En attente";
   }
+  let patientAge = api.patient_age ?? 0;
+  if (api.patient_birth_date) {
+    const birthDate = new Date(`${api.patient_birth_date}T00:00:00`);
+    const today = new Date();
+    patientAge = today.getFullYear() - birthDate.getFullYear();
+    if (
+      today.getMonth() < birthDate.getMonth() ||
+      (today.getMonth() === birthDate.getMonth() && today.getDate() < birthDate.getDate())
+    ) {
+      patientAge -= 1;
+    }
+  }
 
   return {
     id: `EX-${api.id}`,
+    patientId: api.patient_id,
     patientName: api.patient_name,
-    patientAge: api.patient_age ?? 0,
+    patientAge,
+    patientBirthDate: api.patient_birth_date ?? undefined,
+    patientHistory: api.patient_history || undefined,
     type: api.exam_type as Exam["type"],
     date: api.date,
     priority: api.priority as Exam["priority"],
@@ -290,7 +308,7 @@ export async function syncWithOrthanc(): Promise<{
   errors: number;
   total: number;
 }> {
-  const res = await fetch(`${BASE}/sync-orthanc/`, {
+  const res = await fetch(`${BASE}/sync-orthanc/?force_refresh=true`, {
     method: "POST",
     headers: getHeaders(),
   });

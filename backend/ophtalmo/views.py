@@ -21,6 +21,7 @@ from .serializers import (
 )
 from users.authentication import KeycloakAuthentication
 from .report_generator import ReportGenerator
+from .dicom_patient import patient_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -321,12 +322,7 @@ def sync_orthanc(request):
             errors += 1
             continue
 
-        main_patient = meta.get('PatientMainDicomTags', {})
-        patient_name = main_patient.get('PatientName', 'Unknown')
-        patient_age = None
-        age_str = main_patient.get('PatientAge', '')
-        if age_str and age_str.rstrip('Y').isdigit():
-            patient_age = int(age_str.rstrip('Y'))
+        patient = patient_metadata(meta)
 
         study_date_str = meta.get('MainDicomTags', {}).get('StudyDate', '')
         study_date = date.today()
@@ -351,12 +347,13 @@ def sync_orthanc(request):
             existing = Exam.objects.filter(study_instance_uid=study_id).first()
             if existing:
                 changed_fields = []
-                if existing.patient_name != patient_name:
-                    existing.patient_name = patient_name
+                if existing.patient_name != patient['patient_name']:
+                    existing.patient_name = patient['patient_name']
                     changed_fields.append('patient_name')
-                if existing.patient_age != patient_age:
-                    existing.patient_age = patient_age
-                    changed_fields.append('patient_age')
+                for field in ('patient_id', 'patient_birth_date', 'patient_age', 'patient_history'):
+                    if getattr(existing, field) != patient[field]:
+                        setattr(existing, field, patient[field])
+                        changed_fields.append(field)
                 if existing.date != study_date:
                     existing.date = study_date
                     changed_fields.append('date')
@@ -369,8 +366,7 @@ def sync_orthanc(request):
         else:
             Exam.objects.create(
                 study_instance_uid=study_id,
-                patient_name=patient_name,
-                patient_age=patient_age,
+                **patient,
                 exam_type='Rétinographie',
                 date=study_date,
                 priority='Normal',
@@ -448,12 +444,7 @@ def orthanc_webhook(request):
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
-    main_patient = meta.get('PatientMainDicomTags', {})
-    patient_name = main_patient.get('PatientName', 'Unknown')
-    patient_age = None
-    age_str = main_patient.get('PatientAge', '')
-    if age_str and age_str.rstrip('Y').isdigit():
-        patient_age = int(age_str.rstrip('Y'))
+    patient = patient_metadata(meta)
 
     study_date_str = meta.get('MainDicomTags', {}).get('StudyDate', '')
     study_date = date.today()
@@ -488,8 +479,7 @@ def orthanc_webhook(request):
 
     exam = Exam.objects.create(
         study_instance_uid=study_id,
-        patient_name=patient_name,
-        patient_age=patient_age,
+        **patient,
         exam_type='Rétinographie',
         date=study_date,
         priority='Normal',
@@ -509,7 +499,7 @@ def orthanc_webhook(request):
     return Response({
         'status': 'created',
         'exam_id': exam.id,
-        'patient_name': patient_name,
+        'patient_name': patient['patient_name'],
         'study_id': study_id,
     }, status=status.HTTP_201_CREATED)
 

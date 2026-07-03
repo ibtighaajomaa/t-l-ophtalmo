@@ -8,6 +8,8 @@ import {
   Loader2,
   CheckCircle2,
   Calendar,
+  ClipboardList,
+  X,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -70,6 +72,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [filterDate, setFilterDate] = useState<string>("");
+  const [historyExam, setHistoryExam] = useState<Exam | null>(null);
 
   const [stats, setStats] = useState({ attente: 0, cours: 0, interprete: 0 });
 
@@ -170,7 +173,10 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
         const matchStatus = statusFilter === "Tous" || e.status === statusFilter;
         const q = query.toLowerCase();
         const matchQ =
-          !q || e.patientName.toLowerCase().includes(q) || e.id.toLowerCase().includes(q);
+          !q ||
+          e.patientName.toLowerCase().includes(q) ||
+          e.id.toLowerCase().includes(q) ||
+          (e.patientId?.toLowerCase().includes(q) ?? false);
         const matchRegion =
           !regionFilter ||
           (e.region && e.region.toLowerCase().includes(regionFilter.toLowerCase()));
@@ -224,7 +230,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
               setRegionFilter(e.target.value);
               setPage(1);
             }}
-            placeholder="Filtrer par région…"
+            placeholder="Filtrer par établissement…"
             className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
           />
         </div>
@@ -285,12 +291,12 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-4 py-3 text-left font-semibold">ID</th>
+                <th className="px-4 py-3 text-left font-semibold">ID patient</th>
                 <th className="px-4 py-3 text-left font-semibold">Patient</th>
-                <th className="px-4 py-3 text-left font-semibold">Type</th>
+                <th className="px-4 py-3 text-left font-semibold">Antécédents</th>
                 <th className="px-4 py-3 text-left font-semibold">Date</th>
                 <th className="px-4 py-3 text-left font-semibold">Priorité</th>
-                <th className="px-4 py-3 text-left font-semibold">Région</th>
+                <th className="px-4 py-3 text-left font-semibold">Nom d'établissement</th>
                 <th className="px-4 py-3 text-left font-semibold">Qualité IA</th>
                 <th className="px-4 py-3 text-left font-semibold">Statut</th>
                 {showAssignedTo && <th className="px-4 py-3 text-left font-semibold">Assigné à</th>}
@@ -318,12 +324,26 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
 
                   return (
                     <tr key={exam.id} className={rowClass}>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-500">{exam.id}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-slate-500">
+                        {exam.patientId || "—"}
+                      </td>
                       <td className="px-4 py-3">
                         <div className="font-medium text-slate-900">{exam.patientName}</div>
-                        <div className="text-xs text-slate-500">{exam.patientAge} ans</div>
+                        <div className="text-xs text-slate-500">
+                          {exam.patientBirthDate ? `${exam.patientAge} ans` : "Âge non renseigné"}
+                        </div>
                       </td>
-                      <td className="px-4 py-3 text-slate-700">{exam.type}</td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setHistoryExam(exam)}
+                          title="Afficher les antécédents"
+                          aria-label={`Afficher les antécédents de ${exam.patientName}`}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-700 ring-1 ring-blue-200 transition hover:bg-blue-100"
+                        >
+                          <ClipboardList className="h-4 w-4" />
+                        </button>
+                      </td>
                       <td className="px-4 py-3 text-slate-600">{exam.date}</td>
                       <td className="px-4 py-3">
                         <span
@@ -405,6 +425,41 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
         </div>
         <Pagination currentPage={page} totalPages={Math.ceil(total / 10)} onPageChange={setPage} />
       </div>
+      {historyExam && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="patient-history-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setHistoryExam(null);
+          }}
+        >
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 id="patient-history-title" className="text-lg font-semibold text-slate-900">
+                  Antécédents du patient
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {historyExam.patientName} · {historyExam.patientId || "ID non renseigné"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHistoryExam(null)}
+                aria-label="Fermer"
+                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="mt-5 whitespace-pre-line rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
+              {historyExam.patientHistory || "Aucun antécédent renseigné dans Orthanc."}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -218,9 +218,7 @@ function AnalysePage() {
             </div>
           </div>
         </div>
-        <div className="text-sm text-slate-500 italic hidden md:block">
-          Cliquez sur un cercle pour filtrer (cliquez à côté pour réinitialiser)
-        </div>
+        
       </header>
 
       {/* Main Content — 3 columns at same level */}

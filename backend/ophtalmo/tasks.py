@@ -16,6 +16,7 @@ import requests
 from celery import shared_task
 from django.core.cache import cache
 from django.db import transaction
+from .dicom_patient import patient_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -458,12 +459,7 @@ def tache_sync_orthanc_incremental():
             skipped += 1
             continue
 
-        main_patient = meta.get('PatientMainDicomTags', {})
-        patient_name = main_patient.get('PatientName', 'Unknown')
-        patient_age = None
-        age_str = main_patient.get('PatientAge', '')
-        if age_str and age_str.rstrip('Y').isdigit():
-            patient_age = int(age_str.rstrip('Y'))
+        patient = patient_metadata(meta)
 
         study_date_str = meta.get('MainDicomTags', {}).get('StudyDate', '')
         study_date = date.today()
@@ -509,8 +505,7 @@ def tache_sync_orthanc_incremental():
 
         Exam.objects.create(
             study_instance_uid=dicom_study_uid,
-            patient_name=patient_name,
-            patient_age=patient_age,
+            **patient,
             exam_type='Rétinographie',
             date=study_date,
             priority='Normal',

@@ -32,8 +32,11 @@ class Exam(models.Model):
         FAILED = "failed", "Échec"
 
     study_instance_uid = models.CharField(max_length=255, unique=True, blank=True, null=True)
+    patient_id = models.CharField(max_length=255, blank=True, default="")
     patient_name = models.CharField(max_length=255)
+    patient_birth_date = models.DateField(blank=True, null=True)
     patient_age = models.IntegerField(blank=True, null=True)
+    patient_history = models.TextField(blank=True, default="")
     exam_type = models.CharField(max_length=50, choices=ExamType.choices, default=ExamType.RETINOGRAPHIE)
     date = models.DateField()
     priority = models.CharField(max_length=20, choices=Priority.choices, default=Priority.NORMAL)
