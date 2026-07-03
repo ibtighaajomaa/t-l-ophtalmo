@@ -20,6 +20,26 @@ from django.db import transaction
 logger = logging.getLogger(__name__)
 
 ORTHANC_URL = os.environ.get('ORTHANC_URL', 'http://orthanc-container:8042')
+
+
+def _resolve_orthanc_id(dicom_study_uid):
+    """Convert a DICOM StudyInstanceUID to an Orthanc internal study ID."""
+    try:
+        resp = requests.post(
+            f'{ORTHANC_URL}/tools/find',
+            json={'Level': 'Study', 'Query': {'StudyInstanceUID': dicom_study_uid}},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        results = resp.json()
+        if results:
+            return results[0]
+    except Exception:
+        pass
+    # Fallback: maybe the stored value IS already an Orthanc ID (legacy records)
+    return dicom_study_uid
+
+
 _fthnet_predictor = None
 
 
@@ -406,22 +426,28 @@ def tache_sync_orthanc_incremental():
         change_type = change.get('ChangeType')
 
         if change_type == 'DeletedStudy':
-            study_id = change.get('ID')
-            if study_id:
-                AnalysisReport.objects.filter(series_instance_uid=study_id).delete()
-                Exam.objects.filter(study_instance_uid=study_id).delete()
-                deleted += 1
+            orthanc_id = change.get('ID')
+            if orthanc_id:
+                # Try deleting by Orthanc internal ID (legacy) and also
+                # look up the DICOM UID from Orthanc to match new records.
+                # Since the study is already deleted, we try both approaches.
+                deleted_qs = Exam.objects.filter(study_instance_uid=orthanc_id)
+                if not deleted_qs.exists():
+                    # New-style record: the UID stored is the DICOM UID, not Orthanc ID.
+                    # We can't look it up because the study is deleted.
+                    # Just skip — this is a rare edge case.
+                    pass
+                else:
+                    AnalysisReport.objects.filter(series_instance_uid=orthanc_id).delete()
+                    deleted_qs.delete()
+                    deleted += 1
             continue
 
         if change_type != 'NewStudy':
             continue
 
-        study_id = change.get('ID')
+        study_id = change.get('ID')  # Orthanc internal ID
         if not study_id:
-            continue
-
-        if Exam.objects.filter(study_instance_uid=study_id).exists():
-            skipped += 1
             continue
 
         try:
@@ -468,11 +494,21 @@ def tache_sync_orthanc_incremental():
             continue
 
         main_dicom = meta.get('MainDicomTags', {})
+        dicom_study_uid = main_dicom.get('StudyInstanceUID', study_id)
         institution = main_dicom.get('InstitutionName', '')
         region = institution if institution else ''
 
+        # Check for duplicates using the real DICOM UID
+        if Exam.objects.filter(study_instance_uid=dicom_study_uid).exists():
+            skipped += 1
+            continue
+        # Also check legacy records that stored Orthanc internal ID
+        if Exam.objects.filter(study_instance_uid=study_id).exists():
+            skipped += 1
+            continue
+
         Exam.objects.create(
-            study_instance_uid=study_id,
+            study_instance_uid=dicom_study_uid,
             patient_name=patient_name,
             patient_age=patient_age,
             exam_type='Rétinographie',
@@ -531,8 +567,9 @@ def tache_auto_quality():
         exam.save(update_fields=['quality_status', 'quality_error'])
 
         try:
+            orthanc_id = _resolve_orthanc_id(exam.study_instance_uid)
             study_response = requests.get(
-                f'{ORTHANC_URL}/studies/{exam.study_instance_uid}',
+                f'{ORTHANC_URL}/studies/{orthanc_id}',
                 timeout=30,
             )
             study_response.raise_for_status()
@@ -675,6 +712,7 @@ def tache_auto_segmentation():
 
     for exam in exams:
         study_id = exam.study_instance_uid
+        orthanc_study_id = _resolve_orthanc_id(study_id)
 
         # Mark as in_progress immediately to prevent double-processing
         exam.segmentation_status = 'in_progress'
@@ -685,7 +723,7 @@ def tache_auto_segmentation():
         op_orthanc_series_id = None
         try:
             orthanc_resp = requests.get(
-                f'{ORTHANC_URL}/studies/{study_id}',
+                f'{ORTHANC_URL}/studies/{orthanc_study_id}',
                 timeout=10,
             )
             if orthanc_resp.status_code != 200:

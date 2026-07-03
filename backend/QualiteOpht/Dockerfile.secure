@@ -1,0 +1,80 @@
+# =============================================================================
+# Dockerfile sécurisé FTHNet API
+# Multi-stage, non-root, minimal attack surface
+# =============================================================================
+
+# ── Étape 1 : Builder (compile les dépendances Python) ──
+FROM nvidia/cuda:12.1.1-devel-ubuntu22.04 AS builder
+
+WORKDIR /build
+
+# Installer les build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-dev python3-pip build-essential \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copier requirements
+COPY requirements.txt .
+
+# Installer en mode user (pas besoin de root)
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# ── Étape 2 : Runtime minimal ──
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+
+# Labels pour traçabilité
+LABEL maintainer="IT Security - Hospital"
+LABEL version="1.0.0"
+LABEL description="FTHNet API for fundus quality assessment"
+
+# Installer uniquement les libs runtime nécessaires
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libgomp1 \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Créer un utilisateur non-root (pas d'accès sudo, pas de shell)
+RUN groupadd -r fthnet --gid=1000 && \
+    useradd -r -g fthnet -u 1000 -s /bin/false -d /nonexistent fthnet
+
+# Copier les packages Python depuis le builder
+COPY --from=builder --chown=fthnet:fthnet /root/.local /home/fthnet/.local
+ENV PATH=/home/fthnet/.local/bin:$PATH
+ENV PYTHONPATH=/app
+
+WORKDIR /app
+
+# Copier le code source (chown fthnet:fthnet)
+COPY --chown=fthnet:fthnet fthnet_api.py /app/
+COPY --chown=fthnet:fthnet basiqa /app/basiqa
+
+# Créer les répertoires nécessaires avec les bons droits
+RUN mkdir -p /tmp /app/logs && \
+    chown -R fthnet:fthnet /app /tmp && \
+    chmod 755 /app && \
+    chmod 1777 /tmp
+
+# ── Sécurité : Pas de setuid, pas de capabilities inutiles ──
+USER fthnet
+
+# Le conteneur est read-only sauf /tmp
+# Volumes pour les poids (monté read-only au runtime)
+VOLUME ["/app/pretrained_weight"]
+
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Lancer avec uvicorn (pas de reload en prod !)
+CMD ["python", "-m", "uvicorn", "fthnet_api:app", \
+     "--host", "0.0.0.0", "--port", "8000", \
+     "--workers", "1", \
+     "--limit-concurrency", "20", \
+     "--timeout-keep-alive", "30"]

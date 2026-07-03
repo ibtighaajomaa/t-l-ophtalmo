@@ -237,6 +237,8 @@ services:
   orthanc-container:
     image: orthancteam/orthanc:25.8.0
     restart: unless-stopped
+    ports:
+      - "4242:4242"
     volumes:
       - orthanc-storage:/var/lib/orthanc/db/
       - ./orthanc/on_stable_study.lua:/etc/orthanc/scripts/on_stable_study.lua
@@ -245,7 +247,7 @@ services:
       DICOM_WEB_PLUGIN_ENABLED: "true"
       ORTHANC__DICOM_WEB__PUBLIC_ROOT: "/orthanc-container/dicom-web/"
       ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__ENABLE_OPEN_IN_OHIF_VIEWER_3: "true"
-      ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__OHIF_VIEWER_3_PUBLIC_ROOT: "http://193.95.31.196/ohif/"
+      ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__OHIF_VIEWER_3_PUBLIC_ROOT: "http://172.20.1.188/ohif/"
       ORTHANC__AUTHENTICATION_ENABLED: "false"
       ORTHANC__LUA_SCRIPTS: '["/etc/orthanc/scripts/on_stable_study.lua"]'
       ORTHANC__POSTGRESQL: |
@@ -273,7 +275,7 @@ services:
       DICOM_WEB_PLUGIN_ENABLED: "true"
       ORTHANC__DICOM_WEB__PUBLIC_ROOT: "/orthanc-plugin/dicom-web/"
       ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__ENABLE_OPEN_IN_OHIF_VIEWER_3: "true"
-      ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__OHIF_VIEWER_3_PUBLIC_ROOT: "http://193.95.31.196/orthanc-plugin/ohif/"
+      ORTHANC__ORTHANC_EXPLORER_2__UI_OPTIONS__OHIF_VIEWER_3_PUBLIC_ROOT: "http://172.20.1.188/orthanc-plugin/ohif/"
       STONE_WEB_VIEWER_PLUGIN_ENABLED: "true"
       OHIF_PLUGIN_ENABLED: "true"
       ORTHANC__OHIF: |

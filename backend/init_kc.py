@@ -38,7 +38,7 @@ try:
         "publicClient": False,
         "serviceAccountsEnabled": True,
         "standardFlowEnabled": True,
-        "redirectUris": ["http://localhost:8000/*", "http://localhost:5173/*", "http://193.95.31.196/*", "*"]
+        "redirectUris": ["http://localhost:8000/*", "http://localhost:5173/*", "http://172.20.1.188/*", "*"]
     }, skip_exists=True)
     print("Client created.")
 except Exception as e:
