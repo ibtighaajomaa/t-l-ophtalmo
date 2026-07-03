@@ -88,7 +88,7 @@ def exam_list(request):
         q = request.query_params.get('q', '')
         if q:
             exams = exams.filter(
-                Q(patient_name__icontains=q) | Q(id__icontains=q)
+                Q(patient_name__icontains=q) | Q(patient_id__icontains=q) | Q(id__icontains=q)
             )
 
         region = request.query_params.get('region', '')
