@@ -527,92 +527,7 @@ async def analyze(request: dict):
             except Exception as e:
                 logger.error("Segmentation %s failed: %s", m, e)
 
-    optic = {"disc_area_px": 0, "cup_area_px": 0, "cup_disc_ratio": 0.0, "disc_center_x": None, "laterality": "UNKNOWN"}
-    if "optic_disc_cup" in labels:
-        try:
-            import nrrd
-            data, _ = nrrd.read(labels["optic_disc_cup"])
-            if data.ndim == 3:
-                data = data[0] if data.shape[0] == 1 else data.squeeze()
-            disc = int(np.sum(data == 1))
-            cup = int(np.sum(data == 2))
-            ratio = cup / disc if disc > 0 else 0.0
-            optic_mask = np.isin(data, (1, 2))
-            # pynrrd preserves the NRRD (x, y) axis order, so axis 0 is horizontal.
-            optic_columns = np.where(optic_mask)[0] if data.ndim == 2 else np.array([])
-            disc_center_x = float(np.mean(optic_columns)) if optic_columns.size else None
-            image_center_x = (data.shape[0] - 1) / 2 if data.ndim == 2 else None
-            laterality = (
-                "OS" if disc_center_x is not None and disc_center_x < image_center_x
-                else "OD" if disc_center_x is not None
-                else "UNKNOWN"
-            )
-            optic = {
-                "disc_area_px": disc,
-                "cup_area_px": cup,
-                "cup_disc_ratio": round(ratio, 4),
-                "disc_center_x": round(disc_center_x, 2) if disc_center_x is not None else None,
-                "laterality": laterality,
-            }
-        except Exception as e:
-            logger.error("Optic disc/cup quantification failed: %s", e)
-
-    glaucoma = {"vcdr": 0.0, "risk": "N/A", "disc_area_px": 0, "cup_area_px": 0}
-    if "optic_disc_cup" in labels:
-        try:
-            import nrrd
-            data, _ = nrrd.read(labels["optic_disc_cup"])
-            if data.ndim == 3:
-                data = data[0] if data.shape[0] == 1 else data.squeeze()
-            disc_mask = data == 1
-            cup_mask = data == 2
-            disc_area = int(np.sum(disc_mask))
-            cup_area = int(np.sum(cup_mask))
-            disc_rows = np.any(disc_mask, axis=1)
-            cup_rows = np.any(cup_mask, axis=1)
-            disc_h = np.max(np.where(disc_rows)) - np.min(np.where(disc_rows)) if disc_rows.any() else 0
-            cup_h = np.max(np.where(cup_rows)) - np.min(np.where(cup_rows)) if cup_rows.any() else 0
-            vcdr = cup_h / disc_h if disc_h > 0 else 0.0
-            if vcdr < 0.3: risk = "Faible"
-            elif vcdr < 0.5: risk = "Modere"
-            elif vcdr < 0.7: risk = "Eleve"
-            else: risk = "Tres eleve"
-            glaucoma = {"vcdr": round(vcdr, 4), "risk": risk, "disc_area_px": disc_area, "cup_area_px": cup_area}
-        except Exception as e:
-            logger.error("Glaucoma quantification failed: %s", e)
-
-    vessel = {"coverage_pct": 0.0, "pixel_count": 0}
-    if "vessel_seg" in labels:
-        try:
-            import nrrd
-            data, _ = nrrd.read(labels["vessel_seg"])
-            if data.ndim == 3:
-                data = data[0] if data.shape[0] == 1 else data.squeeze()
-            total = int(data.size)
-            v = int(np.sum(data > 0))
-            vessel = {"coverage_pct": round(v / total * 100, 2) if total > 0 else 0.0, "pixel_count": v}
-        except Exception as e:
-            logger.error("Vessel quantification failed: %s", e)
-
-    lesion = {"microaneurysms": 0, "hemorrhages": 0, "exudates": 0, "coverage_pct": 0.0}
-    if "lesion_seg" in labels:
-        try:
-            import nrrd
-            data, _ = nrrd.read(labels["lesion_seg"])
-            if data.ndim == 3:
-                data = data[0] if data.shape[0] == 1 else data.squeeze()
-            total = int(data.size)
-            ma = int(np.sum(data == 1))
-            he = int(np.sum(data == 2))
-            ex = int(np.sum(data == 3))
-            any_lesion = int(np.sum(data > 0))
-            lesion = {
-                "microaneurysms": ma, "hemorrhages": he, "exudates": ex,
-                "coverage_pct": round(any_lesion / total * 100, 2) if total > 0 else 0.0,
-            }
-        except Exception as e:
-            logger.error("Lesion quantification failed: %s", e)
-
+    # --- DR classification first (used by per-slice metrics) ---
     dr = {"grade": "Unknown", "confidence": 0.0, "probabilities": []}
     try:
         r = instance.infer({"model": "dr_classification", "image": image, "study_uid": study_uid})
@@ -627,6 +542,163 @@ async def analyze(request: dict):
     except Exception as e:
         logger.error("DR classification failed: %s", e)
 
+    # --- Helper: per-slice optic disc / cup metrics ---
+    def _process_optic_slice(slice_data):
+        disc = int(np.sum(slice_data == 1))
+        cup = int(np.sum(slice_data == 2))
+        ratio = cup / disc if disc > 0 else 0.0
+        optic_mask = np.isin(slice_data, (1, 2))
+        # pynrrd preserves the NRRD (x, y) axis order, so axis 0 is horizontal.
+        optic_columns = np.where(optic_mask)[1] if slice_data.ndim == 2 else np.array([])
+        disc_center_x = float(np.mean(optic_columns)) if optic_columns.size else None
+        image_center_x = (slice_data.shape[1] - 1) / 2 if slice_data.ndim == 2 else None
+        laterality = (
+            "OS" if disc_center_x is not None and disc_center_x < image_center_x
+            else "OD" if disc_center_x is not None
+            else "UNKNOWN"
+        )
+        return {
+            "disc_area_px": disc,
+            "cup_area_px": cup,
+            "cup_disc_ratio": round(ratio, 4),
+            "disc_center_x": round(disc_center_x, 2) if disc_center_x is not None else None,
+            "laterality": laterality,
+        }
+
+    # --- Helper: per-slice glaucoma metrics ---
+    def _process_glaucoma_slice(slice_data):
+        disc_mask = slice_data == 1
+        cup_mask = slice_data == 2
+        disc_area = int(np.sum(disc_mask))
+        cup_area = int(np.sum(cup_mask))
+        disc_rows = np.any(disc_mask, axis=1)
+        cup_rows = np.any(cup_mask, axis=1)
+        disc_h = np.max(np.where(disc_rows)) - np.min(np.where(disc_rows)) if disc_rows.any() else 0
+        cup_h = np.max(np.where(cup_rows)) - np.min(np.where(cup_rows)) if cup_rows.any() else 0
+        vcdr = cup_h / disc_h if disc_h > 0 else 0.0
+        if vcdr < 0.3: risk = "Faible"
+        elif vcdr < 0.5: risk = "Modere"
+        elif vcdr < 0.7: risk = "Eleve"
+        else: risk = "Tres eleve"
+        return {"vcdr": round(vcdr, 4), "risk": risk, "disc_area_px": disc_area, "cup_area_px": cup_area}
+
+    # --- Helper: severity score (DR grade × 0.7 + VCDR × 0.3) ---
+    def _compute_severity(dr_grade, vcdr):
+        DR_GRADE_MAP = {"No DR": 0, "Mild NPDR": 1, "Moderate NPDR": 2, "Severe NPDR": 3, "Proliferative DR": 4}
+        dr_val = DR_GRADE_MAP.get(dr_grade, 0)
+        dr_norm = dr_val / 4.0
+        return round(0.7 * dr_norm + 0.3 * min(vcdr, 1.0), 4)
+
+    # --- Helper: extract a 2D slice from a 3D or 4D volume ---
+    def _extract_slice(vol, idx):
+        if vol is None:
+            return None
+        if vol.ndim == 4:
+            if vol.shape[0] > 1:
+                return vol[idx, 0] if vol.shape[-1] > 1 and idx < vol.shape[0] else vol[idx]
+            return vol[0, idx] if vol.shape[1] > 1 else vol[0, 0]
+        if vol.ndim == 3:
+            if vol.shape[0] > 1:
+                return vol[idx]
+            elif vol.shape[0] == 1:
+                return vol[0]
+            return vol.squeeze()
+        return vol
+
+    # --- Read all NRRD label volumes ---
+    optic_vol = vessel_vol = lesion_vol = None
+    if "optic_disc_cup" in labels:
+        import nrrd
+        optic_vol, _ = nrrd.read(labels["optic_disc_cup"])
+    if "vessel_seg" in labels:
+        import nrrd
+        vessel_vol, _ = nrrd.read(labels["vessel_seg"])
+    if "lesion_seg" in labels:
+        import nrrd
+        lesion_vol, _ = nrrd.read(labels["lesion_seg"])
+
+    num_slices = 1
+    if optic_vol is not None:
+        if optic_vol.ndim == 4:
+            num_slices = optic_vol.shape[1] if optic_vol.shape[0] == 1 else optic_vol.shape[0]
+        elif optic_vol.ndim == 3:
+            if optic_vol.shape[0] > 1:
+                num_slices = optic_vol.shape[0]
+            elif optic_vol.shape[0] == 1:
+                num_slices = 1
+            else:
+                num_slices = 1
+
+    # --- Per-slice quantification ---
+    slice_results = []
+    for i in range(num_slices):
+        opt_sl = _extract_slice(optic_vol, i)
+        ves_sl = _extract_slice(vessel_vol, i) if vessel_vol is not None else None
+        les_sl = _extract_slice(lesion_vol, i) if lesion_vol is not None else None
+
+        opt_metrics = {"disc_area_px": 0, "cup_area_px": 0, "cup_disc_ratio": 0.0, "disc_center_x": None, "laterality": "UNKNOWN"}
+        gla_metrics = {"vcdr": 0.0, "risk": "N/A", "disc_area_px": 0, "cup_area_px": 0}
+        ves_metrics = {"coverage_pct": 0.0, "pixel_count": 0}
+        les_metrics = {"microaneurysms": 0, "hemorrhages": 0, "exudates": 0, "coverage_pct": 0.0}
+
+        if opt_sl is not None:
+            try:
+                opt_metrics = _process_optic_slice(opt_sl)
+                gla_metrics = _process_glaucoma_slice(opt_sl)
+            except Exception as e:
+                logger.error("Per-slice optic/glaucoma quantification failed for slice %s: %s", i, e)
+
+        if ves_sl is not None:
+            try:
+                total = int(ves_sl.size)
+                v = int(np.sum(ves_sl > 0))
+                ves_metrics = {"coverage_pct": round(v / total * 100, 2) if total > 0 else 0.0, "pixel_count": v}
+            except Exception as e:
+                logger.error("Vessel quantification failed for slice %s: %s", i, e)
+
+        if les_sl is not None:
+            try:
+                total = int(les_sl.size)
+                ma = int(np.sum(les_sl == 1))
+                he = int(np.sum(les_sl == 2))
+                ex = int(np.sum(les_sl == 3))
+                any_lesion = int(np.sum(les_sl > 0))
+                les_metrics = {
+                    "microaneurysms": ma, "hemorrhages": he, "exudates": ex,
+                    "coverage_pct": round(any_lesion / total * 100, 2) if total > 0 else 0.0,
+                }
+            except Exception as e:
+                logger.error("Lesion quantification failed for slice %s: %s", i, e)
+
+        severity = _compute_severity(dr.get("grade", "Unknown"), gla_metrics["vcdr"])
+        slice_results.append({
+            "index": i,
+            "optic_disc_cup": opt_metrics,
+            "glaucoma": gla_metrics,
+            "vessels": ves_metrics,
+            "lesions": les_metrics,
+            "severity_score": severity,
+        })
+
+    # --- Group by laterality, pick most critical per eye ---
+    def _pick_critical(results, dr_info, gradcam, clahe):
+        for r in results:
+            r["dr_classification"] = dr_info
+            r["gradcam_image"] = gradcam
+            r["clahe_image"] = clahe
+        return max(results, key=lambda r: r["severity_score"]) if results else None
+
+    od_results = [r for r in slice_results if r["optic_disc_cup"]["laterality"] == "OD"]
+    os_results = [r for r in slice_results if r["optic_disc_cup"]["laterality"] == "OS"]
+
+    # --- Top-level backward-compatible metrics (use first slice) ---
+    top_slice = slice_results[0] if slice_results else None
+    optic = top_slice["optic_disc_cup"] if top_slice else {"disc_area_px": 0, "cup_area_px": 0, "cup_disc_ratio": 0.0, "disc_center_x": None, "laterality": "UNKNOWN"}
+    glaucoma = top_slice["glaucoma"] if top_slice else {"vcdr": 0.0, "risk": "N/A", "disc_area_px": 0, "cup_area_px": 0}
+    vessel = top_slice["vessels"] if top_slice else {"coverage_pct": 0.0, "pixel_count": 0}
+    lesion = top_slice["lesions"] if top_slice else {"microaneurysms": 0, "hemorrhages": 0, "exudates": 0, "coverage_pct": 0.0}
+
+    # --- Grad-CAM / CLAHE ---
     gradcam_b64 = None
     clahe_b64 = None
     dr_task = instance._infers.get("dr_classification")
@@ -642,6 +714,10 @@ async def analyze(request: dict):
         except Exception as e:
             logger.warning("CLAHE unavailable: %s", str(e)[:200])
 
+    # --- Pick most critical per eye ---
+    critical_od = _pick_critical(od_results, dr, gradcam_b64, clahe_b64)
+    critical_os = _pick_critical(os_results, dr, gradcam_b64, clahe_b64)
+
     report = {
         "source": {
             "study_instance_uid": study_uid,
@@ -654,6 +730,11 @@ async def analyze(request: dict):
         "vessels": vessel,
         "gradcam_image": gradcam_b64,
         "clahe_image": clahe_b64,
+        "per_instance": slice_results,
+        "critical": {
+            "od": critical_od,
+            "os": critical_os,
+        },
     }
 
     return report

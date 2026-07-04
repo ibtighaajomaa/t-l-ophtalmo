@@ -233,6 +233,7 @@ function ExamDetail() {
   const [exam, setExam] = useState<Exam | null>(null);
   const [loading, setLoading] = useState(true);
   const [showViewer, setShowViewer] = useState(false);
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [activeSegSeries, setActiveSegSeries] = useState<string | null>(null);
   const [bridgeReady, setBridgeReady] = useState(false);
   const viewerRef = useRef<HTMLDivElement>(null);
@@ -356,10 +357,21 @@ function ExamDetail() {
           {/* Action buttons row */}
           <div className="flex items-center gap-3 px-5 py-3 border-b border-slate-800 bg-[#0a0f1a]">
             <button
-              onClick={() => setShowViewer(true)}
-              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-700 px-4 py-2 text-xs font-semibold text-white transition shadow"
+              onClick={() => setAiPanelOpen((v) => !v)}
+              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition shadow ${
+                aiPanelOpen
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                  : "bg-blue-600 hover:bg-blue-700 text-white"
+              }`}
             >
               <Brain className="h-3.5 w-3.5" />
+              {aiPanelOpen ? "AI Analysis ✓" : "AI Analysis"}
+            </button>
+            <button
+              onClick={() => setShowViewer(true)}
+              className="inline-flex items-center gap-2 rounded-lg bg-slate-700 hover:bg-slate-600 px-4 py-2 text-xs font-semibold text-slate-200 transition shadow"
+            >
+              <MonitorPlay className="h-3.5 w-3.5" />
               MONAI Label
             </button>
             <button
@@ -974,12 +986,13 @@ function ExamDetail() {
 
           {/* Right panel */}
           <div className="space-y-4">
-            {showViewer && hasStudy ? (
+            {aiPanelOpen || (showViewer && hasStudy) ? (
               <AIPanel
                 studyInstanceUid={exam.studyInstanceUid}
                 seriesInstanceUid={exam.studyInstanceUid}
                 patientId={exam.patientName}
                 patientAge={exam.patientAge}
+                autoRun={aiPanelOpen}
               />
             ) : (
               <>

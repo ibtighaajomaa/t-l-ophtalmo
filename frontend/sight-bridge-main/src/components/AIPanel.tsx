@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Brain,
   Target,
@@ -12,7 +12,7 @@ import {
   Plus,
   MessageSquare,
 } from "lucide-react";
-import type { AnalysisResult, DoctorNote } from "@/lib/exam-api";
+import type { AnalysisResult, DoctorNote, PerEyeAnalysis } from "@/lib/exam-api";
 import { runAIAnalysis, generateReport, fetchDoctorNotes, createDoctorNote } from "@/lib/exam-api";
 import { RichTextEditor } from "@/components/RichTextEditor";
 
@@ -21,6 +21,7 @@ interface AIPanelProps {
   seriesInstanceUid?: string;
   patientId?: string;
   patientAge?: number;
+  autoRun?: boolean;
 }
 
 export function AIPanel({
@@ -28,6 +29,7 @@ export function AIPanel({
   seriesInstanceUid,
   patientId,
   patientAge,
+  autoRun,
 }: AIPanelProps) {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -62,6 +64,14 @@ export function AIPanel({
       cancelled = true;
     };
   }, [seriesInstanceUid]);
+
+  const autoRunRef = useRef(false);
+  useEffect(() => {
+    if (autoRun && studyInstanceUid && !autoRunRef.current) {
+      autoRunRef.current = true;
+      handleRunAnalysis();
+    }
+  }, [autoRun, studyInstanceUid]);
 
   async function handleRunAnalysis() {
     if (!studyInstanceUid) return;
@@ -178,158 +188,179 @@ export function AIPanel({
 
         {hasAnalysis && (
           <>
-            {/* DR Classification */}
-            <section className="space-y-2">
-              <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
-                <Activity className="h-3.5 w-3.5 text-emerald-400" />
-                DR Classification
-              </h3>
-              <div className="rounded-lg bg-[#121936] border border-slate-700 p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400">Predicted Grade</span>
-                  <span
-                    className={`text-xs font-semibold ${
-                      analysis.dr_classification.grade === "Unknown"
-                        ? "text-slate-500"
-                        : "text-emerald-400"
-                    }`}
-                  >
-                    {analysis.dr_classification.grade}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400">Confidence</span>
-                  <span className="text-xs text-slate-300">
-                    {(analysis.dr_classification.confidence * 100).toFixed(1)}%
-                  </span>
-                </div>
-                {analysis.dr_classification.probabilities.length > 0 && (
-                  <div className="space-y-1 pt-1 border-t border-slate-700">
-                    {analysis.dr_classification.probabilities.map((p) => (
-                      <div key={p.label} className="flex items-center justify-between text-[11px]">
-                        <span className="text-slate-500">{p.label}</span>
-                        <span className="text-slate-400 font-mono">
-                          {(p.score * 100).toFixed(1)}%
-                        </span>
+            {analysis.critical ? (
+              <div className="grid grid-cols-2 gap-3">
+                {/* ŒIL GAUCHE */}
+                <EyeAnalysisCard
+                  eye="OG"
+                  label="ŒIL GAUCHE"
+                  color="purple"
+                  data={analysis.critical.os}
+                />
+                {/* ŒIL DROIT */}
+                <EyeAnalysisCard
+                  eye="OD"
+                  label="ŒIL DROIT"
+                  color="blue"
+                  data={analysis.critical.od}
+                />
+              </div>
+            ) : (
+              <>
+                {/* DR Classification */}
+                <section className="space-y-2">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                    <Activity className="h-3.5 w-3.5 text-emerald-400" />
+                    DR Classification
+                  </h3>
+                  <div className="rounded-lg bg-[#121936] border border-slate-700 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-400">Predicted Grade</span>
+                      <span
+                        className={`text-xs font-semibold ${
+                          analysis.dr_classification.grade === "Unknown"
+                            ? "text-slate-500"
+                            : "text-emerald-400"
+                        }`}
+                      >
+                        {analysis.dr_classification.grade}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-400">Confidence</span>
+                      <span className="text-xs text-slate-300">
+                        {(analysis.dr_classification.confidence * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    {analysis.dr_classification.probabilities.length > 0 && (
+                      <div className="space-y-1 pt-1 border-t border-slate-700">
+                        {analysis.dr_classification.probabilities.map((p) => (
+                          <div key={p.label} className="flex items-center justify-between text-[11px]">
+                            <span className="text-slate-500">{p.label}</span>
+                            <span className="text-slate-400 font-mono">
+                              {(p.score * 100).toFixed(1)}%
+                            </span>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
                   </div>
-                )}
-              </div>
-            </section>
+                </section>
 
-            {/* Lesions */}
-            <section className="space-y-2">
-              <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
-                <Target className="h-3.5 w-3.5 text-amber-400" />
-                Lesions
-              </h3>
-              <div className="rounded-lg bg-[#121936] border border-slate-700 p-3 space-y-2">
-                <LesionRow label="Microaneurysms" value={analysis.lesions.microaneurysms} />
-                <LesionRow label="Hemorrhages" value={analysis.lesions.hemorrhages} />
-                <LesionRow label="Exudates" value={analysis.lesions.exudates} />
-                <div className="flex items-center justify-between pt-1 border-t border-slate-700">
-                  <span className="text-xs text-slate-400">Coverage</span>
-                  <span className="text-xs text-amber-400 font-mono">
-                    {analysis.lesions.coverage_pct.toFixed(1)}%
-                  </span>
-                </div>
-              </div>
-            </section>
+                {/* Lesions */}
+                <section className="space-y-2">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                    <Target className="h-3.5 w-3.5 text-amber-400" />
+                    Lesions
+                  </h3>
+                  <div className="rounded-lg bg-[#121936] border border-slate-700 p-3 space-y-2">
+                    <LesionRow label="Microaneurysms" value={analysis.lesions.microaneurysms} />
+                    <LesionRow label="Hemorrhages" value={analysis.lesions.hemorrhages} />
+                    <LesionRow label="Exudates" value={analysis.lesions.exudates} />
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-700">
+                      <span className="text-xs text-slate-400">Coverage</span>
+                      <span className="text-xs text-amber-400 font-mono">
+                        {analysis.lesions.coverage_pct.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                </section>
 
-            {/* Optic Disc / Cup */}
-            <section className="space-y-2">
-              <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
-                <Eye className="h-3.5 w-3.5 text-purple-400" />
-                Optic Disc / Cup
-              </h3>
-              <div className="rounded-lg bg-[#121936] border border-slate-700 p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400">Disc Area</span>
-                  <span className="text-xs text-slate-300 font-mono">
-                    {analysis.optic_disc_cup.disc_area_px > 0
-                      ? `${analysis.optic_disc_cup.disc_area_px} px`
-                      : "\u2014 px"}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400">Cup Area</span>
-                  <span className="text-xs text-slate-300 font-mono">
-                    {analysis.optic_disc_cup.cup_area_px > 0
-                      ? `${analysis.optic_disc_cup.cup_area_px} px`
-                      : "\u2014 px"}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400">Cup/Disc Ratio</span>
-                  <span
-                    className={`text-xs font-semibold font-mono ${
-                      analysis.optic_disc_cup.cup_disc_ratio > 0.5
-                        ? "text-red-400"
-                        : "text-purple-400"
-                    }`}
-                  >
-                    {analysis.optic_disc_cup.cup_disc_ratio.toFixed(2)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between pt-1 border-t border-slate-700">
-                  <span className="text-xs text-slate-400">Glaucoma Risk</span>
-                  <span
-                    className={`text-xs font-semibold ${
-                      analysis.glaucoma.risk === "Faible"
-                        ? "text-emerald-400"
-                        : analysis.glaucoma.risk === "Modere"
-                          ? "text-amber-400"
-                          : analysis.glaucoma.risk === "Eleve" ||
-                              analysis.glaucoma.risk === "Tres eleve"
+                {/* Optic Disc / Cup */}
+                <section className="space-y-2">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                    <Eye className="h-3.5 w-3.5 text-purple-400" />
+                    Optic Disc / Cup
+                  </h3>
+                  <div className="rounded-lg bg-[#121936] border border-slate-700 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-400">Disc Area</span>
+                      <span className="text-xs text-slate-300 font-mono">
+                        {analysis.optic_disc_cup.disc_area_px > 0
+                          ? `${analysis.optic_disc_cup.disc_area_px} px`
+                          : "\u2014 px"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-400">Cup Area</span>
+                      <span className="text-xs text-slate-300 font-mono">
+                        {analysis.optic_disc_cup.cup_area_px > 0
+                          ? `${analysis.optic_disc_cup.cup_area_px} px`
+                          : "\u2014 px"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-400">Cup/Disc Ratio</span>
+                      <span
+                        className={`text-xs font-semibold font-mono ${
+                          analysis.optic_disc_cup.cup_disc_ratio > 0.5
                             ? "text-red-400"
-                            : "text-slate-500"
-                    }`}
-                  >
-                    {analysis.glaucoma.risk}
-                  </span>
-                </div>
-              </div>
-            </section>
+                            : "text-purple-400"
+                        }`}
+                      >
+                        {analysis.optic_disc_cup.cup_disc_ratio.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-700">
+                      <span className="text-xs text-slate-400">Glaucoma Risk</span>
+                      <span
+                        className={`text-xs font-semibold ${
+                          analysis.glaucoma.risk === "Faible"
+                            ? "text-emerald-400"
+                            : analysis.glaucoma.risk === "Modere"
+                              ? "text-amber-400"
+                              : analysis.glaucoma.risk === "Eleve" ||
+                                  analysis.glaucoma.risk === "Tres eleve"
+                                ? "text-red-400"
+                                : "text-slate-500"
+                        }`}
+                      >
+                        {analysis.glaucoma.risk}
+                      </span>
+                    </div>
+                  </div>
+                </section>
 
-            {/* Vessels */}
-            <section className="space-y-2">
-              <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
-                <Activity className="h-3.5 w-3.5 text-cyan-400" />
-                Vessels
-              </h3>
-              <div className="rounded-lg bg-[#121936] border border-slate-700 p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400">Coverage</span>
-                  <span className="text-xs text-cyan-400 font-mono">
-                    {analysis.vessels.coverage_pct.toFixed(1)}%
-                  </span>
-                </div>
-              </div>
-            </section>
+                {/* Vessels */}
+                <section className="space-y-2">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                    <Activity className="h-3.5 w-3.5 text-cyan-400" />
+                    Vessels
+                  </h3>
+                  <div className="rounded-lg bg-[#121936] border border-slate-700 p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-400">Coverage</span>
+                      <span className="text-xs text-cyan-400 font-mono">
+                        {analysis.vessels.coverage_pct.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                </section>
 
-            {/* Grad-CAM */}
-            {analysis.gradcam_image && (
-              <section className="space-y-2">
-                <h3 className="text-sm font-bold text-white">Grad-CAM</h3>
-                <img
-                  src={`data:image/png;base64,${analysis.gradcam_image}`}
-                  alt="Grad-CAM"
-                  className="w-full rounded-lg border border-slate-700"
-                />
-              </section>
-            )}
+                {/* Grad-CAM */}
+                {analysis.gradcam_image && (
+                  <section className="space-y-2">
+                    <h3 className="text-sm font-bold text-white">Grad-CAM</h3>
+                    <img
+                      src={`data:image/png;base64,${analysis.gradcam_image}`}
+                      alt="Grad-CAM"
+                      className="w-full rounded-lg border border-slate-700"
+                    />
+                  </section>
+                )}
 
-            {/* CLAHE */}
-            {analysis.clahe_image && (
-              <section className="space-y-2">
-                <h3 className="text-sm font-bold text-white">CLAHE Enhanced</h3>
-                <img
-                  src={`data:image/png;base64,${analysis.clahe_image}`}
-                  alt="CLAHE"
-                  className="w-full rounded-lg border border-slate-700"
-                />
-              </section>
+                {/* CLAHE */}
+                {analysis.clahe_image && (
+                  <section className="space-y-2">
+                    <h3 className="text-sm font-bold text-white">CLAHE Enhanced</h3>
+                    <img
+                      src={`data:image/png;base64,${analysis.clahe_image}`}
+                      alt="CLAHE"
+                      className="w-full rounded-lg border border-slate-700"
+                    />
+                  </section>
+                )}
+              </>
             )}
 
             <div className="flex items-center gap-1.5 text-[10px] text-emerald-600">
@@ -511,6 +542,138 @@ function LesionRow({ label, value }: { label: string; value: number }) {
     <div className="flex items-center justify-between">
       <span className="text-xs text-slate-400">{label}</span>
       <span className="text-xs text-slate-300 font-mono">{value}</span>
+    </div>
+  );
+}
+
+function SeverityBar({ score }: { score: number }) {
+  const pct = Math.min(score * 100, 100);
+  const barColor =
+    score < 0.3 ? "bg-emerald-500"
+    : score < 0.5 ? "bg-amber-500"
+    : score < 0.7 ? "bg-orange-500"
+    : "bg-red-500";
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] text-slate-500 shrink-0">Score</span>
+      <div className="flex-1 h-1.5 rounded-full bg-slate-700 overflow-hidden">
+        <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-[10px] font-mono text-slate-400">{score.toFixed(2)}</span>
+    </div>
+  );
+}
+
+function EyeAnalysisCard({
+  eye,
+  label,
+  color,
+  data,
+}: {
+  eye: "OD" | "OS";
+  label: string;
+  color: "purple" | "blue";
+  data: PerEyeAnalysis | null;
+}) {
+  const borderColor = color === "purple" ? "border-purple-700" : "border-blue-700";
+  const headerColor = color === "purple" ? "text-purple-400" : "text-blue-400";
+  const accentColor = color === "purple" ? "purple" : "blue";
+
+  if (!data) {
+    return (
+      <div className={`rounded-lg border ${borderColor} bg-[#121936] p-3 flex flex-col items-center justify-center min-h-[120px]`}>
+        <p className={`text-xs ${headerColor} font-medium`}>{label}</p>
+        <p className="text-[10px] text-slate-500 mt-2">Aucune donnée critique</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`rounded-lg border ${borderColor} bg-[#121936] p-3 space-y-3`}>
+      <div className="flex items-center justify-between">
+        <h3 className={`text-xs font-bold ${headerColor}`}>{label}</h3>
+        <span className={`text-[10px] px-1.5 py-0.5 rounded-full bg-${accentColor}-500/20 text-${accentColor}-300`}>
+          {eye}
+        </span>
+      </div>
+
+      <SeverityBar score={data.severity_score} />
+
+      {/* DR Grade */}
+      <div className="space-y-1">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-slate-500">DR Grade</span>
+          <span className={`text-[11px] font-semibold ${data.dr_classification?.grade === "Unknown" ? "text-slate-500" : "text-emerald-400"}`}>
+            {data.dr_classification?.grade ?? "N/A"}
+          </span>
+        </div>
+        {data.dr_classification?.confidence != null && (
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-slate-500">Confiance</span>
+            <span className="text-[10px] text-slate-400">
+              {(data.dr_classification.confidence * 100).toFixed(1)}%
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Lesions */}
+      <div className="space-y-0.5 pt-1 border-t border-slate-700">
+        <span className="text-[10px] font-medium text-amber-400/80">Lésions</span>
+        <LesionRow label="Microanévrismes" value={data.lesions?.microaneurysms ?? 0} />
+        <LesionRow label="Hémorragies" value={data.lesions?.hemorrhages ?? 0} />
+        <LesionRow label="Exsudats" value={data.lesions?.exudates ?? 0} />
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-slate-500">Couverture</span>
+          <span className="text-[10px] text-amber-400 font-mono">
+            {data.lesions?.coverage_pct.toFixed(1) ?? "0.0"}%
+          </span>
+        </div>
+      </div>
+
+      {/* Glaucoma */}
+      <div className="space-y-0.5 pt-1 border-t border-slate-700">
+        <span className="text-[10px] font-medium text-purple-400/80">Glaucome</span>
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-slate-500">VCDR</span>
+          <span className="text-[10px] font-mono text-slate-300">{data.glaucoma?.vcdr.toFixed(4) ?? "0.0000"}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-slate-500">Risque</span>
+          <span className={`text-[10px] font-semibold ${
+            data.glaucoma?.risk === "Faible" ? "text-emerald-400"
+            : data.glaucoma?.risk === "Modere" ? "text-amber-400"
+            : data.glaucoma?.risk === "Eleve" || data.glaucoma?.risk === "Tres eleve" ? "text-red-400"
+            : "text-slate-500"
+          }`}>
+            {data.glaucoma?.risk ?? "N/A"}
+          </span>
+        </div>
+      </div>
+
+      {/* Grad-CAM */}
+      {data.gradcam_image && (
+        <div className="pt-1 border-t border-slate-700">
+          <span className="text-[10px] font-medium text-slate-400">Grad-CAM</span>
+          <img
+            src={`data:image/png;base64,${data.gradcam_image}`}
+            alt="Grad-CAM"
+            className="w-full rounded mt-1 border border-slate-700"
+          />
+        </div>
+      )}
+
+      {/* CLAHE */}
+      {data.clahe_image && (
+        <div className="pt-1 border-t border-slate-700">
+          <span className="text-[10px] font-medium text-slate-400">CLAHE</span>
+          <img
+            src={`data:image/png;base64,${data.clahe_image}`}
+            alt="CLAHE"
+            className="w-full rounded mt-1 border border-slate-700"
+          />
+        </div>
+      )}
     </div>
   );
 }
