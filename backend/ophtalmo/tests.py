@@ -1,4 +1,7 @@
 import json
+import requests
+import os
+import tempfile
 from datetime import date
 from django.test import TestCase, override_settings
 from unittest.mock import patch, MagicMock
@@ -37,6 +40,54 @@ class SegmentationModelTest(TestCase):
 
 
 class QualityAssociationTest(TestCase):
+    @patch('ophtalmo.tasks.tache_auto_segmentation.delay')
+    @patch('ophtalmo.tasks.requests.get')
+    def test_orthanc_connection_error_stays_pending(
+        self,
+        mock_get,
+        _mock_segmentation_delay,
+    ):
+        mock_get.side_effect = requests.exceptions.ConnectionError(
+            'Orthanc unavailable'
+        )
+        exam = Exam.objects.create(
+            study_instance_uid='orthanc-study-offline',
+            patient_name='Retry Later',
+            exam_type='Rétinographie',
+            date=TODAY,
+        )
+
+        tache_auto_quality()
+
+        exam.refresh_from_db()
+        self.assertEqual(exam.quality_status, 'pending')
+        self.assertTrue(
+            exam.quality_error.startswith('ORTHANC_UNREACHABLE:')
+        )
+
+    @patch('ophtalmo.tasks.tache_auto_segmentation.delay')
+    @patch('ophtalmo.tasks.requests.get')
+    def test_orthanc_timeout_stays_pending(
+        self,
+        mock_get,
+        _mock_segmentation_delay,
+    ):
+        mock_get.side_effect = requests.exceptions.Timeout('Orthanc timeout')
+        exam = Exam.objects.create(
+            study_instance_uid='orthanc-study-timeout',
+            patient_name='Retry Timeout',
+            exam_type='Rétinographie',
+            date=TODAY,
+        )
+
+        tache_auto_quality()
+
+        exam.refresh_from_db()
+        self.assertEqual(exam.quality_status, 'pending')
+        self.assertTrue(
+            exam.quality_error.startswith('ORTHANC_UNREACHABLE:')
+        )
+
     @patch('ophtalmo.tasks.tache_auto_segmentation.delay')
     @patch('ophtalmo.tasks._get_fthnet_predictor')
     @patch('ophtalmo.tasks.requests.get')
@@ -81,11 +132,11 @@ class QualityAssociationTest(TestCase):
 
         exam.refresh_from_db()
         self.assertEqual(exam.quality_status, 'failed')
+        self.assertTrue(exam.quality_error.startswith('ANALYSIS_ERROR:'))
         self.assertIn('autre patient', exam.quality_error)
         self.assertFalse(
             ImageQualityAssessment.objects.filter(exam=exam).exists()
         )
-
 
 class ManualSegmentationAssociationTest(TestCase):
     @patch('ophtalmo.tasks._fix_seg_association')
@@ -219,6 +270,20 @@ class DistributionFilterTest(TestCase):
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True)
 class AutoSegmentationTaskTest(TestCase):
+    def setUp(self):
+        super().setUp()
+        self._monai_cache_dir = os.environ.get('MONAI_CACHE_DIR', '')
+        os.environ['MONAI_CACHE_DIR'] = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        cache_dir = os.environ.pop('MONAI_CACHE_DIR', '')
+        if cache_dir:
+            shutil.rmtree(cache_dir, ignore_errors=True)
+        if self._monai_cache_dir:
+            os.environ['MONAI_CACHE_DIR'] = self._monai_cache_dir
+        super().tearDown()
+
     def test_no_pending_exams_returns_early(self):
         result = tache_auto_segmentation()
         self.assertEqual(result['status'], 'no_pending_exams')
@@ -307,12 +372,21 @@ class AutoSegmentationTaskTest(TestCase):
             {'skipped': 'no OP series found'},
         )
 
+    @patch('ophtalmo.tasks._snapshot_seg_series')
     @patch('ophtalmo.tasks.requests.get')
     @patch('ophtalmo.tasks.requests.post')
-    def test_all_models_succeed(self, mock_post, mock_get):
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {}
+    def test_all_models_succeed(self, mock_post, mock_get, mock_snapshot):
+        mock_snapshot.side_effect = [set(), {'seg-1'}]
+
+        def post_side_effect(url, **kw):
+            m = MagicMock()
+            m.status_code = 200
+            m.json.return_value = (
+                {'laterality': 'R', 'laterality_confidence': 0.99}
+                if 'eye_laterality' in url else {}
+            )
+            return m
+        mock_post.side_effect = post_side_effect
 
         def get_side_effect(url, **kw):
             m = MagicMock()
@@ -342,26 +416,108 @@ class AutoSegmentationTaskTest(TestCase):
         exam.refresh_from_db()
         self.assertEqual(exam.segmentation_status, 'completed')
         self.assertEqual(exam.segmentation_retries, 1)
+        series_status = exam.segmentation_models_status['1.2.3.4.5.6.7.8.9.99.1']
         self.assertEqual(
-            exam.segmentation_models_status.get('optic_disc_cup'),
+            series_status.get('optic_disc_cup'),
             'ok',
         )
         self.assertEqual(
-            exam.segmentation_models_status.get('vessel_seg'),
+            series_status.get('vessel_seg'),
             'ok',
         )
         self.assertEqual(
-            exam.segmentation_models_status.get('lesion_seg'),
+            series_status.get('lesion_seg'),
             'ok',
         )
         self.assertEqual(
-            exam.segmentation_models_status.get('dr_classification'),
+            series_status.get('dr_classification'),
             'manual',
         )
+        self.assertEqual(series_status.get('dicom_seg'), 'ok')
 
+    @patch('ophtalmo.tasks._snapshot_seg_series')
     @patch('ophtalmo.tasks.requests.get')
     @patch('ophtalmo.tasks.requests.post')
-    def test_one_model_fails_triggers_retry(self, mock_post, mock_get):
+    def test_segments_all_op_series(self, mock_post, mock_get, mock_snapshot):
+        mock_snapshot.side_effect = [
+            set(), {'seg-1'},
+            {'seg-1'}, {'seg-1', 'seg-2'},
+        ]
+
+        def post_side_effect(url, **kw):
+            m = MagicMock()
+            m.status_code = 200
+            m.json.return_value = (
+                {'laterality': 'L', 'laterality_confidence': 0.98}
+                if 'eye_laterality' in url else {}
+            )
+            return m
+        mock_post.side_effect = post_side_effect
+
+        series_uids = {
+            'series-op-left': '1.2.3.4.10',
+            'series-op-right': '1.2.3.4.20',
+        }
+
+        def get_side_effect(url, **kw):
+            m = MagicMock()
+            m.status_code = 200
+            if '/studies/' in url:
+                m.json.return_value = {
+                    'Series': list(series_uids),
+                }
+            else:
+                series_id = url.rstrip('/').split('/')[-1]
+                m.json.return_value = {
+                    'MainDicomTags': {
+                        'Modality': 'OP',
+                        'SeriesInstanceUID': series_uids.get(series_id),
+                    },
+                    'Instances': [],
+                }
+            return m
+        mock_get.side_effect = get_side_effect
+
+        exam = Exam.objects.create(
+            study_instance_uid='1.2.3.4',
+            patient_name='Two OP Series',
+            segmentation_status='pending',
+            quality_status='completed',
+            exam_type='Rétinographie',
+            date=TODAY,
+        )
+
+        tache_auto_segmentation()
+        exam.refresh_from_db()
+
+        self.assertEqual(exam.segmentation_status, 'completed')
+        self.assertEqual(set(exam.segmentation_models_status), set(series_uids.values()))
+        for series_uid in series_uids.values():
+            self.assertEqual(
+                exam.segmentation_models_status[series_uid],
+                {
+                    'dr_classification': 'manual',
+                    'optic_disc_cup': 'ok',
+                    'vessel_seg': 'ok',
+                    'lesion_seg': 'ok',
+                    'eye_laterality': 'L',
+                    'dicom_seg': 'ok',
+                },
+            )
+
+        inferred_series = [
+            call.kwargs['params']['image']
+            for call in mock_post.call_args_list
+            if '/infer/' in call.args[0]
+        ]
+        self.assertEqual(inferred_series.count('1.2.3.4.10'), 4)
+        self.assertEqual(inferred_series.count('1.2.3.4.20'), 4)
+
+    @patch('ophtalmo.tasks._snapshot_seg_series')
+    @patch('ophtalmo.tasks.requests.get')
+    @patch('ophtalmo.tasks.requests.post')
+    def test_one_model_fails_triggers_retry(self, mock_post, mock_get, mock_snapshot):
+        mock_snapshot.side_effect = [set(), {'seg-2'}]
         def post_side_effect(url, **kw):
             m = MagicMock()
             if 'vessel_seg' in url:
@@ -401,13 +557,17 @@ class AutoSegmentationTaskTest(TestCase):
         self.assertEqual(exam.segmentation_status, 'pending')
         self.assertEqual(exam.segmentation_retries, 1)
         self.assertNotEqual(
-            exam.segmentation_models_status.get('vessel_seg'),
+            exam.segmentation_models_status[
+                '1.2.3.4.5.6.7.8.9.99.2'
+            ].get('vessel_seg'),
             'ok',
         )
 
+    @patch('ophtalmo.tasks._snapshot_seg_series')
     @patch('ophtalmo.tasks.requests.get')
     @patch('ophtalmo.tasks.requests.post')
-    def test_gives_up_after_max_retries(self, mock_post, mock_get):
+    def test_gives_up_after_max_retries(self, mock_post, mock_get, mock_snapshot):
+        mock_snapshot.side_effect = [set(), {'seg-3'}]
         mock_post.return_value.status_code = 500
         mock_post.return_value.json.return_value = {}
 
@@ -441,3 +601,7 @@ class AutoSegmentationTaskTest(TestCase):
         self.assertEqual(exam.segmentation_status, 'failed')
         self.assertEqual(exam.segmentation_retries, 3)
         self.assertIn('Échec après 3 tentatives', exam.segmentation_error)
+        self.assertIn(
+            '1.2.3.4.5.6.7.8.9.99.3/optic_disc_cup',
+            exam.segmentation_error,
+        )

@@ -35,6 +35,11 @@ COPY ohif/patches/longitudinal-ai-analysis.patch /tmp/longitudinal-ai-analysis.p
 RUN git apply --check /tmp/longitudinal-ai-analysis.patch && \
     git apply /tmp/longitudinal-ai-analysis.patch
 
+# Group derived SEG display sets directly below their referenced source series.
+COPY ohif/patches/group-derived-display-sets.patch /tmp/group-derived-display-sets.patch
+RUN git apply --check /tmp/group-derived-display-sets.patch && \
+    git apply /tmp/group-derived-display-sets.patch
+
 # Patch isValidMode to accept all modalities (not just CT/MR)
 RUN sed -i 's/valid: modalitiesArray.includes(.CT.) || modalitiesArray.includes(.MR.)/valid: true/' modes/monai-label/src/index.tsx
 

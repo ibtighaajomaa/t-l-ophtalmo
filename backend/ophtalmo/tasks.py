@@ -649,9 +649,23 @@ def tache_auto_quality():
                 f"[FTHNet] Exam {exam.id}: {len(results)} OP image(s), "
                 f"minimum score={summary['score']} ({summary['category']})"
             )
+        except (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+        ) as exc:
+            exam.quality_status = 'pending'
+            exam.quality_error = f'ORTHANC_UNREACHABLE: {str(exc)[:979]}'
+            exam.save(update_fields=['quality_status', 'quality_error'])
+            logger.warning(
+                "[FTHNet] Orthanc unreachable for exam %s; quality analysis "
+                "will be retried automatically: %s",
+                exam.id,
+                exc,
+            )
+            processed += 1
         except Exception as exc:
             exam.quality_status = 'failed'
-            exam.quality_error = str(exc)[:1000]
+            exam.quality_error = f'ANALYSIS_ERROR: {str(exc)[:984]}'
             exam.save(update_fields=['quality_status', 'quality_error'])
             logger.exception(f"[FTHNet] Quality analysis failed for exam {exam.id}")
             processed += 1
@@ -713,9 +727,8 @@ def tache_auto_segmentation():
         exam.segmentation_status = 'in_progress'
         exam.save(update_fields=['segmentation_status'])
 
-        # Find OP series within the study
-        op_series_uid = None
-        op_orthanc_series_id = None
+        # Find all OP series within the study
+        op_series = []
         try:
             orthanc_resp = requests.get(
                 f'{ORTHANC_URL}/studies/{orthanc_study_id}',
@@ -733,11 +746,14 @@ def tache_auto_segmentation():
                 if sr.status_code == 200:
                     s = sr.json()
                     if s.get('MainDicomTags', {}).get('Modality') == 'OP':
-                        op_series_uid = s.get('MainDicomTags', {}).get('SeriesInstanceUID')
-                        op_orthanc_series_id = sid
-                        break
+                        series_uid = s.get('MainDicomTags', {}).get('SeriesInstanceUID')
+                        if series_uid:
+                            op_series.append({
+                                'series_uid': series_uid,
+                                'orthanc_series_id': sid,
+                            })
 
-            if not op_series_uid:
+            if not op_series:
                 exam.segmentation_status = 'completed'
                 exam.segmentation_models_status = {'skipped': 'no OP series found'}
                 exam.save(update_fields=['segmentation_status', 'segmentation_models_status'])
@@ -748,14 +764,28 @@ def tache_auto_segmentation():
             exam.save(update_fields=['segmentation_status', 'segmentation_error'])
             continue
 
-        # Inject synthetic geometry into source OP DICOMs in Orthanc
-        # (FRUID, IPP, IOP) so the generated DICOM-SEG overlay aligns
-        # spatially in OHIF. The geometry is injected directly in the
-        # cached DICOM files on the MONAI Label side (via infer.py patch)
-        # before SEG generation — no need to modify Orthanc instances here.
-        # Clear MONAI Label cache so it re-downloads the source images
-        # fresh (with the correct UID) from Orthanc.
-        if op_orthanc_series_id:
+        # Get the DICOM StudyInstanceUID to ensure SEG lands in the same study
+        op_study_uid = orthanc_meta.get('MainDicomTags', {}).get('StudyInstanceUID', '')
+        expected_patient_id = orthanc_meta.get('PatientMainDicomTags', {}).get('PatientID', '')
+        base_params = {"device": device}
+        if op_study_uid:
+            base_params["study_uid"] = op_study_uid
+
+        # Automatic processing is limited to segmentation. DR classification
+        # remains manual and runs only from the "Run AI Analysis" button.
+        models_status = {}
+        all_ok = True
+
+        for op_series_entry in op_series:
+            op_series_uid = op_series_entry['series_uid']
+            op_orthanc_series_id = op_series_entry['orthanc_series_id']
+            series_status = {'dr_classification': 'manual'}
+            models_status[op_series_uid] = series_status
+
+            # Inject synthetic geometry into source OP DICOMs in Orthanc
+            # (FRUID, IPP, IOP) so the generated DICOM-SEG overlay aligns
+            # spatially in OHIF. Clear and populate MONAI's cache from this
+            # exact Orthanc series before processing it.
             monai_cache = os.environ.get('MONAI_CACHE_DIR', '/root/.cache/monailabel')
             try:
                 import shutil
@@ -791,116 +821,121 @@ def tache_auto_segmentation():
                     study_id,
                 )
             except Exception as e:
-                exam.segmentation_status = 'failed'
-                exam.segmentation_error = f'Could not prepare exact MONAI source: {str(e)[:200]}'
-                exam.save(update_fields=['segmentation_status', 'segmentation_error'])
+                all_ok = False
+                cache_error = f'failed (cache: {str(e)[:100]})'
+                for model in SEG_MODELS:
+                    series_status[model] = cache_error
+                series_status['eye_laterality'] = cache_error
+                series_status['dicom_seg'] = cache_error
                 logger.exception("[AutoSeg] Could not prepare exact MONAI source")
                 continue
 
-        # Get the DICOM StudyInstanceUID to ensure SEG lands in the same study
-        op_study_uid = orthanc_meta.get('MainDicomTags', {}).get('StudyInstanceUID', '')
-        expected_patient_id = orthanc_meta.get('PatientMainDicomTags', {}).get('PatientID', '')
-        base_params = {"device": device}
-        if op_study_uid:
-            base_params["study_uid"] = op_study_uid
+            # Snapshot existing SEG series so only this series' new SEG objects
+            # are considered after inference.
+            seg_ids_before = _snapshot_seg_series(ORTHANC_URL)
 
-        # Snapshot existing SEG series so we can find only the new one after inference
-        seg_ids_before = _snapshot_seg_series(ORTHANC_URL)
-
-        # Automatic processing is limited to segmentation. DR classification
-        # remains manual and runs only from the "Run AI Analysis" button.
-        models_status = {}
-        all_ok = True
-
-        for model in SEG_MODELS:
-            try:
-                logger.info(f"[AutoSeg] Running {model} on series {op_series_uid[:50]}...")
-                resp = requests.post(
-                    f"{MONAI_LABEL}/infer/{model}",
-                    params={"image": op_series_uid},
-                    data={"params": json.dumps(base_params)},
-                    timeout=300,
-                )
-                if resp.status_code == 200:
-                    models_status[model] = 'ok'
-                    logger.info(f"[AutoSeg] {model} succeeded for study {study_id}")
-                else:
-                    models_status[model] = f'failed (HTTP {resp.status_code})'
-                    logger.warning(f"[AutoSeg] {model} returned {resp.status_code} for study {study_id}")
-                    all_ok = False
-            except Exception as e:
-                models_status[model] = f'failed ({str(e)[:100]})'
-                logger.error(f"[AutoSeg] {model} failed for study {study_id}: {e}")
-                all_ok = False
-
-        models_status['dr_classification'] = 'manual'
-
-        # --- Eye laterality : vérifier tag DICOM existant, sinon utiliser le modèle AI ---
-        eye_laterality = "UNKNOWN"
-        try:
-            for inst_id in series_detail.json().get('Instances', []):
-                inst_resp = requests.get(
-                    f'{ORTHANC_URL}/instances/{inst_id}/simplified-tags',
-                    timeout=10,
-                )
-                if inst_resp.status_code == 200:
-                    inst_tags = inst_resp.json()
-                    lat_tag = inst_tags.get('ImageLaterality') or inst_tags.get('Laterality', '')
-                    if lat_tag in ('R', 'L'):
-                        eye_laterality = lat_tag
-                        logger.info(f"[AutoSeg] Eye laterality from DICOM tag: {lat_tag}")
-                        break
-        except Exception as e:
-            logger.warning(f"[AutoSeg] Could not check DICOM ImageLaterality: {e}")
-
-        if eye_laterality == "UNKNOWN":
-            try:
-                logger.info(f"[AutoSeg] Running eye_laterality model on series {op_series_uid[:50]}...")
-                lat_resp = requests.post(
-                    f"{MONAI_LABEL}/infer/eye_laterality",
-                    params={"image": op_series_uid},
-                    data={"params": json.dumps(base_params)},
-                    timeout=120,
-                )
-                if lat_resp.status_code == 200:
-                    lat_result = lat_resp.json()
-                    laterality = lat_result.get("laterality", "UNKNOWN")
-                    if laterality in ("R", "L"):
-                        eye_laterality = laterality
-                        models_status['eye_laterality'] = 'ok'
-                        logger.info(f"[AutoSeg] Eye laterality (AI): {laterality} (conf={lat_result.get('laterality_confidence', 0):.4f})")
+            for model in SEG_MODELS:
+                try:
+                    logger.info(f"[AutoSeg] Running {model} on series {op_series_uid[:50]}...")
+                    resp = requests.post(
+                        f"{MONAI_LABEL}/infer/{model}",
+                        params={"image": op_series_uid},
+                        data={"params": json.dumps(base_params)},
+                        timeout=300,
+                    )
+                    if resp.status_code == 200:
+                        series_status[model] = 'ok'
+                        logger.info(f"[AutoSeg] {model} succeeded for series {op_series_uid}")
                     else:
-                        models_status['eye_laterality'] = f'inconclusive ({laterality})'
-                        logger.warning(f"[AutoSeg] eye_laterality inconclusive: {laterality}")
-                else:
-                    models_status['eye_laterality'] = f'failed (HTTP {lat_resp.status_code})'
-            except Exception as e:
-                models_status['eye_laterality'] = f'failed ({str(e)[:100]})'
-                logger.error(f"[AutoSeg] eye_laterality failed for study {study_id}: {e}")
-        else:
-            models_status['eye_laterality'] = 'ok'
+                        series_status[model] = f'failed (HTTP {resp.status_code})'
+                        logger.warning(
+                            f"[AutoSeg] {model} returned {resp.status_code} "
+                            f"for series {op_series_uid}"
+                        )
+                        all_ok = False
+                except Exception as e:
+                    series_status[model] = f'failed ({str(e)[:100]})'
+                    logger.error(f"[AutoSeg] {model} failed for series {op_series_uid}: {e}")
+                    all_ok = False
 
-        # Fix SEG patient/study association in Orthanc — safety net for any patch failures
-        try:
-            seg_ids_after = _snapshot_seg_series(ORTHANC_URL)
-            new_seg_ids = seg_ids_after - seg_ids_before
-            if new_seg_ids:
-                _fix_seg_association(
-                    ORTHANC_URL,
-                    new_seg_ids,
-                    expected_patient_id,
-                    op_study_uid,
-                    op_series_uid,
-                )
-                logger.info(f"[AutoSeg] Checked {len(new_seg_ids)} new SEG series for study {study_id}")
+            # Eye laterality: use a DICOM tag when available, otherwise AI.
+            eye_laterality = "UNKNOWN"
+            try:
+                for inst_id in series_detail.json().get('Instances', []):
+                    inst_resp = requests.get(
+                        f'{ORTHANC_URL}/instances/{inst_id}/simplified-tags',
+                        timeout=10,
+                    )
+                    if inst_resp.status_code == 200:
+                        inst_tags = inst_resp.json()
+                        lat_tag = inst_tags.get('ImageLaterality') or inst_tags.get('Laterality', '')
+                        if lat_tag in ('R', 'L'):
+                            eye_laterality = lat_tag
+                            logger.info(f"[AutoSeg] Eye laterality from DICOM tag: {lat_tag}")
+                            break
+            except Exception as e:
+                logger.warning(f"[AutoSeg] Could not check DICOM ImageLaterality: {e}")
+
+            if eye_laterality == "UNKNOWN":
+                try:
+                    logger.info(f"[AutoSeg] Running eye_laterality model on series {op_series_uid[:50]}...")
+                    lat_resp = requests.post(
+                        f"{MONAI_LABEL}/infer/eye_laterality",
+                        params={"image": op_series_uid},
+                        data={"params": json.dumps(base_params)},
+                        timeout=120,
+                    )
+                    if lat_resp.status_code == 200:
+                        lat_result = lat_resp.json()
+                        eye_laterality = lat_result.get("laterality", "UNKNOWN")
+                        if eye_laterality in ("R", "L"):
+                            series_status['eye_laterality'] = eye_laterality
+                            logger.info(
+                                f"[AutoSeg] Eye laterality (AI): {eye_laterality} "
+                                f"(conf={lat_result.get('laterality_confidence', 0):.4f})"
+                            )
+                        else:
+                            series_status['eye_laterality'] = f'inconclusive ({eye_laterality})'
+                            all_ok = False
+                    else:
+                        series_status['eye_laterality'] = f'failed (HTTP {lat_resp.status_code})'
+                        all_ok = False
+                except Exception as e:
+                    series_status['eye_laterality'] = f'failed ({str(e)[:100]})'
+                    logger.error(f"[AutoSeg] eye_laterality failed for series {op_series_uid}: {e}")
+                    all_ok = False
             else:
+                series_status['eye_laterality'] = eye_laterality
+
+            # Fix SEG patient/study association in Orthanc for this series.
+            try:
+                seg_ids_after = _snapshot_seg_series(ORTHANC_URL)
+                new_seg_ids = seg_ids_after - seg_ids_before
+                if new_seg_ids:
+                    _fix_seg_association(
+                        ORTHANC_URL,
+                        new_seg_ids,
+                        expected_patient_id,
+                        op_study_uid,
+                        op_series_uid,
+                    )
+                    series_status['dicom_seg'] = 'ok'
+                    logger.info(
+                        f"[AutoSeg] Checked {len(new_seg_ids)} new SEG series "
+                        f"for source series {op_series_uid}"
+                    )
+                else:
+                    all_ok = False
+                    series_status['dicom_seg'] = 'failed (no DICOM-SEG created)'
+                    logger.error(
+                        "[AutoSeg] MONAI returned success but created no DICOM-SEG "
+                        "for series %s",
+                        op_series_uid,
+                    )
+            except Exception as e:
                 all_ok = False
-                models_status['dicom_seg'] = 'failed (no DICOM-SEG created)'
-                logger.error("[AutoSeg] MONAI returned success but created no DICOM-SEG for %s", study_id)
-        except Exception as e:
-            all_ok = False
-            models_status['dicom_seg'] = f'failed ({str(e)[:100]})'
-            logger.warning(f"[AutoSeg] SEG association fix failed for study {study_id}: {e}")
+                series_status['dicom_seg'] = f'failed ({str(e)[:100]})'
+                logger.warning(f"[AutoSeg] SEG association fix failed for series {op_series_uid}: {e}")
 
         # Update exam based on results
         exam.segmentation_models_status = models_status
@@ -915,9 +950,10 @@ def tache_auto_segmentation():
             if exam.segmentation_retries >= MAX_RETRIES:
                 exam.segmentation_status = 'failed'
                 failed_models = [
-                    model
-                    for model, model_status in models_status.items()
-                    if model_status not in ('ok', 'manual')
+                    f'{series_uid}/{model}'
+                    for series_uid, series_models in models_status.items()
+                    for model, model_status in series_models.items()
+                    if model_status not in ('ok', 'manual', 'R', 'L')
                 ]
                 exam.segmentation_error = f'Échec après {MAX_RETRIES} tentatives: {", ".join(failed_models)}'
                 logger.warning(

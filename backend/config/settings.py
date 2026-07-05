@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import sys
 from pathlib import Path
 import os
 from datetime import timedelta
@@ -130,6 +131,13 @@ DATABASES = {
     }
 }
 
+TESTING = 'test' in sys.argv or len(sys.argv) > 1 and sys.argv[1] == 'test'
+if TESTING:
+    DATABASES['default'] = {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': ':memory:',
+    }
+
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -219,12 +227,19 @@ KC_CLIENT_SECRET = "VOTRE_SECRET_KEYCLOAK"
 # =========================
 #  CACHE CONFIGURATION (Redis)
 # =========================
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': os.environ.get('REDIS_URL', 'redis://redis:6379/1'),
+if TESTING:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        }
     }
-}
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': os.environ.get('REDIS_URL', 'redis://redis:6379/1'),
+        }
+    }
 
 # =========================
 #  CELERY CONFIGURATION
