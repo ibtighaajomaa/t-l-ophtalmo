@@ -27,14 +27,40 @@ const STATUS_STYLES: Record<ExamStatus, string> = {
   Interprété: "bg-green-100 text-green-700 ring-green-200",
 };
 
-function QualityBadge({ exam }: { exam: Exam }) {
+function QualityBadge({ exam, onClick }: { exam: Exam; onClick: () => void }) {
   if (exam.qualityStatus === "pending" || exam.qualityStatus === "in_progress") {
-    return <span className="text-xs text-slate-400">Analyse IA…</span>;
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="cursor-pointer text-xs text-slate-400 hover:ring-2"
+      >
+        Analyse IA…
+      </button>
+    );
   }
   if (exam.qualityStatus === "failed") {
-    return <span className="text-xs text-red-600">Échec qualité</span>;
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="cursor-pointer text-xs text-red-600 hover:ring-2"
+      >
+        Échec qualité
+      </button>
+    );
   }
-  if (!exam.qualityCategory || exam.qualityScore == null) return <span>—</span>;
+  if (!exam.qualityCategory || exam.qualityScore == null) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="cursor-pointer text-xs text-slate-400 hover:ring-2"
+      >
+        —
+      </button>
+    );
+  }
   const styles = {
     good: "bg-emerald-100 text-emerald-700 ring-emerald-200",
     acceptable: "bg-amber-100 text-amber-700 ring-amber-200",
@@ -46,9 +72,102 @@ function QualityBadge({ exam }: { exam: Exam }) {
     bad: "Mauvaise",
   };
   return (
-    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${styles[exam.qualityCategory]}`}>
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex cursor-pointer rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 transition hover:ring-2 ${styles[exam.qualityCategory]}`}
+    >
       {labels[exam.qualityCategory]} · {exam.qualityScore.toFixed(1)}
-    </span>
+    </button>
+  );
+}
+
+function QualityModal({ exam, onClose }: { exam: Exam; onClose: () => void }) {
+  const styles = {
+    good: "bg-emerald-100 text-emerald-700 ring-emerald-200",
+    acceptable: "bg-amber-100 text-amber-700 ring-amber-200",
+    bad: "bg-red-100 text-red-700 ring-red-200",
+  };
+  const labels = {
+    good: "Bonne",
+    acceptable: "Acceptable",
+    bad: "Mauvaise",
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="quality-modal-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+          <div>
+            <h2 id="quality-modal-title" className="text-lg font-semibold text-slate-900">
+              Qualité des images — {exam.id}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">{exam.patientName}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fermer"
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="max-h-[60vh] overflow-y-auto px-6 py-5">
+          {exam.imageQualityResults?.length ? (
+            <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
+              {exam.imageQualityResults.map((result, index) => (
+                <li
+                  key={result.orthancInstanceId || result.sopInstanceUid}
+                  className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3"
+                >
+                  <span className="min-w-24 text-sm font-medium text-slate-900">
+                    Instance {index + 1}
+                  </span>
+                  <span
+                    className="min-w-36 flex-1 font-mono text-xs text-slate-500"
+                    title={result.seriesInstanceUid}
+                  >
+                    …{result.seriesInstanceUid.slice(-12)}
+                  </span>
+                  <span className="text-sm font-semibold tabular-nums text-slate-700">
+                    {result.score.toFixed(1)}/100
+                  </span>
+                  <span
+                    className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${styles[result.category]}`}
+                  >
+                    {labels[result.category]}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="py-6 text-center text-sm text-slate-500">
+              Aucun résultat de qualité disponible.
+            </p>
+          )}
+        </div>
+
+        <div className="flex justify-end border-t border-slate-200 px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
+          >
+            Fermer
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -73,6 +192,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
   const [error, setError] = useState<string | null>(null);
   const [filterDate, setFilterDate] = useState<string>("");
   const [historyExam, setHistoryExam] = useState<Exam | null>(null);
+  const [qualityModalExam, setQualityModalExam] = useState<Exam | null>(null);
 
   const [stats, setStats] = useState({ attente: 0, cours: 0, interprete: 0 });
 
@@ -360,7 +480,9 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                         </span>
                       </td>
                       <td className="px-4 py-3 text-slate-700">{exam.region || "—"}</td>
-                      <td className="px-4 py-3"><QualityBadge exam={exam} /></td>
+                      <td className="px-4 py-3">
+                        <QualityBadge exam={exam} onClick={() => setQualityModalExam(exam)} />
+                      </td>
                       <td className="px-4 py-3">
                         {isOldDoctor && exam.isReassigned24h ? (
                           <span className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 bg-red-100 text-red-700 ring-red-200">
@@ -459,6 +581,9 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
             </div>
           </div>
         </div>
+      )}
+      {qualityModalExam && (
+        <QualityModal exam={qualityModalExam} onClose={() => setQualityModalExam(null)} />
       )}
     </div>
   );
