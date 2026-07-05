@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 SEGMENTATION_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
 CLASSIFICATION_MODEL = "Kontawat/vit-diabetic-retinopathy-classification"
+LATERALITY_MODEL = "eye_laterality"
 
 
 def run_segmentations(app, image_id):
@@ -45,23 +46,14 @@ def quantify_optic_disc_cup(label_path):
         disc_pixels = int(np.sum(data == 1))
         cup_pixels = int(np.sum(data == 2))
         ratio = cup_pixels / disc_pixels if disc_pixels > 0 else 0.0
-        optic_mask = np.isin(data, (1, 2))
-        # pynrrd preserves the NRRD (x, y) axis order, so axis 0 is horizontal.
-        optic_columns = np.where(optic_mask)[0] if data.ndim == 2 else np.array([])
-        disc_center_x = float(np.mean(optic_columns)) if optic_columns.size else None
-        image_center_x = (data.shape[0] - 1) / 2 if data.ndim == 2 else None
-        laterality = (
-            "OS" if disc_center_x is not None and disc_center_x < image_center_x
-            else "OD" if disc_center_x is not None
-            else "UNKNOWN"
-        )
-
+        # La latéralité est déterminée par le modèle dédié eye_laterality (InceptionV3, 99.2%)
+        # et non plus par la position du disque dans l'image.
         return {
             "disc_area_px": disc_pixels,
             "cup_area_px": cup_pixels,
             "cup_disc_ratio": round(ratio, 4),
-            "disc_center_x": round(disc_center_x, 2) if disc_center_x is not None else None,
-            "laterality": laterality,
+            "disc_center_x": None,
+            "laterality": "UNKNOWN",
         }
     except Exception as e:
         logger.error(f"quantify_optic_disc_cup failed: {e}")
@@ -141,14 +133,63 @@ def classify_dr(app, image_id):
     return {"grade": "Unknown", "confidence": 0.0}
 
 
-def build_report(optic, vessel, lesion, dr):
+def detect_laterality(app, image_id):
+    """Run eye laterality classification model."""
+    try:
+        req = {
+            "model": LATERALITY_MODEL,
+            "image": image_id,
+            "result_extension": ".json",
+            "restore_label_idx": False,
+        }
+        result = app.infer(req)
+        if result and result.get("params"):
+            params = result["params"]
+            laterality = params.get("laterality", "UNKNOWN")
+            confidence = params.get("laterality_confidence", 0.0)
+            probabilities = params.get("laterality_probabilities", {})
+            return {
+                "laterality": laterality,
+                "confidence": round(float(confidence), 4),
+                "probabilities": probabilities,
+            }
+        logger.warning("Eye laterality classification returned no params")
+    except Exception as e:
+        logger.error(f"Eye laterality classification failed: {e}")
+    return {"laterality": "UNKNOWN", "confidence": 0.0, "probabilities": {}}
+
+
+def update_dicom_image_laterality(orthanc_instance_id, laterality, orthanc_url="http://orthanc-container:8042"):
+    """Update DICOM ImageLaterality (0022,0002) tag for an Orthanc instance."""
+    import requests
+    try:
+        resp = requests.post(
+            f"{orthanc_url}/instances/{orthanc_instance_id}/modify",
+            json={"Replace": {"ImageLaterality": laterality}},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            logger.info(f"Set ImageLaterality={laterality} for instance {orthanc_instance_id}")
+            requests.delete(f"{orthanc_url}/instances/{orthanc_instance_id}", timeout=15)
+            return True
+        logger.warning(f"Failed to set ImageLaterality: HTTP {resp.status_code}")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to update ImageLaterality: {e}")
+        return False
+
+
+def build_report(optic, vessel, lesion, dr, laterality=None):
     """Assemble the complete analysis report."""
-    return {
+    report = {
         "dr_classification": dr,
         "lesions": lesion,
         "optic_disc_cup": optic,
         "vessels": vessel,
     }
+    if laterality and laterality.get("laterality") != "UNKNOWN":
+        report["eye_laterality"] = laterality
+    return report
 
 
 def generate_dicom_sr(report, study_uid, series_uid, output_path):
@@ -187,9 +228,18 @@ def generate_dicom_sr(report, study_uid, series_uid, output_path):
         lesions = report.get("lesions", {})
         optic = report.get("optic_disc_cup", {})
         vessels = report.get("vessels", {})
+        laterality = report.get("eye_laterality", {})
+
+        lat_value = laterality.get("laterality", "")
+        if lat_value in ("R", "L"):
+            ds.ImageLaterality = lat_value
 
         text_lines = [
             "AI Ophthalmology Report",
+            "",
+            "Eye Laterality:",
+            f"  Prediction: {lat_value if lat_value else 'N/A'}",
+            f"  Confidence: {laterality.get('confidence', 0):.0%}",
             "",
             "DR Classification:",
             f"  Grade: {dr.get('grade', 'N/A')}",

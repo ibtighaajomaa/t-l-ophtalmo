@@ -325,7 +325,8 @@ services:
       - ./monai-label/cache:/root/.cache/monailabel
       - ./monai-label/output:/output
     command: >
-      sh -c "python3 /opt/monai/apps/patch_monailabel.py && 
+      sh -c "pip3 install -q transformers segmentation_models_pytorch tensorflow-cpu keras 'numpy==1.26.4' 'opencv-python-headless==4.11.0.86' 2>/dev/null;
+      python3 /opt/monai/apps/patch_monailabel.py &&
       monailabel start_server
       --app /opt/monai/apps/radiology
       --studies http://orthanc-container:8042/dicom-web
