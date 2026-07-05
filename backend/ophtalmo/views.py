@@ -842,7 +842,7 @@ def run_analysis(request):
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
-    # Merge: group by laterality, pick most critical per eye
+    # Merge: group by laterality using AI model (InceptionV3, replaces disc-position heuristic)
     def _severity_key(r):
         dr_map = {"No DR": 0, "Mild NPDR": 1, "Moderate NPDR": 2, "Severe NPDR": 3, "Proliferative DR": 4}
         dr_grade = r.get('dr_classification', {}).get('grade', '')
@@ -854,8 +854,18 @@ def run_analysis(request):
         if 'severity_score' not in r or r['severity_score'] == 0.0:
             r['severity_score'] = round(_severity_key(r), 4)
 
-    od_results = [r for r in all_per_instance if r.get('optic_disc_cup', {}).get('laterality') == 'OD']
-    os_results = [r for r in all_per_instance if r.get('optic_disc_cup', {}).get('laterality') == 'OS']
+    od_results = []
+    os_results = []
+    for series_result in all_series_analyzed:
+        lat = series_result.get('eye_laterality', {}).get('laterality', 'UNKNOWN')
+        per_inst = series_result.get('per_instance', [])
+        if lat == 'R':
+            od_results.extend(per_inst)
+        elif lat == 'L':
+            os_results.extend(per_inst)
+        elif per_inst:
+            od_results.extend(per_inst)
+            os_results.extend(per_inst)
 
     critical_od = max(od_results, key=lambda r: r['severity_score']) if od_results else None
     critical_os = max(os_results, key=lambda r: r['severity_score']) if os_results else None

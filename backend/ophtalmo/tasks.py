@@ -835,6 +835,51 @@ def tache_auto_segmentation():
 
         models_status['dr_classification'] = 'manual'
 
+        # --- Eye laterality : vérifier tag DICOM existant, sinon utiliser le modèle AI ---
+        eye_laterality = "UNKNOWN"
+        try:
+            for inst_id in series_detail.json().get('Instances', []):
+                inst_resp = requests.get(
+                    f'{ORTHANC_URL}/instances/{inst_id}/simplified-tags',
+                    timeout=10,
+                )
+                if inst_resp.status_code == 200:
+                    inst_tags = inst_resp.json()
+                    lat_tag = inst_tags.get('ImageLaterality') or inst_tags.get('Laterality', '')
+                    if lat_tag in ('R', 'L'):
+                        eye_laterality = lat_tag
+                        logger.info(f"[AutoSeg] Eye laterality from DICOM tag: {lat_tag}")
+                        break
+        except Exception as e:
+            logger.warning(f"[AutoSeg] Could not check DICOM ImageLaterality: {e}")
+
+        if eye_laterality == "UNKNOWN":
+            try:
+                logger.info(f"[AutoSeg] Running eye_laterality model on series {op_series_uid[:50]}...")
+                lat_resp = requests.post(
+                    f"{MONAI_LABEL}/infer/eye_laterality",
+                    params={"image": op_series_uid},
+                    data={"params": json.dumps(base_params)},
+                    timeout=120,
+                )
+                if lat_resp.status_code == 200:
+                    lat_result = lat_resp.json()
+                    laterality = lat_result.get("laterality", "UNKNOWN")
+                    if laterality in ("R", "L"):
+                        eye_laterality = laterality
+                        models_status['eye_laterality'] = 'ok'
+                        logger.info(f"[AutoSeg] Eye laterality (AI): {laterality} (conf={lat_result.get('laterality_confidence', 0):.4f})")
+                    else:
+                        models_status['eye_laterality'] = f'inconclusive ({laterality})'
+                        logger.warning(f"[AutoSeg] eye_laterality inconclusive: {laterality}")
+                else:
+                    models_status['eye_laterality'] = f'failed (HTTP {lat_resp.status_code})'
+            except Exception as e:
+                models_status['eye_laterality'] = f'failed ({str(e)[:100]})'
+                logger.error(f"[AutoSeg] eye_laterality failed for study {study_id}: {e}")
+        else:
+            models_status['eye_laterality'] = 'ok'
+
         # Fix SEG patient/study association in Orthanc — safety net for any patch failures
         try:
             seg_ids_after = _snapshot_seg_series(ORTHANC_URL)
@@ -912,3 +957,101 @@ def tache_auto_segmentation():
 
     cache.delete(lock_key)
     return {'processed': processed}
+
+
+@shared_task(name='ophtalmo.tasks.tache_auto_laterality')
+def tache_auto_laterality():
+    """Run eye laterality classification on OP instances and set DICOM ImageLaterality."""
+    from .models import Exam
+
+    exams = Exam.objects.filter(
+        exam_type='Rétinographie',
+    ).exclude(
+        study_instance_uid__isnull=True,
+    ).exclude(
+        study_instance_uid__exact='',
+    )[:10]
+
+    if not exams:
+        return {'status': 'no_pending_exams'}
+
+    ORTHANC_URL = os.environ.get('ORTHANC_URL', 'http://orthanc-container:8042')
+    MONAI_LABEL = "http://monai-label:8000"
+    processed = 0
+    instances_updated = 0
+
+    for exam in exams:
+        orthanc_id = _resolve_orthanc_id(exam.study_instance_uid)
+        try:
+            study_resp = requests.get(f'{ORTHANC_URL}/studies/{orthanc_id}', timeout=15)
+            study_resp.raise_for_status()
+            study = study_resp.json()
+        except Exception as e:
+            logger.warning(f"[Laterality] Could not get study {orthanc_id}: {e}")
+            continue
+
+        for series_id in study.get('Series', []):
+            try:
+                sr = requests.get(f'{ORTHANC_URL}/series/{series_id}', timeout=10)
+                sr.raise_for_status()
+                series = sr.json()
+                modality = str(series.get('MainDicomTags', {}).get('Modality', '')).upper()
+                if modality != 'OP':
+                    continue
+
+                series_uid = series.get('MainDicomTags', {}).get('SeriesInstanceUID')
+                if not series_uid:
+                    continue
+
+                try:
+                    infer_resp = requests.post(
+                        f'{MONAI_LABEL}/infer/eye_laterality',
+                        params={"image": series_uid},
+                        timeout=120,
+                    )
+                    if infer_resp.status_code != 200:
+                        logger.warning(f"[Laterality] Inference failed for series {series_uid[:40]}")
+                        continue
+                    result = infer_resp.json()
+                    laterality = result.get("laterality") or result.get("params", {}).get(
+                        "laterality", "UNKNOWN"
+                    )
+                except Exception as e:
+                    logger.warning(f"[Laterality] Inference error for series {series_uid[:40]}: {e}")
+                    continue
+
+                if laterality not in ("R", "L"):
+                    logger.info(f"[Laterality] Series {series_uid[:40]}: inconclusive ({laterality})")
+                    continue
+
+                for inst_id in series.get('Instances', []):
+                    try:
+                        modify_body = {"Replace": {"ImageLaterality": laterality}}
+                        mod_resp = requests.post(
+                            f'{ORTHANC_URL}/instances/{inst_id}/modify',
+                            json=modify_body,
+                            timeout=30,
+                        )
+                        if mod_resp.status_code == 200:
+                            requests.delete(f'{ORTHANC_URL}/instances/{inst_id}', timeout=15)
+                            instances_updated += 1
+                            logger.info(
+                                f"[Laterality] Set ImageLaterality={laterality} "
+                                f"for instance {inst_id} in series {series_uid[:40]}"
+                            )
+                        else:
+                            logger.warning(
+                                f"[Laterality] Modify failed for instance {inst_id}: "
+                                f"HTTP {mod_resp.status_code}"
+                            )
+                    except Exception as e:
+                        logger.error(f"[Laterality] Error updating instance {inst_id}: {e}")
+
+            except Exception as e:
+                logger.warning(f"[Laterality] Error processing series {series_id}: {e}")
+                continue
+
+        processed += 1
+
+    logger.info(f"[Laterality] Processed {processed} exams, updated {instances_updated} instances")
+    return {'processed': processed, 'instances_updated': instances_updated}

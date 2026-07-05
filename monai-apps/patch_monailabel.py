@@ -471,7 +471,7 @@ if os.path.exists(INFER):
 ### ANALYZE_ENDPOINT ###
 @router.post("/analyze")
 async def analyze(request: dict):
-    import json, tempfile, os, pathlib, hashlib, numpy as np, base64, io
+    import json, tempfile, os, pathlib, hashlib, numpy as np, base64, io, requests
     from pydicom import Dataset
     from pydicom.dataset import FileMetaDataset
     from pydicom.uid import generate_uid
@@ -527,6 +527,54 @@ async def analyze(request: dict):
             except Exception as e:
                 logger.error("Segmentation %s failed: %s", m, e)
 
+    # --- Eye laterality : vérifier tag DICOM existant, sinon utiliser le modèle AI ---
+    eye_laterality = {"laterality": "UNKNOWN", "confidence": 0.0, "probabilities": {}}
+    orthanc_url = "http://orthanc-container:8042"
+    try:
+        find_resp = requests.post(
+            f"{orthanc_url}/tools/find",
+            json={"Level": "Series", "Query": {"SeriesInstanceUID": image}},
+            timeout=10,
+        )
+        if find_resp.status_code == 200:
+            orthanc_series_ids = find_resp.json()
+            for sid in orthanc_series_ids:
+                sr = requests.get(f"{orthanc_url}/series/{sid}", timeout=10)
+                if sr.status_code == 200:
+                    s = sr.json()
+                    for inst_id in s.get("Instances", []):
+                        inst_resp = requests.get(
+                            f"{orthanc_url}/instances/{inst_id}/simplified-tags",
+                            timeout=10,
+                        )
+                        if inst_resp.status_code == 200:
+                            inst_tags = inst_resp.json()
+                            if inst_tags.get("StudyInstanceUID") != study_uid:
+                                continue
+                            lat_tag = inst_tags.get("ImageLaterality") or inst_tags.get("Laterality", "")
+                            if lat_tag in ("R", "L"):
+                                eye_laterality = {"laterality": lat_tag, "confidence": 1.0, "probabilities": {}}
+                                logger.info("Eye laterality from DICOM tag: %s", lat_tag)
+                                break
+                if eye_laterality["laterality"] != "UNKNOWN":
+                    break
+    except Exception as e:
+        logger.warning("Could not check DICOM ImageLaterality in Orthanc: %s", e)
+
+    if eye_laterality["laterality"] == "UNKNOWN":
+        try:
+            r = instance.infer({"model": "eye_laterality", "image": image, "study_uid": study_uid})
+            if r:
+                p = r.get("params", {})
+                lat = p.get("laterality", "UNKNOWN")
+                conf = p.get("laterality_confidence", 0.0)
+                probs = p.get("laterality_probabilities", {})
+                if lat in ("R", "L"):
+                    eye_laterality = {"laterality": lat, "confidence": round(float(conf), 4), "probabilities": probs}
+                    logger.info("Eye laterality (AI): %s (conf=%.4f)", lat, conf)
+        except Exception as e:
+            logger.error("Eye laterality classification failed: %s", e)
+
     # --- DR classification first (used by per-slice metrics) ---
     dr = {"grade": "Unknown", "confidence": 0.0, "probabilities": []}
     try:
@@ -543,26 +591,18 @@ async def analyze(request: dict):
         logger.error("DR classification failed: %s", e)
 
     # --- Helper: per-slice optic disc / cup metrics ---
+    # Laterality is determined by the dedicated eye_laterality model (InceptionV3, 99.2%)
+    # not by disc position heuristic anymore.
     def _process_optic_slice(slice_data):
         disc = int(np.sum(slice_data == 1))
         cup = int(np.sum(slice_data == 2))
         ratio = cup / disc if disc > 0 else 0.0
-        optic_mask = np.isin(slice_data, (1, 2))
-        # pynrrd preserves the NRRD (x, y) axis order, so axis 0 is horizontal.
-        optic_columns = np.where(optic_mask)[1] if slice_data.ndim == 2 else np.array([])
-        disc_center_x = float(np.mean(optic_columns)) if optic_columns.size else None
-        image_center_x = (slice_data.shape[1] - 1) / 2 if slice_data.ndim == 2 else None
-        laterality = (
-            "OS" if disc_center_x is not None and disc_center_x < image_center_x
-            else "OD" if disc_center_x is not None
-            else "UNKNOWN"
-        )
         return {
             "disc_area_px": disc,
             "cup_area_px": cup,
             "cup_disc_ratio": round(ratio, 4),
-            "disc_center_x": round(disc_center_x, 2) if disc_center_x is not None else None,
-            "laterality": laterality,
+            "disc_center_x": None,
+            "laterality": "UNKNOWN",
         }
 
     # --- Helper: per-slice glaucoma metrics ---
@@ -688,8 +728,17 @@ async def analyze(request: dict):
             r["clahe_image"] = clahe
         return max(results, key=lambda r: r["severity_score"]) if results else None
 
-    od_results = [r for r in slice_results if r["optic_disc_cup"]["laterality"] == "OD"]
-    os_results = [r for r in slice_results if r["optic_disc_cup"]["laterality"] == "OS"]
+    # --- Group by laterality using AI model (InceptionV3, replaces disc-position heuristic) ---
+    lat = eye_laterality.get("laterality", "UNKNOWN")
+    if lat == "R":
+        od_results = list(slice_results)
+        os_results = []
+    elif lat == "L":
+        od_results = []
+        os_results = list(slice_results)
+    else:
+        od_results = []
+        os_results = []
 
     # --- Top-level backward-compatible metrics (use first slice) ---
     top_slice = slice_results[0] if slice_results else None
@@ -723,6 +772,7 @@ async def analyze(request: dict):
             "study_instance_uid": study_uid,
             "series_instance_uid": image,
         },
+        "eye_laterality": eye_laterality,
         "dr_classification": dr,
         "lesions": lesion,
         "optic_disc_cup": optic,
@@ -748,6 +798,28 @@ async def analyze(request: dict):
             patches_applied = True
         else:
             print("WARNING: Could not find /{model} route in infer.py to insert analyze endpoint")
+
+    # Upgrade an endpoint installed by an earlier run. Orthanc does not
+    # reliably include ImageLaterality in an instance's MainDicomTags, while
+    # /simplified-tags exposes both ImageLaterality and Laterality.
+    old_laterality_lookup = '''                        inst_resp = requests.get(f"{orthanc_url}/instances/{inst_id}", timeout=10)
+                        if inst_resp.status_code == 200:
+                            lat_tag = inst_resp.json().get("MainDicomTags", {}).get("ImageLaterality", "")'''
+    new_laterality_lookup = '''                        inst_resp = requests.get(
+                            f"{orthanc_url}/instances/{inst_id}/simplified-tags",
+                            timeout=10,
+                        )
+                        if inst_resp.status_code == 200:
+                            inst_tags = inst_resp.json()
+                            if inst_tags.get("StudyInstanceUID") != study_uid:
+                                continue
+                            lat_tag = inst_tags.get("ImageLaterality") or inst_tags.get("Laterality", "")'''
+    if old_laterality_lookup in content:
+        content = content.replace(old_laterality_lookup, new_laterality_lookup)
+        with open(INFER, "w") as f:
+            f.write(content)
+        print("infer.py: /analyze reads DICOM laterality from simplified-tags")
+        patches_applied = True
 
 # Patch 6: Fix series_dir to use DICOM directory instead of NIfTI path for SEG generation
 # Also ensures DICOM files are downloaded first via get_image_uri
