@@ -1,0 +1,15 @@
+.git
+.gitignore
+
+backend
+Eye-laterality-detection
+frontend
+monai-apps
+monai-label
+nginx
+orthanc
+
+Published_Data.zip
+rns.crt
+rns_truststore.jks
+docker-compose.yml

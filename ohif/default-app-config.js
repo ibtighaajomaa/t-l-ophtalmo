@@ -19,6 +19,12 @@ window.config = {
   customizationService: {
     // ❌ DO NOT use MONAI_Label here (OHIF ignores it)
     // ✔ MONAI is handled via extension + server config
+    studyBrowser: {
+      viewPresets: [
+        { id: 'thumbnails', iconName: 'thumbnails', selected: false },
+        { id: 'list', iconName: 'list', selected: true },
+      ],
+    },
   },
 
   showStudyList: true,

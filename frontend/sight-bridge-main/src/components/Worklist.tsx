@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect, useCallback } from "react";
+import ReactDOM from "react-dom";
 import {
   Filter,
   Search,
@@ -28,6 +29,9 @@ const STATUS_STYLES: Record<ExamStatus, string> = {
 };
 
 function QualityBadge({ exam, onClick }: { exam: Exam; onClick: () => void }) {
+  const hasDetailedResults = (exam.imageQualityResults?.length ?? 0) > 0;
+  const hasSummary = Boolean(exam.qualityCategory) && exam.qualityScore != null;
+
   if (exam.qualityStatus === "pending" || exam.qualityStatus === "in_progress") {
     return (
       <button
@@ -50,7 +54,7 @@ function QualityBadge({ exam, onClick }: { exam: Exam; onClick: () => void }) {
       </button>
     );
   }
-  if (!exam.qualityCategory || exam.qualityScore == null) {
+  if (!hasSummary && !hasDetailedResults) {
     return (
       <button
         type="button"
@@ -83,6 +87,10 @@ function QualityBadge({ exam, onClick }: { exam: Exam; onClick: () => void }) {
 }
 
 function QualityModal({ exam, onClose }: { exam: Exam; onClose: () => void }) {
+  const results = (exam.imageQualityResults ?? []).filter(Boolean);
+  const summaryScore = typeof exam.qualityScore === "number" ? exam.qualityScore : undefined;
+  const summaryCategory = exam.qualityCategory as "good" | "acceptable" | "bad" | undefined;
+
   const styles = {
     good: "bg-emerald-100 text-emerald-700 ring-emerald-200",
     acceptable: "bg-amber-100 text-amber-700 ring-amber-200",
@@ -123,36 +131,57 @@ function QualityModal({ exam, onClose }: { exam: Exam; onClose: () => void }) {
         </div>
 
         <div className="max-h-[60vh] overflow-y-auto px-6 py-5">
-          {exam.imageQualityResults?.length ? (
-            <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
-              {exam.imageQualityResults.map((result, index) => (
-                <li
-                  key={result.orthancInstanceId || result.sopInstanceUid}
-                  className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3"
+          {summaryScore != null && summaryCategory && (
+            <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="text-sm font-semibold text-slate-900">Résumé de qualité</div>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold tabular-nums text-slate-700">
+                  {summaryScore.toFixed(1)}/100
+                </span>
+                <span
+                  className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${styles[summaryCategory]}`}
                 >
-                  <span className="min-w-24 text-sm font-medium text-slate-900">
-                    Instance {index + 1}
-                  </span>
-                  <span
-                    className="min-w-36 flex-1 font-mono text-xs text-slate-500"
-                    title={result.seriesInstanceUid}
+                  {labels[summaryCategory]}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {results.length ? (
+            <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
+              {results.map((result, index) => {
+                const seriesUid = result.seriesInstanceUid || result.studyInstanceUid || "—";
+                return (
+                  <li
+                    key={result.orthancInstanceId || result.sopInstanceUid || `${index}`}
+                    className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3"
                   >
-                    …{result.seriesInstanceUid.slice(-12)}
-                  </span>
-                  <span className="text-sm font-semibold tabular-nums text-slate-700">
-                    {result.score.toFixed(1)}/100
-                  </span>
-                  <span
-                    className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${styles[result.category]}`}
-                  >
-                    {labels[result.category]}
-                  </span>
-                </li>
-              ))}
+                    <span className="min-w-24 text-sm font-medium text-slate-900">
+                      Instance {index + 1}
+                    </span>
+                    <span
+                      className="min-w-36 flex-1 font-mono text-xs text-slate-500"
+                      title={seriesUid}
+                    >
+                      {seriesUid ? `…${seriesUid.slice(-12)}` : "—"}
+                    </span>
+                    <span className="text-sm font-semibold tabular-nums text-slate-700">
+                      {typeof result.score === "number" ? `${result.score.toFixed(1)}/100` : "—"}
+                    </span>
+                    <span
+                      className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${styles[result.category]}`}
+                    >
+                      {labels[result.category]}
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
           ) : (
             <p className="py-6 text-center text-sm text-slate-500">
-              Aucun résultat de qualité disponible.
+              {summaryScore != null && summaryCategory
+                ? "Aucun détail d’instance n’est disponible pour cette analyse."
+                : "Aucun résultat de qualité disponible."}
             </p>
           )}
         </div>
@@ -547,44 +576,48 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
         </div>
         <Pagination currentPage={page} totalPages={Math.ceil(total / 10)} onPageChange={setPage} />
       </div>
-      {historyExam && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="patient-history-title"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setHistoryExam(null);
-          }}
-        >
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 id="patient-history-title" className="text-lg font-semibold text-slate-900">
-                  Antécédents du patient
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  {historyExam.patientName} · {historyExam.patientId || "ID non renseigné"}
-                </p>
+      {historyExam &&
+        ReactDOM.createPortal(
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="patient-history-title"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setHistoryExam(null);
+            }}
+          >
+            <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 id="patient-history-title" className="text-lg font-semibold text-slate-900">
+                    Antécédents du patient
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {historyExam.patientName} · {historyExam.patientId || "ID non renseigné"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setHistoryExam(null)}
+                  aria-label="Fermer"
+                  className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+                >
+                  <X className="h-5 w-5" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setHistoryExam(null)}
-                aria-label="Fermer"
-                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-              >
-                <X className="h-5 w-5" />
-              </button>
+              <div className="mt-5 whitespace-pre-line rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
+                {historyExam.patientHistory || "Aucun antécédent renseigné dans Orthanc."}
+              </div>
             </div>
-            <div className="mt-5 whitespace-pre-line rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
-              {historyExam.patientHistory || "Aucun antécédent renseigné dans Orthanc."}
-            </div>
-          </div>
-        </div>
-      )}
-      {qualityModalExam && (
-        <QualityModal exam={qualityModalExam} onClose={() => setQualityModalExam(null)} />
-      )}
+          </div>,
+          document.body,
+        )}
+      {qualityModalExam &&
+        ReactDOM.createPortal(
+          <QualityModal exam={qualityModalExam} onClose={() => setQualityModalExam(null)} />,
+          document.body,
+        )}
     </div>
   );
 }
