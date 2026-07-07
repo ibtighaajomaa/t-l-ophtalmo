@@ -1011,43 +1011,53 @@ def tache_auto_segmentation():
 
         per_eye = aggregate_per_eye(series_reports)
         if per_eye:
-            report_json = {
-                "source": "monai_label_auto",
-                "status": "AI_ANALYZED",
-                "study_instance_uid": study_id,
-                "series_reports": series_reports,
-                "per_eye": per_eye,
-            }
-            analysis_report = AnalysisReport.objects.filter(series_instance_uid=study_id).first()
-            if analysis_report:
-                analysis_report.user = None
-                analysis_report.report_json = report_json
-                analysis_report.save(update_fields=["user", "report_json"])
-            else:
-                AnalysisReport.objects.create(
-                    series_instance_uid=study_id,
-                    user=None,
-                    report_json=report_json,
-                )
+            reports_by_eye = {}
+            report_generation_status = "skipped"
+            report_generation_error = ""
             try:
                 eye_texts = []
+                report_errors = []
                 for side in ("right", "left"):
                     eye_report = per_eye.get(side)
                     if not eye_report:
                         continue
                     eye_label = "Œil droit" if side == "right" else "Œil gauche"
-                    generated = build_ai_report_text(
-                        expected_patient_id or exam.patient_id,
-                        eye_report,
-                        eye_label,
-                        patient_age=exam.patient_age,
-                    )
+                    try:
+                        generated = build_ai_report_text(
+                            expected_patient_id or exam.patient_id,
+                            eye_report,
+                            eye_label,
+                            patient_age=exam.patient_age,
+                        )
+                    except Exception as e:
+                        report_errors.append(f"{eye_label}: {str(e)[:200]}")
+                        logger.warning(
+                            "[AutoSeg] AI draft report generation failed for %s: %s",
+                            eye_label,
+                            e,
+                        )
+                        continue
+                    reports_by_eye[side] = {
+                        "eye": eye_label,
+                        "report_text": generated.get("report_text") or "",
+                        "report_html": generated.get("report_html") or "",
+                        "report_json": generated.get("report_json") or {},
+                        "status": "generated",
+                    }
                     text = generated.get("report_text") or ""
                     if text:
                         eye_texts.append(f"{eye_label}:\n{text}")
 
                 if eye_texts:
+                    report_generation_status = (
+                        "completed" if len(reports_by_eye) == len(per_eye) and not report_errors else "partial"
+                    )
+                    report_generation_error = "; ".join(report_errors)
                     combined = "\n\n".join(eye_texts)
+                    ai_report_data = {
+                        "per_eye": per_eye,
+                        "reports_by_eye": reports_by_eye,
+                    }
                     report = (
                         MedicalReport.objects.filter(
                             examination_id=str(exam.id),
@@ -1060,7 +1070,7 @@ def tache_auto_segmentation():
                         report.patient_id = expected_patient_id or exam.patient_id
                         report.ai_content = combined
                         report.ai_confidence = worst_dr_confidence(per_eye)
-                        report.ai_report_data = per_eye
+                        report.ai_report_data = ai_report_data
                         report.save(
                             update_fields=[
                                 "patient_id",
@@ -1079,7 +1089,7 @@ def tache_auto_segmentation():
                             status=MedicalReport.Status.AI_GENERATED,
                             ai_content=combined,
                             ai_confidence=worst_dr_confidence(per_eye),
-                            ai_report_data=per_eye,
+                            ai_report_data=ai_report_data,
                         )
                     MedicalReportVersion.objects.create(
                         report=report,
@@ -1087,8 +1097,37 @@ def tache_auto_segmentation():
                         content=combined,
                         version_type=MedicalReportVersion.VersionType.AI,
                     )
+                else:
+                    report_generation_status = "failed"
+                    report_generation_error = (
+                        "; ".join(report_errors) or "Report generator returned empty content"
+                    )
             except Exception as e:
+                report_generation_status = "failed"
+                report_generation_error = str(e)[:500]
                 logger.warning("[AutoSeg] AI draft report generation skipped: %s", e)
+
+            report_json = {
+                "source": "monai_label_auto",
+                "status": "AI_ANALYZED",
+                "study_instance_uid": study_id,
+                "series_reports": series_reports,
+                "per_eye": per_eye,
+                "reports_by_eye": reports_by_eye,
+                "report_generation_status": report_generation_status,
+                "report_generation_error": report_generation_error,
+            }
+            analysis_report = AnalysisReport.objects.filter(series_instance_uid=study_id).first()
+            if analysis_report:
+                analysis_report.user = None
+                analysis_report.report_json = report_json
+                analysis_report.save(update_fields=["user", "report_json"])
+            else:
+                AnalysisReport.objects.create(
+                    series_instance_uid=study_id,
+                    user=None,
+                    report_json=report_json,
+                )
 
         # Update exam based on results
         exam.segmentation_models_status = models_status

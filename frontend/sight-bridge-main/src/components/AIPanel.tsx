@@ -32,6 +32,8 @@ interface AIPanelProps {
   examinationId?: string;
 }
 
+const EYE_SIDES = ["right", "left"] as const;
+
 export function AIPanel({
   studyInstanceUid,
   seriesInstanceUid,
@@ -58,8 +60,6 @@ export function AIPanel({
   const [notesError, setNotesError] = useState<string | null>(null);
 
   const eyeAnalysis = isPerEyeAnalysis(analysis) ? analysis : null;
-  const eyeSides = ["right", "left"] as EyeSide[];
-  const availableEyes = eyeAnalysis ? eyeSides.filter((side) => !!eyeAnalysis[side]) : [];
   const activeAnalysis =
     eyeAnalysis
       ? eyeAnalysis[activeEye] ?? null
@@ -80,8 +80,10 @@ export function AIPanel({
         const result = await fetchAnalysis(studyInstanceUid);
         if (cancelled) return;
         setAnalysis(result.analysis);
-        const eyes = eyeSides.filter((side) => !!result.analysis[side]);
-        if (eyes.length > 0 && !result.analysis[activeEye]) setActiveEye(eyes[0]);
+        const eyes = EYE_SIDES.filter((side) => !!result.analysis[side]);
+        if (eyes.length > 0) {
+          setActiveEye((current) => (result.analysis[current] ? current : eyes[0]));
+        }
         setPollingAnalysis(false);
       } catch {
         if (cancelled) return;
@@ -159,7 +161,7 @@ export function AIPanel({
       const result = await runAIAnalysis(studyInstanceUid);
       setAnalysis(result.analysis);
       if (isPerEyeAnalysis(result.analysis)) {
-        const eyes = eyeSides.filter((side) => !!result.analysis[side]);
+        const eyes = EYE_SIDES.filter((side) => !!result.analysis[side]);
         if (eyes.length > 0) setActiveEye(eyes[0]);
       }
     } catch (e) {
@@ -271,7 +273,7 @@ export function AIPanel({
 
         {studyInstanceUid && (
           <div className="grid grid-cols-2 gap-2">
-            {eyeSides.map((side) => {
+            {EYE_SIDES.map((side) => {
               const isActive = activeEye === side;
               const isReady = !eyeAnalysis || !!eyeAnalysis[side];
               return (

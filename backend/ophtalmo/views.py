@@ -1026,11 +1026,49 @@ def latest_analysis(request):
     if not report:
         return Response({'error': 'Analysis not found'}, status=status.HTTP_404_NOT_FOUND)
     report_json = report.report_json or {}
+    exam = Exam.objects.filter(study_instance_uid=study_uid).first()
+    if not exam and report_json.get('study_instance_uid'):
+        exam = Exam.objects.filter(study_instance_uid=report_json.get('study_instance_uid')).first()
+
+    medical_report = None
+    if exam:
+        medical_report = (
+            MedicalReport.objects.filter(
+                examination_id=str(exam.id),
+                status=MedicalReport.Status.AI_GENERATED,
+            )
+            .order_by('-created_at')
+            .first()
+        )
+    if not medical_report:
+        medical_report = (
+            MedicalReport.objects.filter(
+                examination_id__in=lookup_uids,
+                status=MedicalReport.Status.AI_GENERATED,
+            )
+            .order_by('-created_at')
+            .first()
+        )
+
+    medical_report_data = medical_report.ai_report_data if medical_report else {}
+    if not isinstance(medical_report_data, dict):
+        medical_report_data = {}
+    reports_by_eye = (
+        report_json.get('reports_by_eye')
+        or medical_report_data.get('reports_by_eye')
+        or {}
+    )
     return Response({
         'status': report_json.get('status', 'AI_ANALYZED'),
         'study_instance_uid': study_uid,
         'stored_study_uid': report.series_instance_uid,
         'analysis': report_json.get('per_eye') or report_json,
+        'reports_by_eye': reports_by_eye,
+        'report_generation_status': report_json.get('report_generation_status'),
+        'report_generation_error': report_json.get('report_generation_error', ''),
+        'medical_report': (
+            MedicalReportSerializer(medical_report).data if medical_report else None
+        ),
         'report': AnalysisReportSerializer(report).data,
     })
 
