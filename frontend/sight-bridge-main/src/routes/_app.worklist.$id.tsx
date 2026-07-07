@@ -980,6 +980,7 @@ function ExamDetail() {
                 seriesInstanceUid={exam.studyInstanceUid}
                 patientId={exam.patientName}
                 patientAge={exam.patientAge}
+                examinationId={exam.id}
               />
             ) : (
               <>

@@ -531,7 +531,7 @@ async def analyze(request: dict):
             except Exception as e:
                 logger.error("Segmentation %s failed: %s", m, e)
 
-        if labels:
+        if labels and request.get("push_dicom_seg", True):
             try:
                 import requests, pathlib, hashlib
                 from pydicom import dcmread

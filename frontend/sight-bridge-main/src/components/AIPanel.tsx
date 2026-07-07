@@ -13,7 +13,15 @@ import {
   MessageSquare,
 } from "lucide-react";
 import type { AnalysisResult, DoctorNote } from "@/lib/exam-api";
-import { runAIAnalysis, generateReport, fetchDoctorNotes, createDoctorNote } from "@/lib/exam-api";
+import type { EyeSide, PerEyeAnalysis } from "@/lib/exam-api";
+import {
+  runAIAnalysis,
+  generateReport,
+  fetchDoctorNotes,
+  createDoctorNote,
+  fetchAnalysis,
+  fetchMedicalReports,
+} from "@/lib/exam-api";
 import { RichTextEditor } from "@/components/RichTextEditor";
 
 interface AIPanelProps {
@@ -21,6 +29,7 @@ interface AIPanelProps {
   seriesInstanceUid?: string;
   patientId?: string;
   patientAge?: number;
+  examinationId?: string;
 }
 
 export function AIPanel({
@@ -28,12 +37,17 @@ export function AIPanel({
   seriesInstanceUid,
   patientId,
   patientAge,
+  examinationId,
 }: AIPanelProps) {
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [analysis, setAnalysis] = useState<AnalysisResult | PerEyeAnalysis | null>(null);
+  const [activeEye, setActiveEye] = useState<EyeSide>("right");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reportText, setReportText] = useState<string | null>(null);
   const [reportHtml, setReportHtml] = useState<string | null>(null);
+  const [reportByEye, setReportByEye] = useState<Partial<Record<EyeSide, string>>>({});
+  const [reportHtmlByEye, setReportHtmlByEye] = useState<Partial<Record<EyeSide, string>>>({});
+  const [pollingAnalysis, setPollingAnalysis] = useState(false);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [noteInput, setNoteInput] = useState("");
   const [eyeRight, setEyeRight] = useState(false);
@@ -42,6 +56,76 @@ export function AIPanel({
   const [loadingNotes, setLoadingNotes] = useState(false);
   const [savingNote, setSavingNote] = useState(false);
   const [notesError, setNotesError] = useState<string | null>(null);
+
+  const eyeAnalysis = isPerEyeAnalysis(analysis) ? analysis : null;
+  const eyeSides = ["right", "left"] as EyeSide[];
+  const availableEyes = eyeAnalysis ? eyeSides.filter((side) => !!eyeAnalysis[side]) : [];
+  const activeAnalysis =
+    eyeAnalysis
+      ? eyeAnalysis[activeEye] ?? null
+      : (analysis as AnalysisResult | null);
+  const activeReportText = eyeAnalysis ? reportByEye[activeEye] ?? null : reportText;
+  const activeReportHtml = eyeAnalysis ? reportHtmlByEye[activeEye] ?? null : reportHtml;
+
+  useEffect(() => {
+    if (!studyInstanceUid) return;
+    let cancelled = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function loadSavedAnalysis() {
+      attempts += 1;
+      setPollingAnalysis(true);
+      try {
+        const result = await fetchAnalysis(studyInstanceUid);
+        if (cancelled) return;
+        setAnalysis(result.analysis);
+        const eyes = eyeSides.filter((side) => !!result.analysis[side]);
+        if (eyes.length > 0 && !result.analysis[activeEye]) setActiveEye(eyes[0]);
+        setPollingAnalysis(false);
+      } catch {
+        if (cancelled) return;
+        if (attempts < 24) {
+          timer = setTimeout(loadSavedAnalysis, 5000);
+        } else {
+          setPollingAnalysis(false);
+        }
+      }
+    }
+
+    loadSavedAnalysis();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [studyInstanceUid]);
+
+  useEffect(() => {
+    if (!examinationId) return;
+    let cancelled = false;
+    fetchMedicalReports(examinationId.replace(/^EX-/, ""))
+      .then((reports) => {
+        if (cancelled || reports.length === 0) return;
+        const report = reports[0];
+        if (report.ai_content) {
+          const splitText = splitReportByEye(report.ai_content);
+          setReportText(report.ai_content);
+          setReportHtml(report.ai_content.replace(/\n/g, "<br>"));
+          setReportByEye(splitText);
+          setReportHtmlByEye(
+            Object.fromEntries(
+              Object.entries(splitText).map(([side, text]) => [side, text.replace(/\n/g, "<br>")]),
+            ) as Partial<Record<EyeSide, string>>,
+          );
+        }
+      })
+      .catch(() => {
+        // Draft report is optional.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [examinationId]);
 
   useEffect(() => {
     if (!seriesInstanceUid) return;
@@ -69,9 +153,15 @@ export function AIPanel({
     setError(null);
     setReportText(null);
     setReportHtml(null);
+    setReportByEye({});
+    setReportHtmlByEye({});
     try {
       const result = await runAIAnalysis(studyInstanceUid);
       setAnalysis(result.analysis);
+      if (isPerEyeAnalysis(result.analysis)) {
+        const eyes = eyeSides.filter((side) => !!result.analysis[side]);
+        if (eyes.length > 0) setActiveEye(eyes[0]);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "An unknown error occurred");
     } finally {
@@ -80,24 +170,25 @@ export function AIPanel({
   }
 
   async function handleGenerateReport() {
-    if (!analysis) return;
+    if (!activeAnalysis) return;
     setGeneratingReport(true);
     setError(null);
     try {
-      const eyeLabel =
-        eyeRight && eyeLeft
-          ? "Bilatéral"
-          : eyeRight
-            ? "Œil droit (OD)"
-            : eyeLeft
-              ? "Œil gauche (OG)"
-              : "Non spécifié";
-      const result = await generateReport(analysis, patientId ?? studyInstanceUid ?? "inconnu", {
+      const eyeLabel = activeEye === "right" ? "Œil droit (OD)" : "Œil gauche (OG)";
+      const result = await generateReport(activeAnalysis, patientId ?? studyInstanceUid ?? "inconnu", {
         patientAge,
         eye: eyeLabel,
       });
-      setReportText(result.report_text);
-      setReportHtml(result.report_html || result.report_text.replace(/\n/g, "<br>"));
+      if (eyeAnalysis) {
+        setReportByEye((prev) => ({ ...prev, [activeEye]: result.report_text }));
+        setReportHtmlByEye((prev) => ({
+          ...prev,
+          [activeEye]: result.report_html || result.report_text.replace(/\n/g, "<br>"),
+        }));
+      } else {
+        setReportText(result.report_text);
+        setReportHtml(result.report_html || result.report_text.replace(/\n/g, "<br>"));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Report generation failed");
     } finally {
@@ -132,7 +223,7 @@ export function AIPanel({
     }
   }
 
-  const hasAnalysis = !!analysis;
+  const hasAnalysis = !!activeAnalysis;
 
   return (
     <div className="rounded-xl border border-slate-700 bg-[#0A1128] text-slate-200 flex flex-col max-h-[600px]">
@@ -158,7 +249,7 @@ export function AIPanel({
           </div>
         )}
 
-        {!hasAnalysis && !loading && !error && studyInstanceUid && (
+        {!hasAnalysis && !loading && !pollingAnalysis && !error && studyInstanceUid && (
           <div className="flex flex-col items-center gap-3 py-8 text-center">
             <Brain className="h-8 w-8 text-slate-600" />
             <p className="text-xs text-slate-500 max-w-[200px]">
@@ -167,17 +258,55 @@ export function AIPanel({
           </div>
         )}
 
-        {loading && (
+        {(loading || pollingAnalysis) && !activeAnalysis && (
           <div className="flex flex-col items-center gap-3 py-8 text-center">
             <Loader2 className="h-8 w-8 text-blue-400 animate-spin" />
             <p className="text-xs text-slate-400">
-              Running AI analysis… this may take up to 5 minutes.
+              {loading
+                ? "Running AI analysis… this may take up to 5 minutes."
+                : "Classification automatique en cours…"}
             </p>
           </div>
         )}
 
-        {hasAnalysis && (
+        {studyInstanceUid && (
+          <div className="grid grid-cols-2 gap-2">
+            {eyeSides.map((side) => {
+              const isActive = activeEye === side;
+              const isReady = !eyeAnalysis || !!eyeAnalysis[side];
+              return (
+                <button
+                  key={side}
+                  type="button"
+                  onClick={() => setActiveEye(side)}
+                  className={`min-h-9 rounded-md border px-2 text-xs font-semibold transition ${
+                    isActive
+                      ? "border-cyan-300 bg-cyan-500/15 text-cyan-100 shadow-[0_0_12px_rgba(34,211,238,0.45)]"
+                      : "border-slate-600 bg-slate-700/50 text-slate-200 hover:border-slate-400"
+                  }`}
+                >
+                  <span className="inline-flex items-center justify-center gap-1.5">
+                    {!isReady && pollingAnalysis && <Loader2 className="h-3 w-3 animate-spin" />}
+                    [ {side === "right" ? "Œil droit" : "Œil gauche"} ]
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {!activeAnalysis && eyeAnalysis && (
+          <div className="flex flex-col items-center gap-3 rounded-lg border border-slate-700 bg-[#121936] px-4 py-8 text-center">
+            <Loader2 className="h-7 w-7 text-cyan-300 animate-spin" />
+            <p className="text-xs text-slate-400">
+              Résultat {activeEye === "right" ? "œil droit" : "œil gauche"} en attente…
+            </p>
+          </div>
+        )}
+
+        {activeAnalysis && (
           <>
+
             {/* DR Classification */}
             <section className="space-y-2">
               <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
@@ -189,23 +318,23 @@ export function AIPanel({
                   <span className="text-xs text-slate-400">Predicted Grade</span>
                   <span
                     className={`text-xs font-semibold ${
-                      analysis.dr_classification.grade === "Unknown"
+                      activeAnalysis.dr_classification.grade === "Unknown"
                         ? "text-slate-500"
                         : "text-emerald-400"
                     }`}
                   >
-                    {analysis.dr_classification.grade}
+                    {activeAnalysis.dr_classification.grade}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-slate-400">Confidence</span>
                   <span className="text-xs text-slate-300">
-                    {(analysis.dr_classification.confidence * 100).toFixed(1)}%
+                    {(activeAnalysis.dr_classification.confidence * 100).toFixed(1)}%
                   </span>
                 </div>
-                {analysis.dr_classification.probabilities.length > 0 && (
+                {activeAnalysis.dr_classification.probabilities.length > 0 && (
                   <div className="space-y-1 pt-1 border-t border-slate-700">
-                    {analysis.dr_classification.probabilities.map((p) => (
+                    {activeAnalysis.dr_classification.probabilities.map((p) => (
                       <div key={p.label} className="flex items-center justify-between text-[11px]">
                         <span className="text-slate-500">{p.label}</span>
                         <span className="text-slate-400 font-mono">
@@ -225,13 +354,13 @@ export function AIPanel({
                 Lesions
               </h3>
               <div className="rounded-lg bg-[#121936] border border-slate-700 p-3 space-y-2">
-                <LesionRow label="Microaneurysms" value={analysis.lesions.microaneurysms} />
-                <LesionRow label="Hemorrhages" value={analysis.lesions.hemorrhages} />
-                <LesionRow label="Exudates" value={analysis.lesions.exudates} />
+                <LesionRow label="Microaneurysms" value={activeAnalysis.lesions.microaneurysms} />
+                <LesionRow label="Hemorrhages" value={activeAnalysis.lesions.hemorrhages} />
+                <LesionRow label="Exudates" value={activeAnalysis.lesions.exudates} />
                 <div className="flex items-center justify-between pt-1 border-t border-slate-700">
                   <span className="text-xs text-slate-400">Coverage</span>
                   <span className="text-xs text-amber-400 font-mono">
-                    {analysis.lesions.coverage_pct.toFixed(1)}%
+                    {activeAnalysis.lesions.coverage_pct.toFixed(1)}%
                   </span>
                 </div>
               </div>
@@ -247,16 +376,16 @@ export function AIPanel({
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-slate-400">Disc Area</span>
                   <span className="text-xs text-slate-300 font-mono">
-                    {analysis.optic_disc_cup.disc_area_px > 0
-                      ? `${analysis.optic_disc_cup.disc_area_px} px`
+                    {activeAnalysis.optic_disc_cup.disc_area_px > 0
+                      ? `${activeAnalysis.optic_disc_cup.disc_area_px} px`
                       : "\u2014 px"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-slate-400">Cup Area</span>
                   <span className="text-xs text-slate-300 font-mono">
-                    {analysis.optic_disc_cup.cup_area_px > 0
-                      ? `${analysis.optic_disc_cup.cup_area_px} px`
+                    {activeAnalysis.optic_disc_cup.cup_area_px > 0
+                      ? `${activeAnalysis.optic_disc_cup.cup_area_px} px`
                       : "\u2014 px"}
                   </span>
                 </div>
@@ -264,29 +393,29 @@ export function AIPanel({
                   <span className="text-xs text-slate-400">Cup/Disc Ratio</span>
                   <span
                     className={`text-xs font-semibold font-mono ${
-                      analysis.optic_disc_cup.cup_disc_ratio > 0.5
+                      activeAnalysis.optic_disc_cup.cup_disc_ratio > 0.5
                         ? "text-red-400"
                         : "text-purple-400"
                     }`}
                   >
-                    {analysis.optic_disc_cup.cup_disc_ratio.toFixed(2)}
+                    {activeAnalysis.optic_disc_cup.cup_disc_ratio.toFixed(2)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between pt-1 border-t border-slate-700">
                   <span className="text-xs text-slate-400">Glaucoma Risk</span>
                   <span
                     className={`text-xs font-semibold ${
-                      analysis.glaucoma.risk === "Faible"
+                      activeAnalysis.glaucoma.risk === "Faible"
                         ? "text-emerald-400"
-                        : analysis.glaucoma.risk === "Modere"
+                        : activeAnalysis.glaucoma.risk === "Modere"
                           ? "text-amber-400"
-                          : analysis.glaucoma.risk === "Eleve" ||
-                              analysis.glaucoma.risk === "Tres eleve"
+                          : activeAnalysis.glaucoma.risk === "Eleve" ||
+                              activeAnalysis.glaucoma.risk === "Tres eleve"
                             ? "text-red-400"
                             : "text-slate-500"
                     }`}
                   >
-                    {analysis.glaucoma.risk}
+                    {activeAnalysis.glaucoma.risk}
                   </span>
                 </div>
               </div>
@@ -302,18 +431,18 @@ export function AIPanel({
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-slate-400">Coverage</span>
                   <span className="text-xs text-cyan-400 font-mono">
-                    {analysis.vessels.coverage_pct.toFixed(1)}%
+                    {activeAnalysis.vessels.coverage_pct.toFixed(1)}%
                   </span>
                 </div>
               </div>
             </section>
 
             {/* Grad-CAM */}
-            {analysis.gradcam_image && (
+            {activeAnalysis.gradcam_image && (
               <section className="space-y-2">
                 <h3 className="text-sm font-bold text-white">Grad-CAM</h3>
                 <img
-                  src={`data:image/png;base64,${analysis.gradcam_image}`}
+                  src={`data:image/png;base64,${activeAnalysis.gradcam_image}`}
                   alt="Grad-CAM"
                   className="w-full rounded-lg border border-slate-700"
                 />
@@ -321,11 +450,11 @@ export function AIPanel({
             )}
 
             {/* CLAHE */}
-            {analysis.clahe_image && (
+            {activeAnalysis.clahe_image && (
               <section className="space-y-2">
                 <h3 className="text-sm font-bold text-white">CLAHE Enhanced</h3>
                 <img
-                  src={`data:image/png;base64,${analysis.clahe_image}`}
+                  src={`data:image/png;base64,${activeAnalysis.clahe_image}`}
                   alt="CLAHE"
                   className="w-full rounded-lg border border-slate-700"
                 />
@@ -337,13 +466,22 @@ export function AIPanel({
               Analysis completed
             </div>
 
-            {reportText && reportHtml && (
+            {activeReportText && activeReportHtml && (
               <section className="space-y-2">
                 <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
                   <FileText className="h-3.5 w-3.5 text-blue-400" />
-                  Clinical Report
+                  Report {activeEye === "right" ? "Œil droit" : "Œil gauche"}
                 </h3>
-                <RichTextEditor value={reportHtml} onChange={setReportHtml} />
+                <RichTextEditor
+                  value={activeReportHtml}
+                  onChange={(value) => {
+                    if (eyeAnalysis) {
+                      setReportHtmlByEye((prev) => ({ ...prev, [activeEye]: value }));
+                    } else {
+                      setReportHtml(value);
+                    }
+                  }}
+                />
               </section>
             )}
 
@@ -513,4 +651,32 @@ function LesionRow({ label, value }: { label: string; value: number }) {
       <span className="text-xs text-slate-300 font-mono">{value}</span>
     </div>
   );
+}
+
+function isPerEyeAnalysis(value: AnalysisResult | PerEyeAnalysis | null): value is PerEyeAnalysis {
+  return !!value && ("right" in value || "left" in value);
+}
+
+function splitReportByEye(content: string): Partial<Record<EyeSide, string>> {
+  const markers: Array<{ side: EyeSide; match: RegExp }> = [
+    { side: "right", match: /(?:Œ|Oe)il droit\s*:/i },
+    { side: "left", match: /(?:Œ|Oe)il gauche\s*:/i },
+  ];
+  const found = markers
+    .map((marker) => {
+      const match = marker.match.exec(content);
+      return match ? { side: marker.side, index: match.index, length: match[0].length } : null;
+    })
+    .filter((item): item is { side: EyeSide; index: number; length: number } => !!item)
+    .sort((a, b) => a.index - b.index);
+
+  if (found.length === 0) return {};
+
+  const result: Partial<Record<EyeSide, string>> = {};
+  found.forEach((item, idx) => {
+    const next = found[idx + 1];
+    const text = content.slice(item.index + item.length, next?.index).trim();
+    if (text) result[item.side] = text;
+  });
+  return result;
 }

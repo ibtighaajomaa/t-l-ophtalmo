@@ -20,6 +20,7 @@ from .serializers import (
 from users.authentication import KeycloakAuthentication
 from .report_generator import ReportGenerator
 from .dicom_patient import patient_metadata
+from .analysis_utils import aggregate_per_eye
 
 logger = logging.getLogger(__name__)
 
@@ -793,16 +794,6 @@ def run_analysis(request):
                     op_series_uid,
                 )
 
-            AnalysisReport.objects.create(
-                series_instance_uid=op_series_uid,
-                user=None,
-                report_json={
-                    "source": "monai_label_analyze",
-                    "status": "AI_ANALYZED",
-                    "data": result,
-                },
-            )
-
             results[op_series_uid] = result
         except requests.exceptions.ConnectionError:
             logger.error("MONAI Label server unreachable at monai-label:8000")
@@ -820,6 +811,28 @@ def run_analysis(request):
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
+    per_eye = aggregate_per_eye(results)
+    report_json = {
+        "source": "monai_label_analyze",
+        "status": "AI_ANALYZED",
+        "study_instance_uid": study_uid,
+        "series_reports": results,
+        "per_eye": per_eye,
+    }
+    analysis_report = AnalysisReport.objects.filter(series_instance_uid=study_uid).first()
+    if analysis_report:
+        analysis_report.user = (
+            request.user if getattr(request, "user", None) and request.user.is_authenticated else None
+        )
+        analysis_report.report_json = report_json
+        analysis_report.save(update_fields=["user", "report_json"])
+    else:
+        AnalysisReport.objects.create(
+            series_instance_uid=study_uid,
+            user=request.user if getattr(request, "user", None) and request.user.is_authenticated else None,
+            report_json=report_json,
+        )
+
     return Response({
         "status": "completed" if not errors else "partial",
         "study_instance_uid": study_uid,
@@ -827,7 +840,7 @@ def run_analysis(request):
         "series_errors": errors,
         # Backward-compatible fields for callers that expect a single result.
         "series_instance_uid": next(iter(results.keys())),
-        "analysis": next(iter(results.values())),
+        "analysis": per_eye or next(iter(results.values())),
     })
 
 
@@ -987,6 +1000,39 @@ def list_analysis_reports(request):
     reports = reports[:limit]
     serializer = AnalysisReportSerializer(reports, many=True)
     return Response(serializer.data)
+
+
+@api_view(['GET'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def latest_analysis(request):
+    study_uid = request.query_params.get('study_instance_uid')
+    if not study_uid:
+        return Response(
+            {'error': 'study_instance_uid is required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    lookup_uids = [study_uid]
+    try:
+        from .tasks import _resolve_orthanc_id
+
+        orthanc_study_id = _resolve_orthanc_id(study_uid)
+        if orthanc_study_id and orthanc_study_id not in lookup_uids:
+            lookup_uids.append(orthanc_study_id)
+    except Exception:
+        pass
+
+    report = AnalysisReport.objects.filter(series_instance_uid__in=lookup_uids).first()
+    if not report:
+        return Response({'error': 'Analysis not found'}, status=status.HTTP_404_NOT_FOUND)
+    report_json = report.report_json or {}
+    return Response({
+        'status': report_json.get('status', 'AI_ANALYZED'),
+        'study_instance_uid': study_uid,
+        'stored_study_uid': report.series_instance_uid,
+        'analysis': report_json.get('per_eye') or report_json,
+        'report': AnalysisReportSerializer(report).data,
+    })
 
 
 @api_view(['POST'])

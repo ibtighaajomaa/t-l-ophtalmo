@@ -265,9 +265,16 @@ export interface AnalysisResult {
   clahe_image: string | null;
 }
 
+export type EyeSide = "right" | "left";
+export type PerEyeAnalysis = Partial<Record<EyeSide, AnalysisResult & {
+  side?: EyeSide;
+  series_instance_uids?: string[];
+  source_series_uid?: string;
+}>>;
+
 export async function runAIAnalysis(
   studyInstanceUid: string,
-): Promise<{ status: string; analysis: AnalysisResult }> {
+): Promise<{ status: string; analysis: AnalysisResult | PerEyeAnalysis }> {
   const res = await fetch(`${BASE}/run-analysis/`, {
     method: "POST",
     headers: getHeaders(),
@@ -276,6 +283,20 @@ export async function runAIAnalysis(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || "AI analysis failed");
+  }
+  return res.json();
+}
+
+export async function fetchAnalysis(
+  studyInstanceUid: string,
+): Promise<{ status: string; analysis: PerEyeAnalysis }> {
+  const res = await fetch(
+    `${BASE}/analysis/?study_instance_uid=${encodeURIComponent(studyInstanceUid)}`,
+    { headers: getHeaders() },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Analysis not found");
   }
   return res.json();
 }
@@ -298,6 +319,28 @@ export async function generateReport(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || "Report generation failed");
+  }
+  return res.json();
+}
+
+export interface MedicalReport {
+  id: number;
+  patient_id: string;
+  examination_id: string;
+  status: string;
+  ai_content: string;
+  ai_report_data: unknown;
+  created_at: string;
+}
+
+export async function fetchMedicalReports(examinationId: string): Promise<MedicalReport[]> {
+  const res = await fetch(
+    `${BASE}/medical-reports/?examination_id=${encodeURIComponent(examinationId)}&limit=1`,
+    { headers: getHeaders() },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Medical report not found");
   }
   return res.json();
 }

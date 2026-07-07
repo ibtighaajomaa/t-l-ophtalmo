@@ -799,15 +799,17 @@ def tache_auto_quality():
 def tache_auto_segmentation():
     """
     Parcourt les examens OP en segmentation_status='pending' et déclenche
-    la segmentation MONAI Label (OD/OC, vaisseaux, lésions).
-    La classification DR reste manuelle depuis le bouton « Run AI Analysis ».
+    la segmentation MONAI Label (OD/OC, vaisseaux, lésions), la classification
+    DR par œil, puis un brouillon de compte rendu IA.
     Les résultats DICOM-SEG sont automatiquement poussés dans Orthanc
     via le pipeline patché de MONAI Label.
 
     Après la segmentation, déclenche la distribution pour que l'examen
     passe de 'En attente' → 'En cours' avec assignation à un médecin.
     """
-    from .models import Exam
+    from .analysis_utils import aggregate_per_eye, worst_dr_confidence
+    from .models import AnalysisReport, Exam, MedicalReport, MedicalReportVersion
+    from .report_utils import build_ai_report_text
 
     MAX_RETRIES = 3
     SEG_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
@@ -872,9 +874,8 @@ def tache_auto_segmentation():
         if op_study_uid:
             base_params["study_uid"] = op_study_uid
 
-        # Automatic processing is limited to segmentation. DR classification
-        # remains manual and runs only from the "Run AI Analysis" button.
         models_status = {}
+        series_reports = {}
         all_ok = True
 
         for op_series_item in op_series:
@@ -946,7 +947,32 @@ def tache_auto_segmentation():
                     logger.error("[AutoSeg] %s failed for series %s: %s", model, op_series_uid, e)
                     all_ok = False
 
-            series_status['dr_classification'] = 'manual'
+            try:
+                analyze_resp = requests.post(
+                    f"{MONAI_LABEL}/infer/analyze",
+                    json={
+                        "image": op_series_uid,
+                        "run_segmentation": True,
+                        "push_dicom_seg": False,
+                        "study_uid": op_study_uid or study_id,
+                    },
+                    timeout=300,
+                )
+                if analyze_resp.status_code == 200:
+                    analysis = analyze_resp.json()
+                    analysis["eye_laterality"] = series_status.get("eye_laterality")
+                    series_reports[op_series_uid] = analysis
+                    series_status['dr_classification'] = 'ok'
+                else:
+                    series_status['dr_classification'] = f'failed (HTTP {analyze_resp.status_code})'
+                    logger.warning(
+                        "[AutoSeg] /infer/analyze returned %s for series %s",
+                        analyze_resp.status_code,
+                        op_series_uid,
+                    )
+            except Exception as e:
+                series_status['dr_classification'] = f'failed ({str(e)[:100]})'
+                logger.warning("[AutoSeg] /infer/analyze failed for series %s: %s", op_series_uid, e)
 
             # Fix SEG patient/study association in Orthanc — safety net for any patch failures
             try:
@@ -982,6 +1008,87 @@ def tache_auto_segmentation():
                 )
 
             models_status[op_series_uid] = series_status
+
+        per_eye = aggregate_per_eye(series_reports)
+        if per_eye:
+            report_json = {
+                "source": "monai_label_auto",
+                "status": "AI_ANALYZED",
+                "study_instance_uid": study_id,
+                "series_reports": series_reports,
+                "per_eye": per_eye,
+            }
+            analysis_report = AnalysisReport.objects.filter(series_instance_uid=study_id).first()
+            if analysis_report:
+                analysis_report.user = None
+                analysis_report.report_json = report_json
+                analysis_report.save(update_fields=["user", "report_json"])
+            else:
+                AnalysisReport.objects.create(
+                    series_instance_uid=study_id,
+                    user=None,
+                    report_json=report_json,
+                )
+            try:
+                eye_texts = []
+                for side in ("right", "left"):
+                    eye_report = per_eye.get(side)
+                    if not eye_report:
+                        continue
+                    eye_label = "Œil droit" if side == "right" else "Œil gauche"
+                    generated = build_ai_report_text(
+                        expected_patient_id or exam.patient_id,
+                        eye_report,
+                        eye_label,
+                        patient_age=exam.patient_age,
+                    )
+                    text = generated.get("report_text") or ""
+                    if text:
+                        eye_texts.append(f"{eye_label}:\n{text}")
+
+                if eye_texts:
+                    combined = "\n\n".join(eye_texts)
+                    report = (
+                        MedicalReport.objects.filter(
+                            examination_id=str(exam.id),
+                            status=MedicalReport.Status.AI_GENERATED,
+                        )
+                        .order_by("-created_at")
+                        .first()
+                    )
+                    if report:
+                        report.patient_id = expected_patient_id or exam.patient_id
+                        report.ai_content = combined
+                        report.ai_confidence = worst_dr_confidence(per_eye)
+                        report.ai_report_data = per_eye
+                        report.save(
+                            update_fields=[
+                                "patient_id",
+                                "ai_content",
+                                "ai_confidence",
+                                "ai_report_data",
+                                "updated_at",
+                            ]
+                        )
+                        MedicalReportVersion.objects.filter(report=report, version_number=1).delete()
+                    else:
+                        report = MedicalReport.objects.create(
+                            patient_id=expected_patient_id or exam.patient_id,
+                            examination_id=str(exam.id),
+                            generated_by_ai=True,
+                            status=MedicalReport.Status.AI_GENERATED,
+                            ai_content=combined,
+                            ai_confidence=worst_dr_confidence(per_eye),
+                            ai_report_data=per_eye,
+                        )
+                    MedicalReportVersion.objects.create(
+                        report=report,
+                        version_number=1,
+                        content=combined,
+                        version_type=MedicalReportVersion.VersionType.AI,
+                    )
+            except Exception as e:
+                logger.warning("[AutoSeg] AI draft report generation skipped: %s", e)
 
         # Update exam based on results
         exam.segmentation_models_status = models_status
