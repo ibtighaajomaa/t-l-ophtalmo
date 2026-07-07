@@ -307,9 +307,13 @@ class AutoSegmentationTaskTest(TestCase):
             {'skipped': 'no OP series found'},
         )
 
+    @patch('ophtalmo.tasks._fix_seg_association')
+    @patch('ophtalmo.tasks._snapshot_seg_series')
     @patch('ophtalmo.tasks.requests.get')
     @patch('ophtalmo.tasks.requests.post')
-    def test_all_models_succeed(self, mock_post, mock_get):
+    def test_all_models_succeed(self, mock_post, mock_get, mock_snapshot, _mock_fix):
+        series_uid = '1.2.3.4.5.6.7.8.9.99.1'
+        mock_snapshot.side_effect = [set(), {'seg-series-1'}]
         mock_post.return_value.status_code = 200
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {}
@@ -323,7 +327,7 @@ class AutoSegmentationTaskTest(TestCase):
                 m.json.return_value = {
                     'MainDicomTags': {
                         'Modality': 'OP',
-                        'SeriesInstanceUID': '1.2.3.4.5.6.7.8.9.99.1',
+                        'SeriesInstanceUID': series_uid,
                     },
                 }
             return m
@@ -342,26 +346,91 @@ class AutoSegmentationTaskTest(TestCase):
         exam.refresh_from_db()
         self.assertEqual(exam.segmentation_status, 'completed')
         self.assertEqual(exam.segmentation_retries, 1)
+        series_status = exam.segmentation_models_status[series_uid]
         self.assertEqual(
-            exam.segmentation_models_status.get('optic_disc_cup'),
+            series_status.get('optic_disc_cup'),
             'ok',
         )
         self.assertEqual(
-            exam.segmentation_models_status.get('vessel_seg'),
+            series_status.get('vessel_seg'),
             'ok',
         )
         self.assertEqual(
-            exam.segmentation_models_status.get('lesion_seg'),
+            series_status.get('lesion_seg'),
             'ok',
         )
         self.assertEqual(
-            exam.segmentation_models_status.get('dr_classification'),
+            series_status.get('dr_classification'),
             'manual',
         )
 
+    @patch('ophtalmo.tasks._fix_seg_association')
+    @patch('ophtalmo.tasks._snapshot_seg_series')
     @patch('ophtalmo.tasks.requests.get')
     @patch('ophtalmo.tasks.requests.post')
-    def test_one_model_fails_triggers_retry(self, mock_post, mock_get):
+    def test_segments_all_op_series(self, mock_post, mock_get, mock_snapshot, _mock_fix):
+        left_uid = '1.2.3.left'
+        right_uid = '1.2.3.right'
+        mock_snapshot.side_effect = [
+            set(), {'seg-left-1'},
+            {'seg-left-1'}, {'seg-left-1', 'seg-right-1'},
+        ]
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {}
+
+        def get_side_effect(url, **kw):
+            m = MagicMock()
+            m.status_code = 200
+            if '/studies/' in url:
+                m.json.return_value = {'Series': ['series-left', 'series-right']}
+            elif url.endswith('/series/series-left'):
+                m.json.return_value = {
+                    'Instances': [],
+                    'MainDicomTags': {
+                        'Modality': 'OP',
+                        'SeriesInstanceUID': left_uid,
+                    },
+                }
+            else:
+                m.json.return_value = {
+                    'Instances': [],
+                    'MainDicomTags': {
+                        'Modality': 'OP',
+                        'SeriesInstanceUID': right_uid,
+                    },
+                }
+            return m
+        mock_get.side_effect = get_side_effect
+
+        exam = Exam.objects.create(
+            study_instance_uid='1.2.3.study',
+            patient_name='Both Eyes',
+            segmentation_status='pending',
+            quality_status='completed',
+            exam_type='Rétinographie',
+            date=TODAY,
+        )
+
+        tache_auto_segmentation()
+        exam.refresh_from_db()
+
+        self.assertEqual(exam.segmentation_status, 'completed')
+        self.assertIn(left_uid, exam.segmentation_models_status)
+        self.assertIn(right_uid, exam.segmentation_models_status)
+        infer_urls = [
+            call.args[0]
+            for call in mock_post.call_args_list
+            if call.args and '/infer/' in call.args[0]
+        ]
+        self.assertEqual(len(infer_urls), 8)
+
+    @patch('ophtalmo.tasks._fix_seg_association')
+    @patch('ophtalmo.tasks._snapshot_seg_series')
+    @patch('ophtalmo.tasks.requests.get')
+    @patch('ophtalmo.tasks.requests.post')
+    def test_one_model_fails_triggers_retry(self, mock_post, mock_get, mock_snapshot, _mock_fix):
+        series_uid = '1.2.3.4.5.6.7.8.9.99.2'
+        mock_snapshot.side_effect = [set(), {'seg-series-2'}]
         def post_side_effect(url, **kw):
             m = MagicMock()
             if 'vessel_seg' in url:
@@ -381,7 +450,7 @@ class AutoSegmentationTaskTest(TestCase):
                 m.json.return_value = {
                     'MainDicomTags': {
                         'Modality': 'OP',
-                        'SeriesInstanceUID': '1.2.3.4.5.6.7.8.9.99.2',
+                        'SeriesInstanceUID': series_uid,
                     },
                 }
             return m
@@ -401,13 +470,17 @@ class AutoSegmentationTaskTest(TestCase):
         self.assertEqual(exam.segmentation_status, 'pending')
         self.assertEqual(exam.segmentation_retries, 1)
         self.assertNotEqual(
-            exam.segmentation_models_status.get('vessel_seg'),
+            exam.segmentation_models_status[series_uid].get('vessel_seg'),
             'ok',
         )
 
+    @patch('ophtalmo.tasks._fix_seg_association')
+    @patch('ophtalmo.tasks._snapshot_seg_series')
     @patch('ophtalmo.tasks.requests.get')
     @patch('ophtalmo.tasks.requests.post')
-    def test_gives_up_after_max_retries(self, mock_post, mock_get):
+    def test_gives_up_after_max_retries(self, mock_post, mock_get, mock_snapshot, _mock_fix):
+        series_uid = '1.2.3.4.5.6.7.8.9.99.3'
+        mock_snapshot.side_effect = [set(), {'seg-series-3'}]
         mock_post.return_value.status_code = 500
         mock_post.return_value.json.return_value = {}
 
@@ -420,7 +493,7 @@ class AutoSegmentationTaskTest(TestCase):
                 m.json.return_value = {
                     'MainDicomTags': {
                         'Modality': 'OP',
-                        'SeriesInstanceUID': '1.2.3.4.5.6.7.8.9.99.3',
+                        'SeriesInstanceUID': series_uid,
                     },
                 }
             return m

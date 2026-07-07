@@ -87,7 +87,18 @@ def generate_gradcam(image, instance, dr_task):
         inputs = processor(images=img_rgb.astype(np.uint8), return_tensors="pt").to(device)
         pixel_values = inputs["pixel_values"]
 
-        last_layer = model.vit.layers[-1]
+        if hasattr(model, "vit") and hasattr(model.vit, "encoder") and hasattr(model.vit.encoder, "layer"):
+            last_layer = model.vit.encoder.layer[-1]
+        elif hasattr(model, "vit") and hasattr(model.vit, "layers"):
+            last_layer = model.vit.layers[-1]
+        else:
+            last_layer = None
+            for module in model.modules():
+                if module.__class__.__name__ in {"ViTLayer", "ViTEncoderLayer"}:
+                    last_layer = module
+            if last_layer is None:
+                logger.warning("Grad-CAM: no ViT encoder layer found on %s", model.__class__.__name__)
+                return None
         activations = []
         gradients = []
 

@@ -13,6 +13,7 @@ from .composite_segmenter import CompositeSegmenter
 from .deepedit import DeepEdit
 from .deepgrow import Deepgrow
 from .dr_classification import DRClassification
+from .eye_laterality import EyeLaterality
 from .lesion_seg import LesionSeg
 from .localization_spine import LocalizationSpine
 from .localization_vertebra import LocalizationVertebra

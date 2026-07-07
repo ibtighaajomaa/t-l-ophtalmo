@@ -516,6 +516,7 @@ async def analyze(request: dict):
         logger.warning("Could not clear study-specific analysis cache: %s", cache_error)
 
     labels = {}
+    label_infos = {}
     if run_seg:
         for m in SEG_MODELS:
             try:
@@ -523,9 +524,63 @@ async def analyze(request: dict):
                 f = r.get("file") or r.get("label")
                 if f and os.path.exists(f):
                     labels[m] = f
+                    li = r.get("params", {}).get("label_info")
+                    if li:
+                        label_infos[m] = li
                     logger.info("Segmentation %s -> %s", m, f)
             except Exception as e:
                 logger.error("Segmentation %s failed: %s", m, e)
+
+        if labels:
+            try:
+                import requests, pathlib, hashlib
+                from pydicom import dcmread
+                from monailabel.datastore.utils.convert import nifti_to_dicom_seg
+
+                image_uri = datastore.get_image_uri(image)
+                image_path = next((image_uri.replace(s, "") for s in [".nii", ".nii.gz", ".nrrd"] if image_uri.endswith(s)), "")
+                if image_path and os.path.isdir(image_path):
+                    try:
+                        dcm_files = list(pathlib.Path(image_path).glob("*"))
+                        if dcm_files:
+                            src_path = str(dcm_files[0])
+                            src_ds = dcmread(src_path, stop_before_pixels=True)
+                            needs_ipp = not hasattr(src_ds, 'ImagePositionPatient')
+                            if not hasattr(src_ds, 'FrameOfReferenceUID') or needs_ipp:
+                                src_full = dcmread(src_path)
+                                if not hasattr(src_full, 'FrameOfReferenceUID'):
+                                    src_full.FrameOfReferenceUID = "2.25." + str(int(hashlib.md5(str(src_full.SOPInstanceUID).encode()).hexdigest(), 16))[:39]
+                                if needs_ipp:
+                                    src_full.ImagePositionPatient = [0, 0, 0]
+                                    src_full.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
+                                    src_full.SliceThickness = 1.0
+                                src_full.save_as(src_path)
+                                with open(src_path, "rb") as fsrc:
+                                    resp = requests.post("http://orthanc-container:8042/instances", data=fsrc, headers={"Content-Type": "application/dicom"})
+                                logger.info(f"Analyze pre-injected geometry into source (resp={resp.status_code})")
+                    except Exception as e2:
+                        logger.warning(f"Analyze pre-inject geometry skipped: {e2}")
+
+                    for m, res_img in labels.items():
+                        label_info = label_infos.get(m)
+                        if not label_info:
+                            logger.warning("Analyze DICOM-SEG skipped for %s: missing label_info", m)
+                            continue
+                        try:
+                            if isinstance(label_info, list) and label_info and isinstance(label_info[0], dict):
+                                label_info[0]["model_name"] = m
+                            dicom_seg_file = nifti_to_dicom_seg(image_path, res_img, label_info, use_itk=False)
+                            if dicom_seg_file and os.path.exists(dicom_seg_file):
+                                with open(dicom_seg_file, "rb") as fseg:
+                                    resp = requests.post("http://orthanc-container:8042/instances", data=fseg, headers={"Content-Type": "application/dicom"})
+                                    logger.info(f"Pushed DICOM-SEG to Orthanc from analyze/{m}: {resp.status_code}")
+                                os.unlink(dicom_seg_file)
+                        except Exception as e3:
+                            logger.error("Analyze DICOM-SEG push failed for %s: %s", m, e3)
+                else:
+                    logger.warning("Analyze DICOM-SEG push skipped: source DICOM dir not found for %s", image)
+            except Exception as e:
+                logger.error("Analyze DICOM-SEG push failed: %s", e)
 
     optic = {"disc_area_px": 0, "cup_area_px": 0, "cup_disc_ratio": 0.0, "disc_center_x": None, "laterality": "UNKNOWN"}
     if "optic_disc_cup" in labels:

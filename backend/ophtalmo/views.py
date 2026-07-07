@@ -1,8 +1,6 @@
-import hashlib
 import json
 import logging
 import os
-import shutil
 from datetime import date, datetime
 from django.db.models import Q, Max
 import requests
@@ -701,155 +699,135 @@ def run_analysis(request):
     if not study_uid:
         return Response({'error': 'study_instance_uid is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Find the OP (fundus) series within the study.
+    # Find every OP (fundus) series within the study. Right/left eyes can be
+    # separate OP series, so do not stop at the first one.
     logger.info(f"Looking up OP series for study: {study_uid}")
-    op_series_uid = None
-    op_orthanc_series_id = None
-    expected_patient_id = ''
     try:
-        study_resp = requests.get(f'{ORTHANC_URL}/studies/{study_uid}', timeout=10)
-        if study_resp.status_code != 200:
-            return Response(
-                {'error': f'Orthanc study lookup returned {study_resp.status_code}'},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-        study_data = study_resp.json()
+        from .tasks import (
+            _collect_op_series,
+            _fix_seg_association,
+            _resolve_orthanc_id,
+            _prepare_monai_series_cache,
+            _snapshot_seg_series,
+        )
+        orthanc_study_id = _resolve_orthanc_id(study_uid)
+        study_data, op_series = _collect_op_series(ORTHANC_URL, orthanc_study_id)
         study_instance_dicom_uid = study_data.get('MainDicomTags', {}).get('StudyInstanceUID')
         expected_patient_id = (
             study_data.get('PatientMainDicomTags', {}).get('PatientID', '')
         )
-        for sid in study_data.get('Series', []):
-            sr = requests.get(f'{ORTHANC_URL}/series/{sid}', timeout=10)
-            if sr.status_code == 200:
-                s = sr.json()
-                if s.get('MainDicomTags', {}).get('Modality') == 'OP':
-                    op_series_uid = s.get('MainDicomTags', {}).get('SeriesInstanceUID')
-                    op_orthanc_series_id = sid
-                    logger.info(f"Found OP series: {op_series_uid} (Orthanc ID: {sid})")
-                    break
     except requests.exceptions.ConnectionError:
         return Response(
             {'error': 'Orthanc server unreachable'},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
+    except requests.RequestException as e:
+        return Response(
+            {'error': f'Orthanc study lookup failed: {str(e)}'},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
 
-    if not op_series_uid:
+    if not op_series:
         return Response(
             {'error': 'No OP (fundus) series found in this study'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Pre-populate the MONAI Label DICOM cache so it finds the files
-    # locally instead of trying the DICOMweb endpoint (which may return 404).
-    monai_cache = os.environ.get('MONAI_CACHE_DIR', '/root/.cache/monailabel')
-    dicomweb_url = 'http://orthanc-container:8042/dicom-web'
-    cache_hash = hashlib.md5(dicomweb_url.encode()).hexdigest()
-    cache_dir = os.path.join(monai_cache, 'dicom', cache_hash, op_series_uid)
-    logger.info(f"Pre-populating MONAI Label cache at: {cache_dir}")
+    monai_url = "http://monai-label:8000/infer/analyze"
+    results = {}
+    errors = {}
 
-    # Clear any stale cache for this series
-    if os.path.isdir(cache_dir):
-        shutil.rmtree(cache_dir, ignore_errors=True)
-    os.makedirs(cache_dir, exist_ok=True)
+    for op_series_item in op_series:
+        op_series_uid = op_series_item['series_instance_uid']
+        op_orthanc_series_id = op_series_item['orthanc_series_id']
+        try:
+            _prepare_monai_series_cache(
+                ORTHANC_URL,
+                op_orthanc_series_id,
+                op_series_uid,
+                study_uid,
+            )
+        except Exception as e:
+            logger.error("Failed to pre-populate MONAI Label cache for %s: %s", op_series_uid, e)
+            errors[op_series_uid] = f'Failed to download DICOM files: {str(e)}'
+            continue
 
-    # Download DICOM instances from Orthanc REST API
-    try:
-        series_detail = requests.get(
-            f'{ORTHANC_URL}/series/{op_orthanc_series_id}', timeout=30
-        )
-        if series_detail.status_code != 200:
+        logger.info("Triggering AI analysis for series: %s (study: %s)", op_series_uid, study_uid)
+        seg_ids_before = _snapshot_seg_series(ORTHANC_URL)
+        try:
+            resp = requests.post(
+                monai_url,
+                json={
+                    "image": op_series_uid,
+                    "run_segmentation": True,
+                    "study_uid": study_instance_dicom_uid or study_uid,
+                },
+                timeout=300,
+            )
+            logger.info("MONAI Label response status for %s: %s", op_series_uid, resp.status_code)
+            if resp.status_code != 200:
+                logger.error("MONAI Label error for %s: %s", op_series_uid, resp.text)
+                errors[op_series_uid] = f'MONAI Label /infer/analyze returned {resp.status_code}'
+                continue
+            result = resp.json()
+            logger.info(
+                "MONAI Label analysis result keys for %s: %s",
+                op_series_uid,
+                list(result.keys()) if isinstance(result, dict) else 'not dict',
+            )
+
+            # /infer/analyze creates DICOM-SEG series. Ensure they stay with
+            # this exact OP source series even if MONAI had stale cache data.
+            new_seg_ids = _snapshot_seg_series(ORTHANC_URL) - seg_ids_before
+            if new_seg_ids:
+                _fix_seg_association(
+                    ORTHANC_URL,
+                    new_seg_ids,
+                    expected_patient_id,
+                    study_instance_dicom_uid or study_uid,
+                    op_series_uid,
+                )
+                logger.info(
+                    "Checked %s analysis SEG series for source series %s",
+                    len(new_seg_ids),
+                    op_series_uid,
+                )
+
+            AnalysisReport.objects.create(
+                series_instance_uid=op_series_uid,
+                user=None,
+                report_json={
+                    "source": "monai_label_analyze",
+                    "status": "AI_ANALYZED",
+                    "data": result,
+                },
+            )
+
+            results[op_series_uid] = result
+        except requests.exceptions.ConnectionError:
+            logger.error("MONAI Label server unreachable at monai-label:8000")
             return Response(
-                {'error': f'Failed to get series detail: {series_detail.status_code}'},
-                status=status.HTTP_502_BAD_GATEWAY,
+                {'error': 'MONAI Label server unreachable at monai-label:8000'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-        instances = series_detail.json().get('Instances', [])
-        logger.info(f"Downloading {len(instances)} DICOM instances for series {op_series_uid}")
-        for instance_id in instances:
-            instance_resp = requests.get(
-                f'{ORTHANC_URL}/instances/{instance_id}/file', timeout=30
-            )
-            if instance_resp.status_code == 200:
-                out_path = os.path.join(cache_dir, f'{instance_id}.dcm')
-                with open(out_path, 'wb') as f:
-                    f.write(instance_resp.content)
-            else:
-                logger.warning(f"Failed to download instance {instance_id}: {instance_resp.status_code}")
-    except Exception as e:
-        logger.error(f"Failed to pre-populate MONAI Label cache: {e}")
-        shutil.rmtree(cache_dir, ignore_errors=True)
+        except requests.exceptions.Timeout:
+            logger.error("MONAI Label analysis timed out after 300s for %s", op_series_uid)
+            errors[op_series_uid] = 'MONAI Label analysis timed out after 300s'
+
+    if not results:
         return Response(
-            {'error': f'Failed to download DICOM files: {str(e)}'},
+            {'error': 'AI analysis failed for all OP series', 'series_errors': errors},
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
-    logger.info(f"Triggering AI analysis for series: {op_series_uid} (study: {study_uid})")
-    monai_url = "http://monai-label:8000/infer/analyze"
-    from .tasks import _fix_seg_association, _snapshot_seg_series
-    seg_ids_before = _snapshot_seg_series(ORTHANC_URL)
-    try:
-        resp = requests.post(
-            monai_url,
-            json={
-                "image": op_series_uid,
-                "run_segmentation": True,
-                "study_uid": study_instance_dicom_uid or study_uid,
-            },
-            timeout=300,
-        )
-        logger.info(f"MONAI Label response status: {resp.status_code}")
-        if resp.status_code != 200:
-            logger.error(f"MONAI Label error: {resp.text}")
-            return Response(
-                {'error': f'MONAI Label /infer/analyze returned {resp.status_code}', 'detail': resp.text},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-        result = resp.json()
-        logger.info(f"MONAI Label analysis result keys: {list(result.keys()) if isinstance(result, dict) else 'not dict'}")
-
-        # /infer/analyze creates the three DICOM-SEG series. Ensure they stay
-        # with the OP source patient/study even if MONAI had stale cache data.
-        new_seg_ids = _snapshot_seg_series(ORTHANC_URL) - seg_ids_before
-        if new_seg_ids:
-            _fix_seg_association(
-                ORTHANC_URL,
-                new_seg_ids,
-                expected_patient_id,
-                study_instance_dicom_uid or study_uid,
-            )
-            logger.info(
-                "Checked %s analysis SEG series for patient %s, study %s",
-                len(new_seg_ids),
-                expected_patient_id,
-                study_instance_dicom_uid or study_uid,
-            )
-    except requests.exceptions.ConnectionError:
-        logger.error("MONAI Label server unreachable at monai-label:8000")
-        return Response(
-            {'error': 'MONAI Label server unreachable at monai-label:8000'},
-            status=status.HTTP_503_SERVICE_UNAVAILABLE,
-        )
-    except requests.exceptions.Timeout:
-        logger.error("MONAI Label analysis timed out after 300s")
-        return Response(
-            {'error': 'MONAI Label analysis timed out after 300s'},
-            status=status.HTTP_504_GATEWAY_TIMEOUT,
-        )
-
-    AnalysisReport.objects.create(
-        series_instance_uid=op_series_uid,
-        user=None,
-        report_json={
-            "source": "monai_label_analyze",
-            "status": "AI_ANALYZED",
-            "data": result,
-        },
-    )
-
     return Response({
-        "status": "completed",
+        "status": "completed" if not errors else "partial",
         "study_instance_uid": study_uid,
-        "series_instance_uid": op_series_uid,
-        "analysis": result,
+        "series_results": results,
+        "series_errors": errors,
+        # Backward-compatible fields for callers that expect a single result.
+        "series_instance_uid": next(iter(results.keys())),
+        "analysis": next(iter(results.values())),
     })
 
 
