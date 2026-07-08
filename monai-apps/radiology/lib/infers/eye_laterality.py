@@ -24,6 +24,68 @@ logger = logging.getLogger(__name__)
 LATERALITY_CLASSES = {0: "R", 1: "L"}
 
 
+def _slice_quality_score(chw_slice: np.ndarray) -> float:
+    """Estimate fundus slice quality without depending on FTHNet."""
+    import cv2
+
+    image = np.asarray(chw_slice)
+    if image.ndim != 3:
+        return float("-inf")
+
+    image = np.transpose(image, (1, 2, 0))
+    if image.shape[-1] == 1:
+        image = np.repeat(image, 3, axis=-1)
+    if image.shape[-1] != 3:
+        return float("-inf")
+
+    if np.issubdtype(image.dtype, np.floating) and image.size and image.max() <= 1.0:
+        image = image * 255.0
+    image = np.clip(image, 0, 255).astype(np.uint8)
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+
+    foreground = gray > 8
+    foreground_ratio = float(foreground.mean())
+    if foreground_ratio < 0.05:
+        return float("-inf")
+
+    fg_gray = gray[foreground]
+    contrast = float(fg_gray.std())
+    sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    exposure = float(fg_gray.mean())
+    exposure_penalty = abs(exposure - 115.0)
+
+    saturated = ((fg_gray <= 3) | (fg_gray >= 252)).mean() if fg_gray.size else 1.0
+    return (
+        np.log1p(sharpness) * 20.0
+        + contrast
+        + foreground_ratio * 25.0
+        - exposure_penalty * 0.15
+        - float(saturated) * 50.0
+    )
+
+
+def _select_best_chw_slice(image: np.ndarray) -> np.ndarray:
+    """Collapse CHWD/CHW1 input to the best quality CHW slice."""
+    if image.ndim != 4:
+        return image
+
+    if image.shape[0] not in (1, 3):
+        return image
+
+    if image.shape[-1] == 1:
+        return image[..., 0]
+
+    scores = [_slice_quality_score(image[..., index]) for index in range(image.shape[-1])]
+    best_index = int(np.argmax(scores))
+    logger.info(
+        "Selected best eye-laterality slice %s/%s from CHWD input; scores=%s",
+        best_index + 1,
+        image.shape[-1],
+        [round(float(score), 3) for score in scores],
+    )
+    return image[..., best_index]
+
+
 def preprocess_laterality_image(image, source_path="") -> np.ndarray:
     """Reproduce the preprocessing used to train the published model."""
     import cv2
@@ -34,6 +96,7 @@ def preprocess_laterality_image(image, source_path="") -> np.ndarray:
     image = np.asarray(image)
     if image.ndim == 4 and image.shape[0] == 1:
         image = image[0]
+    image = _select_best_chw_slice(image)
     if image.ndim != 3:
         raise ValueError(f"Expected a 3D CHW image, got shape {image.shape}")
 

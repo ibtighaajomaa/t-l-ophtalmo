@@ -2015,6 +2015,157 @@ if os.path.exists(DATASTORE_DICOM_PY):
         print("dicom.py: Patch 19 already applied")
 
 
+# Patch 20: OP/fundus DICOM-SEG geometry for OHIF.
+# Retinal models operate on one selected 2D slice even when the source OP
+# series contains multiple captures. Normalize the NIfTI mask to exactly one
+# SEG frame and reference only one source DICOM so OHIF sees matching
+# Rows/Columns for every SEG frame.
+PATCH20_MARKER = "OHIF OP SEG: retinal models output one 2D mask"
+if os.path.exists(CONVERT):
+    with open(CONVERT) as f:
+        content = f.read()
+
+    if PATCH20_MARKER not in content:
+        old_mask20 = '''        # Fix dimension mismatch: mask z may not match source instance count
+        if image_datasets:
+            ref = image_datasets[0]
+            expected = (len(image_datasets), int(ref.Rows), int(ref.Columns))
+            mask_arr = SimpleITK.GetArrayFromImage(mask)
+            if mask_arr.shape != expected and mask_arr.size == np.prod(expected):
+                import itertools
+                for perm in itertools.permutations(range(mask_arr.ndim)):
+                    t = np.transpose(mask_arr, perm)
+                    if t.shape == expected:
+                        mask = SimpleITK.GetImageFromArray(t.astype(np.uint16))
+                        logger.info(f"Reshaped mask {mask_arr.shape} -> {expected} via perm {perm}")
+                        break
+
+        output_file = tempfile.NamedTemporaryFile(suffix=".dcm").name'''
+        new_mask20 = '''        # OHIF OP SEG: retinal models output one 2D mask
+        # OHIF/OP fix: retinal models output one 2D mask.  The source OP
+        # series can contain several capture instances, and NIfTI axes may be
+        # HxWx1 or WxHx1.  Normalize to exactly one SEG frame with Rows/Columns
+        # matching the single referenced OP image.
+        if image_datasets:
+            ref = image_datasets[0]
+            ref_rows = int(ref.Rows)
+            ref_cols = int(ref.Columns)
+            mask_arr = SimpleITK.GetArrayFromImage(mask)
+            original_shape = mask_arr.shape
+
+            def _as_single_frame(arr, rows, cols):
+                arr = np.asarray(arr)
+                if arr.ndim == 2:
+                    if arr.shape == (rows, cols):
+                        return arr[None, :, :]
+                    if arr.shape == (cols, rows):
+                        return arr.T[None, :, :]
+                if arr.ndim == 3:
+                    import itertools
+                    for perm in itertools.permutations(range(3)):
+                        t = np.transpose(arr, perm)
+                        if t.shape == (1, rows, cols):
+                            return t
+                        if t.shape == (1, cols, rows):
+                            return np.transpose(t, (0, 2, 1))
+                    for axis in range(3):
+                        moved = np.moveaxis(arr, axis, 0)
+                        if moved.shape[1:] == (rows, cols):
+                            return moved[:1]
+                        if moved.shape[1:] == (cols, rows):
+                            return np.transpose(moved[:1], (0, 2, 1))
+                return None
+
+            single_frame = _as_single_frame(mask_arr, ref_rows, ref_cols)
+            if single_frame is not None:
+                if single_frame.shape != mask_arr.shape:
+                    logger.info(
+                        f"OHIF OP SEG: normalized mask {original_shape} -> {single_frame.shape} "
+                        f"for source Rows/Columns=({ref_rows}, {ref_cols})"
+                    )
+                mask = SimpleITK.GetImageFromArray(single_frame.astype(np.uint16))
+                if len(image_datasets) != 1:
+                    logger.info(
+                        f"OHIF OP SEG: using single source DICOM for SEG reference "
+                        f"instead of {len(image_datasets)} instances"
+                    )
+                    image_datasets = [ref]
+            else:
+                logger.warning(
+                    f"OHIF OP SEG: could not normalize mask shape {original_shape} "
+                    f"to source Rows/Columns=({ref_rows}, {ref_cols})"
+                )
+
+        output_file = tempfile.NamedTemporaryFile(suffix=".dcm").name'''
+        if old_mask20 in content:
+            content = content.replace(old_mask20, new_mask20, 1)
+            with open(CONVERT, "w") as f:
+                f.write(content)
+            print("convert.py Patch 20: OP SEG single-frame OHIF geometry applied")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 20 — mask dimension block not found in convert.py")
+    else:
+        patches_applied = True
+        print("convert.py: Patch 20 already applied")
+
+
+# Patch 21: Keep OP/fundus SEG per-frame references on the selected source.
+# Patch 20 makes OP SEG output single-source, but older Patch 11 can later
+# rewrite multi-frame SEG references across every cached OP instance.  For
+# fundus SEG this makes OHIF compare SEG frames against different source image
+# geometry.  OP models are 2D, so all frames must reference the same selected
+# source SOPInstanceUID.
+PATCH21_MARKER = "OHIF OP SEG: force all SEG frame refs to selected source"
+if os.path.exists(CONVERT):
+    with open(CONVERT) as f:
+        content = f.read()
+
+    if PATCH21_MARKER not in content:
+        old_refs21 = '''            if hasattr(_p11_seg, "PerFrameFunctionalGroupsSequence"):
+                for fi, fg in enumerate(_p11_seg.PerFrameFunctionalGroupsSequence):
+                    _p11_uid = _p11_all_sops[fi] if fi < len(_p11_all_sops) else (_p11_expected or _p11_all_sops[0] if _p11_all_sops else None)
+                    if _p11_uid:
+                        _p11_total += _p11_force(fg, _p11_uid)'''
+        new_refs21 = '''            # OHIF OP SEG: force all SEG frame refs to selected source.
+            # Retinal OP models emit 2D segment frames for one selected source
+            # image.  Do not spread multi-segment frames across the cached OP
+            # capture series.
+            if _p11_all_sops:
+                try:
+                    _p11_src_mod = str(getattr(_p11_src, "Modality", "")) if "_p11_src" in locals() else ""
+                    if _p11_src_mod == "OP":
+                        _p11_all_sops = [_p11_all_sops[0]]
+                        _p11_expected = _p11_all_sops[0]
+                        logger.info(f"OHIF OP SEG: forcing all SEG frame references to selected source SOP {_p11_all_sops[0]}")
+                except Exception as _p11_op_ref_e:
+                    logger.warning(f"OHIF OP SEG: could not force single-source references: {_p11_op_ref_e}")
+
+            if hasattr(_p11_seg, "PerFrameFunctionalGroupsSequence"):
+                for fi, fg in enumerate(_p11_seg.PerFrameFunctionalGroupsSequence):
+                    _p11_uid = _p11_all_sops[fi] if fi < len(_p11_all_sops) else (_p11_expected or _p11_all_sops[0] if _p11_all_sops else None)
+                    if _p11_uid:
+                        _p11_total += _p11_force(fg, _p11_uid)'''
+        if old_refs21 in content:
+            content = content.replace(old_refs21, new_refs21, 1)
+            content = content.replace(
+                "### OHIF_PATCH_11_FORCE_SOP ###",
+                f"### {PATCH21_MARKER} ###\n    ### OHIF_PATCH_11_FORCE_SOP ###",
+                1,
+            )
+            with open(CONVERT, "w") as f:
+                f.write(content)
+            print("convert.py Patch 21: OP SEG single-source frame references applied")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 21 — Patch 11 per-frame reference block not found in convert.py")
+    else:
+        patches_applied = True
+        print("convert.py: Patch 21 already applied")
+else:
+    print(f"WARNING: convert.py not found for Patch 21: {CONVERT}")
+
+
 if not patches_applied:
     print("No patches needed (already applied or versions mismatch)")
 else:

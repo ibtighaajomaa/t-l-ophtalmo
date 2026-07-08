@@ -21,6 +21,44 @@ from monailabel.transform.post import Restored
 logger = logging.getLogger(__name__)
 
 
+def _quality_score_chw_slice(img):
+    """Estimate retinal image quality for choosing one slice from a DICOM series."""
+    tensor = img.detach().float().cpu() if isinstance(img, torch.Tensor) else torch.as_tensor(img).float()
+    if tensor.dim() != 3:
+        return float("-inf")
+    if tensor.shape[0] == 1:
+        gray = tensor[0]
+    elif tensor.shape[0] == 3:
+        gray = 0.299 * tensor[0] + 0.587 * tensor[1] + 0.114 * tensor[2]
+    else:
+        return float("-inf")
+
+    if gray.numel() and float(gray.max()) <= 1.0:
+        gray = gray * 255.0
+    gray = gray.clamp(0, 255)
+    foreground = gray > 8
+    foreground_ratio = float(foreground.float().mean())
+    if foreground_ratio < 0.05:
+        return float("-inf")
+
+    fg = gray[foreground]
+    contrast = float(fg.std()) if fg.numel() > 1 else 0.0
+    exposure_penalty = abs(float(fg.mean()) - 115.0) if fg.numel() else 115.0
+    saturated = float(((fg <= 3) | (fg >= 252)).float().mean()) if fg.numel() else 1.0
+
+    dx = gray[:, 1:] - gray[:, :-1]
+    dy = gray[1:, :] - gray[:-1, :]
+    sharpness = float(dx.var() + dy.var())
+
+    return (
+        torch.log1p(torch.tensor(sharpness)).item() * 20.0
+        + contrast
+        + foreground_ratio * 25.0
+        - exposure_penalty * 0.15
+        - saturated * 50.0
+    )
+
+
 class OpticDiscCup(BasicInferTask):
     def __init__(
         self,
@@ -140,16 +178,40 @@ class SqueezeDepthd:
             if isinstance(img, torch.Tensor):
                 while img.dim() > 3 and img.shape[-1] == 1:
                     img = img.squeeze(-1)
+                if img.dim() == 4 and img.shape[0] in (1, 3):
+                    scores = [_quality_score_chw_slice(img[..., index]) for index in range(img.shape[-1])]
+                    best_index = int(torch.tensor(scores).argmax().item())
+                    logger.info(
+                        "Selected best 2D slice %s/%s for %s; scores=%s",
+                        best_index + 1,
+                        img.shape[-1],
+                        key,
+                        [round(float(score), 3) for score in scores],
+                    )
+                    img = img[..., best_index]
                 data[key] = img
             else:
                 while img.ndim > 3 and img.shape[-1] == 1:
                     img = img.squeeze(-1)
+                if img.ndim == 4 and img.shape[0] in (1, 3):
+                    scores = [_quality_score_chw_slice(img[..., index]) for index in range(img.shape[-1])]
+                    best_index = int(torch.tensor(scores).argmax().item())
+                    logger.info(
+                        "Selected best 2D slice %s/%s for %s; scores=%s",
+                        best_index + 1,
+                        img.shape[-1],
+                        key,
+                        [round(float(score), 3) for score in scores],
+                    )
+                    img = img[..., best_index]
                 data[key] = img
 
             if hasattr(img, "meta") and img.meta is not None:
                 ss = img.meta.get("spatial_shape")
                 if ss is not None and len(ss) > 2 and ss[-1] == 1:
                     img.meta["spatial_shape"] = ss[:-1]
+                elif ss is not None and len(ss) > 2 and img.dim() == 3:
+                    img.meta["spatial_shape"] = ss[:2]
 
         return data
 
