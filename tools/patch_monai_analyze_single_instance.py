@@ -1,0 +1,253 @@
+"""Patch installed MONAI Label /infer/analyze for single-instance OP analysis."""
+
+from pathlib import Path
+
+
+INFER = Path("/usr/local/lib/python3.10/dist-packages/monailabel/endpoints/infer.py")
+
+
+ANALYZE_CODE = '''### ANALYZE_ENDPOINT ###
+@router.post("/analyze")
+async def analyze(request: dict):
+    import os
+    import numpy as np
+    from fastapi import HTTPException
+
+    logger.info("Analyze Request: %s", request)
+
+    image = request.get("image_uid") or request.get("image")
+    if not image:
+        raise HTTPException(status_code=400, detail="image_uid is required")
+    study_uid = request.get("study_uid")
+    if not study_uid:
+        raise HTTPException(status_code=400, detail="study_uid is required")
+
+    source_sop_uid = request.get("source_sop_instance_uid")
+    instance = app_instance()
+    datastore = instance.datastore()
+    if hasattr(datastore, "_study_id_hint"):
+        datastore._study_id_hint = study_uid
+
+    try:
+        cache_dir = os.path.realpath(os.path.join(datastore._datastore.image_path(), image))
+        cache_nifti = os.path.realpath(os.path.join(datastore._datastore.image_path(), f"{image}.nii.gz"))
+        if os.path.isfile(cache_nifti):
+            os.unlink(cache_nifti)
+        if source_sop_uid:
+            if not os.path.isdir(cache_dir):
+                logger.warning("Analyze single-instance cache missing for series=%s sop=%s", image, source_sop_uid)
+            logger.info("Analyze preserved single-instance cache for series=%s sop=%s", image, source_sop_uid)
+        else:
+            import shutil
+            if os.path.isdir(cache_dir):
+                shutil.rmtree(cache_dir, ignore_errors=True)
+            logger.info("Analyze cleared series cache for study=%s series=%s", study_uid, image)
+    except Exception as cache_error:
+        logger.warning("Could not prepare analysis cache: %s", cache_error)
+
+    def _read_label(path):
+        import nrrd
+        data, _ = nrrd.read(path)
+        data = np.asarray(data)
+        data = np.squeeze(data)
+        while data.ndim > 2:
+            data = data[0]
+            data = np.squeeze(data)
+        return data
+
+    def _optic_metrics(data):
+        if data is None:
+            return {"disc_area_px": 0, "cup_area_px": 0, "cup_disc_ratio": 0.0, "disc_center_x": None, "laterality": "UNKNOWN"}
+        disc = int(np.sum(data == 1))
+        cup = int(np.sum(data == 2))
+        ratio = cup / disc if disc > 0 else 0.0
+        optic_mask = np.isin(data, (1, 2))
+        columns = np.where(optic_mask)[0] if data.ndim == 2 else np.array([])
+        disc_center_x = float(np.mean(columns)) if columns.size else None
+        image_center_x = (data.shape[0] - 1) / 2 if data.ndim == 2 else None
+        laterality = (
+            "OS" if disc_center_x is not None and image_center_x is not None and disc_center_x < image_center_x
+            else "OD" if disc_center_x is not None
+            else "UNKNOWN"
+        )
+        return {
+            "disc_area_px": disc,
+            "cup_area_px": cup,
+            "cup_disc_ratio": round(ratio, 4),
+            "disc_center_x": round(disc_center_x, 2) if disc_center_x is not None else None,
+            "laterality": laterality,
+        }
+
+    def _glaucoma_metrics(data):
+        if data is None:
+            return {"vcdr": 0.0, "risk": "N/A", "disc_area_px": 0, "cup_area_px": 0}
+        disc_mask = data == 1
+        cup_mask = data == 2
+        disc_area = int(np.sum(disc_mask))
+        cup_area = int(np.sum(cup_mask))
+        disc_rows = np.any(disc_mask, axis=1) if data.ndim == 2 else np.array([])
+        cup_rows = np.any(cup_mask, axis=1) if data.ndim == 2 else np.array([])
+        disc_h = np.max(np.where(disc_rows)) - np.min(np.where(disc_rows)) if disc_rows.any() else 0
+        cup_h = np.max(np.where(cup_rows)) - np.min(np.where(cup_rows)) if cup_rows.any() else 0
+        vcdr = cup_h / disc_h if disc_h > 0 else 0.0
+        if vcdr < 0.3:
+            risk = "Faible"
+        elif vcdr < 0.5:
+            risk = "Modere"
+        elif vcdr < 0.7:
+            risk = "Eleve"
+        else:
+            risk = "Tres eleve"
+        return {"vcdr": round(vcdr, 4), "risk": risk, "disc_area_px": disc_area, "cup_area_px": cup_area}
+
+    def _vessel_metrics(data):
+        if data is None:
+            return {"coverage_pct": 0.0, "pixel_count": 0}
+        total = int(data.size)
+        count = int(np.sum(data > 0))
+        return {"coverage_pct": round(count / total * 100, 2) if total else 0.0, "pixel_count": count}
+
+    def _lesion_metrics(data):
+        if data is None:
+            return {"microaneurysms": 0, "hemorrhages": 0, "exudates": 0, "coverage_pct": 0.0}
+        total = int(data.size)
+        any_lesion = int(np.sum(data > 0))
+        return {
+            "microaneurysms": int(np.sum(data == 1)),
+            "hemorrhages": int(np.sum(data == 2)),
+            "exudates": int(np.sum(data == 3)),
+            "coverage_pct": round(any_lesion / total * 100, 2) if total else 0.0,
+        }
+
+    def _severity(dr_info, glaucoma):
+        grade = str(dr_info.get("grade") or dr_info.get("label") or "Unknown").lower()
+        dr_score = 0
+        for key, score in (("proliferative", 4), ("severe", 3), ("moderate", 2), ("mild", 1)):
+            if key in grade:
+                dr_score = score
+                break
+        return dr_score * 10 + float(glaucoma.get("vcdr") or 0)
+
+    def _normalize_dr(params):
+        raw_grade = params.get("dr_label") or params.get("label") or params.get("prediction") or "Unknown"
+        confidence = params.get("dr_probability") or params.get("probability") or params.get("confidence") or 0.0
+        probabilities = params.get("dr_all_probabilities") or params.get("probabilities") or {}
+        if isinstance(raw_grade, list):
+            scored = [item for item in raw_grade if isinstance(item, dict)]
+            if scored:
+                best = max(scored, key=lambda item: float(item.get("score") or 0.0))
+                raw_grade = best.get("label") or best.get("name") or str(best.get("idx") or "Unknown")
+                confidence = float(best.get("score") or 0.0)
+                probabilities = {
+                    str(item.get("label") or item.get("name") or item.get("idx")): float(item.get("score") or 0.0)
+                    for item in scored
+                }
+        dr_info = {
+            "grade": str(raw_grade),
+            "confidence": float(confidence or 0.0),
+            "probabilities": probabilities,
+        }
+        if "dr_grade" in params:
+            dr_info["grade_index"] = params.get("dr_grade")
+        return dr_info
+
+    def _run_model(model, extra=None):
+        req = {
+            "model": model,
+            "image": image,
+            "study_uid": study_uid,
+            "result_extension": ".nrrd",
+            "result_dtype": "uint8",
+            "result_compress": False,
+        }
+        if source_sop_uid:
+            req["source_sop_instance_uid"] = source_sop_uid
+        if extra:
+            req.update(extra)
+        return instance.infer(req)
+
+    labels = {}
+    for model in ("optic_disc_cup", "vessel_seg", "lesion_seg"):
+        try:
+            result = _run_model(model)
+            path = result.get("file") or result.get("label")
+            if path and os.path.exists(path):
+                labels[model] = path
+                logger.info("Analyze segmentation %s -> %s", model, path)
+            else:
+                logger.warning("Analyze segmentation %s returned no label file", model)
+        except Exception as e:
+            logger.error("Analyze segmentation %s failed: %s", model, e)
+
+    dr = {"grade": "Unknown", "confidence": 0.0, "probabilities": {}}
+    try:
+        dr_result = _run_model("dr_classification", {"result_extension": ".json"})
+        params = dr_result.get("params") or {}
+        dr = _normalize_dr(params)
+    except Exception as e:
+        logger.error("Analyze DR classification failed: %s", e)
+
+    optic_data = vessel_data = lesion_data = None
+    try:
+        optic_data = _read_label(labels["optic_disc_cup"]) if "optic_disc_cup" in labels else None
+    except Exception as e:
+        logger.error("Analyze optic label read failed: %s", e)
+    try:
+        vessel_data = _read_label(labels["vessel_seg"]) if "vessel_seg" in labels else None
+    except Exception as e:
+        logger.error("Analyze vessel label read failed: %s", e)
+    try:
+        lesion_data = _read_label(labels["lesion_seg"]) if "lesion_seg" in labels else None
+    except Exception as e:
+        logger.error("Analyze lesion label read failed: %s", e)
+
+    optic = _optic_metrics(optic_data)
+    glaucoma = _glaucoma_metrics(optic_data)
+    vessels = _vessel_metrics(vessel_data)
+    lesions = _lesion_metrics(lesion_data)
+    slice_result = {
+        "index": 0,
+        "source_sop_instance_uid": source_sop_uid,
+        "dr_classification": dr,
+        "optic_disc_cup": optic,
+        "glaucoma": glaucoma,
+        "vessels": vessels,
+        "lesions": lesions,
+        "severity_score": _severity(dr, glaucoma),
+    }
+
+    return {
+        "source": {
+            "study_instance_uid": study_uid,
+            "series_instance_uid": image,
+            "source_sop_instance_uid": source_sop_uid,
+        },
+        "dr_classification": dr,
+        "lesions": lesions,
+        "optic_disc_cup": optic,
+        "glaucoma": glaucoma,
+        "vessels": vessels,
+        "gradcam_image": None,
+        "clahe_image": None,
+        "per_instance": [slice_result],
+        "critical": {
+            "od": slice_result if optic.get("laterality") == "OD" else None,
+            "os": slice_result if optic.get("laterality") == "OS" else None,
+        },
+    }
+
+'''
+
+
+def main():
+    content = INFER.read_text()
+    start = content.find("### ANALYZE_ENDPOINT ###")
+    end = content.find('@router.post("/{model}"', start)
+    if start < 0 or end <= start:
+        raise SystemExit("analyze endpoint boundaries not found")
+    INFER.write_text(content[:start] + ANALYZE_CODE + content[end:])
+    print("patched analyze endpoint")
+
+
+if __name__ == "__main__":
+    main()

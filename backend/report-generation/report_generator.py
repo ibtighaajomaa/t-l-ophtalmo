@@ -230,10 +230,19 @@ class LocalReportGenerator:
         cls_rows.append(["Grade RD", str(cls.get("grade", "Non disponible"))])
         conf = cls.get("confidence")
         cls_rows.append(["Confiance", f"{conf:.1%}" if conf is not None else "N/A"])
-        for p in cls.get("probabilities", []) or []:
+        probabilities = cls.get("probabilities", []) or []
+        if isinstance(probabilities, dict):
+            probability_rows = probabilities.items()
+        else:
+            probability_rows = (
+                (p.get("label", "?"), p.get("score", 0))
+                for p in probabilities
+                if isinstance(p, dict)
+            )
+        for label, score in probability_rows:
             cls_rows.append([
-                str(p.get("label", "?")),
-                f"{p.get('score', 0):.1%}",
+                str(label),
+                f"{float(score or 0):.1%}",
             ])
         sections.append({
             "title": "Classification de la Rétinopathie Diabétique (RD)",

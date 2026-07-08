@@ -1328,36 +1328,97 @@ def tache_auto_segmentation():
             for model, results in model_results.items():
                 series_status[model] = 'ok' if results and all(result == 'ok' for result in results) else results
 
-            # Étape E : Lancement de l'analyse globale et classification DR (Rétinopathie)
-            try:
-                logger.info(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Lancement de la classification globale (rétinopathie)...")
-                analyze_resp = requests.post(
-                    f"{MONAI_LABEL}/infer/analyze",
-                    json={
-                        "image": op_series_uid,
-                        "run_segmentation": True,
-                        "push_dicom_seg": False,
-                        "study_uid": op_study_uid or study_id,
-                    },
-                    timeout=300,
-                )
-                if analyze_resp.status_code == 200:
-                    analysis = analyze_resp.json()
-                    analysis["eye_laterality"] = series_status.get("eye_laterality")
-                    series_reports[op_series_uid] = analysis
-                    series_status['dr_classification'] = 'ok'
-                    logger.info(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Classification globale terminée avec succès.")
-                else:
-                    series_status['dr_classification'] = f'failed (HTTP {analyze_resp.status_code})'
-                    logger.warning(
-                        f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] L'analyse globale a échoué. "
-                        f"Code HTTP de retour : {analyze_resp.status_code}"
+            # Étape E : Analyse globale et classification DR sur chaque instance source.
+            # /infer/analyze uses the same one-instance cache contract as the
+            # segmentation models, so report metrics stay aligned with the SEG
+            # objects generated above.
+            analysis_instances = []
+            analysis_failures = []
+            for instance_index, source_instance in enumerate(source_instances, start=1):
+                instance_id = source_instance.get('orthanc_instance_id')
+                sop_uid = source_instance.get('sop_instance_uid')
+                try:
+                    if instance_id:
+                        _prepare_monai_instance_cache(
+                            ORTHANC_URL,
+                            instance_id,
+                            op_series_uid,
+                            study_id,
+                        )
+                    logger.info(
+                        f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] "
+                        f"Lancement de l'analyse DR sur instance {instance_index}/{len(source_instances)} "
+                        f"(SOP={sop_uid or 'series-cache'})"
                     )
-            except Exception as e:
-                series_status['dr_classification'] = f'failed ({str(e)[:100]})'
-                logger.error(
-                    f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Erreur système lors de l'analyse globale : {str(e)}",
-                    exc_info=True
+                    analyze_resp = requests.post(
+                        f"{MONAI_LABEL}/infer/analyze",
+                        json={
+                            "image": op_series_uid,
+                            "run_segmentation": True,
+                            "push_dicom_seg": False,
+                            "study_uid": op_study_uid or study_id,
+                            "source_sop_instance_uid": sop_uid,
+                        },
+                        timeout=300,
+                    )
+                    if analyze_resp.status_code == 200:
+                        analysis = analyze_resp.json()
+                        analysis["eye_laterality"] = series_status.get("eye_laterality")
+                        analysis.setdefault("source", {})
+                        analysis["source"].update({
+                            "study_instance_uid": op_study_uid or study_id,
+                            "series_instance_uid": op_series_uid,
+                            "source_sop_instance_uid": sop_uid,
+                            "instance_number": source_instance.get('instance_number'),
+                            "laterality": source_instance.get('dicom_laterality') or op_series_item.get('dicom_laterality'),
+                        })
+                        report_key = f"{op_series_uid}:{sop_uid or instance_index}"
+                        series_reports[report_key] = analysis
+                        analysis_instances.append({
+                            "sop_instance_uid": sop_uid,
+                            "instance_number": source_instance.get('instance_number'),
+                            "status": "ok",
+                            "dr_classification": analysis.get("dr_classification"),
+                        })
+                        logger.info(
+                            f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] "
+                            f"Analyse DR terminée sur instance {instance_index}."
+                        )
+                    else:
+                        status = f'failed (HTTP {analyze_resp.status_code})'
+                        analysis_failures.append(status)
+                        analysis_instances.append({
+                            "sop_instance_uid": sop_uid,
+                            "instance_number": source_instance.get('instance_number'),
+                            "status": status,
+                        })
+                        logger.warning(
+                            f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] L'analyse globale a échoué "
+                            f"sur instance {instance_index}. Code HTTP : {analyze_resp.status_code}"
+                        )
+                except Exception as e:
+                    status = f'failed ({str(e)[:100]})'
+                    analysis_failures.append(status)
+                    analysis_instances.append({
+                        "sop_instance_uid": sop_uid,
+                        "instance_number": source_instance.get('instance_number'),
+                        "status": status,
+                    })
+                    logger.error(
+                        f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] "
+                        f"Erreur système lors de l'analyse globale sur instance {instance_index}: {str(e)}",
+                        exc_info=True
+                    )
+
+            series_status['analysis_instances'] = analysis_instances
+            if analysis_instances and not analysis_failures:
+                series_status['dr_classification'] = 'ok'
+            elif any(item.get("status") == "ok" for item in analysis_instances):
+                series_status['dr_classification'] = f'partial ({len(analysis_failures)} failed)'
+            else:
+                all_ok = False
+                series_status['dr_classification'] = (
+                    analysis_failures[0] if analysis_failures else 'failed (no analysis result)'
                 )
 
             # Étape F : Sécurisation et correction d'association des fichiers DICOM-SEG créés
