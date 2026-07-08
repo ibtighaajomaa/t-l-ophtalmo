@@ -6,6 +6,7 @@ from rest_framework.test import APIRequestFactory
 from ophtalmo.models import Exam, ImageQualityAssessment
 from ophtalmo.tasks import (
     _delete_prior_ai_seg_series,
+    _run_eye_laterality,
     tache_auto_quality,
     tache_auto_segmentation,
 )
@@ -38,6 +39,30 @@ class SegmentationModelTest(TestCase):
                 date=TODAY,
             )
             self.assertEqual(exam.segmentation_status, status_code)
+
+    @patch('ophtalmo.tasks.requests.post')
+    def test_dicom_laterality_overrides_model_laterality(self, mock_post):
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            'params': {
+                'laterality': 'R',
+                'laterality_confidence': 0.73,
+                'laterality_probabilities': {'R': 0.73, 'L': 0.27},
+            }
+        }
+
+        result = _run_eye_laterality(
+            'http://monai-label',
+            '1.2.3.series.left',
+            {},
+            dicom_laterality='L',
+        )
+
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['laterality'], 'L')
+        self.assertEqual(result['laterality_source'], 'dicom')
+        self.assertEqual(result['dicom_laterality'], 'L')
+        self.assertEqual(result['model_laterality'], 'R')
 
 
 class SegmentationCleanupTest(TestCase):

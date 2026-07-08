@@ -451,9 +451,68 @@ def _collect_op_series(orthanc_url, orthanc_study_id):
         op_series.append({
             'orthanc_series_id': sid,
             'series_instance_uid': series_uid,
+            'dicom_laterality': _series_dicom_laterality(orthanc_url, sid, series),
         })
 
     return study, op_series
+
+
+def _normalize_laterality(value):
+    if not value:
+        return ''
+    value = str(value).strip().upper()
+    value = value.replace('\\', '/')
+    if value in {'L', 'LEFT', 'OS', 'OG'}:
+        return 'L'
+    if value in {'R', 'RIGHT', 'OD'}:
+        return 'R'
+    tokens = [token for token in value.replace('-', '/').replace('_', '/').split('/') if token]
+    if tokens:
+        if tokens[-1] in {'L', 'LEFT', 'OS', 'OG'}:
+            return 'L'
+        if tokens[-1] in {'R', 'RIGHT', 'OD'}:
+            return 'R'
+    return ''
+
+
+def _series_dicom_laterality(orthanc_url, orthanc_series_id, series=None):
+    """Read trusted eye laterality from OP DICOM metadata when available."""
+    try:
+        series = series or requests.get(
+            f'{orthanc_url}/series/{orthanc_series_id}',
+            timeout=10,
+        ).json()
+        tags = series.get('MainDicomTags', {}) or {}
+        laterality = _normalize_laterality(
+            tags.get('ImageLaterality')
+            or tags.get('Laterality')
+            or tags.get('SeriesDescription')
+        )
+        if laterality:
+            return laterality
+
+        for instance_id in series.get('Instances', [])[:8]:
+            resp = requests.get(
+                f'{orthanc_url}/instances/{instance_id}/simplified-tags',
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                continue
+            tags = resp.json() or {}
+            laterality = _normalize_laterality(
+                tags.get('ImageLaterality')
+                or tags.get('Laterality')
+                or tags.get('SeriesDescription')
+            )
+            if laterality:
+                return laterality
+    except Exception as exc:
+        logger.debug(
+            "[OPSeries] Could not read DICOM laterality for series %s: %s",
+            orthanc_series_id,
+            exc,
+        )
+    return ''
 
 
 def _prepare_monai_series_cache(orthanc_url, orthanc_series_id, series_instance_uid, study_id):
@@ -494,8 +553,9 @@ def _prepare_monai_series_cache(orthanc_url, orthanc_series_id, series_instance_
     )
 
 
-def _run_eye_laterality(monai_label_url, series_instance_uid, base_params):
+def _run_eye_laterality(monai_label_url, series_instance_uid, base_params, dicom_laterality=''):
     """Run optional eye laterality classifier and normalize its response."""
+    dicom_laterality = _normalize_laterality(dicom_laterality)
     resp = requests.post(
         f"{monai_label_url}/infer/eye_laterality",
         params={"image": series_instance_uid},
@@ -513,6 +573,7 @@ def _run_eye_laterality(monai_label_url, series_instance_uid, base_params):
         or params.get('prediction')
         or ''
     )
+    model_laterality = _normalize_laterality(laterality) or laterality
     confidence = (
         params.get('laterality_confidence')
         or params.get('confidence')
@@ -523,11 +584,26 @@ def _run_eye_laterality(monai_label_url, series_instance_uid, base_params):
     except (TypeError, ValueError):
         confidence = None
 
+    final_laterality = dicom_laterality or model_laterality
+    if dicom_laterality and model_laterality and dicom_laterality != model_laterality:
+        logger.warning(
+            "[EyeLaterality] DICOM laterality %s overrides model %s for series %s "
+            "(model confidence=%s)",
+            dicom_laterality,
+            model_laterality,
+            series_instance_uid,
+            confidence,
+        )
+
     return {
         'status': 'ok',
-        'laterality': laterality,
+        'laterality': final_laterality,
         'confidence': confidence,
         'low_confidence': confidence is not None and confidence < 0.80,
+        'laterality_source': 'dicom' if dicom_laterality else 'model',
+        'dicom_laterality': dicom_laterality or None,
+        'model_laterality': model_laterality,
+        'model_confidence': confidence,
         'probabilities': params.get('laterality_probabilities'),
     }
 
@@ -1034,6 +1110,7 @@ def tache_auto_segmentation():
                     MONAI_LABEL,
                     op_series_uid,
                     base_params,
+                    dicom_laterality=op_series_item.get('dicom_laterality'),
                 )
                 series_status['eye_laterality'] = lat_result
                 logger.info(

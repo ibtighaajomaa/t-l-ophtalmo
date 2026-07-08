@@ -29,3 +29,4 @@ logs/
 # MONAILabel cache
 monai-label/cache/
 monai-apps/radiology/logs/
+Eye-laterality-detection/
