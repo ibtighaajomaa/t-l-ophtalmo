@@ -234,6 +234,45 @@ export async function getExam(id: string): Promise<Exam> {
   return toFrontendExam(api);
 }
 
+export interface PerEyeMetrics {
+  disc_area_px: number;
+  cup_area_px: number;
+  cup_disc_ratio: number;
+  disc_center_x: number | null;
+  laterality: "OD" | "OS" | "UNKNOWN";
+}
+
+export interface PerEyeGlaucoma {
+  vcdr: number;
+  risk: string;
+  disc_area_px: number;
+  cup_area_px: number;
+}
+
+export interface PerInstanceResult {
+  index: number;
+  optic_disc_cup: PerEyeMetrics;
+  glaucoma: PerEyeGlaucoma;
+  vessels: { coverage_pct: number; pixel_count: number };
+  lesions: { microaneurysms: number; hemorrhages: number; exudates: number; coverage_pct: number };
+  severity_score: number;
+  dr_classification?: { grade: string; confidence: number; probabilities: { label: string; score: number }[] };
+  gradcam_image?: string | null;
+  clahe_image?: string | null;
+}
+
+export interface PerEyeAnalysis {
+  index: number;
+  severity_score: number;
+  dr_classification: { grade: string; confidence: number; probabilities: { label: string; score: number }[] };
+  lesions: { microaneurysms: number; hemorrhages: number; exudates: number; coverage_pct: number };
+  glaucoma: PerEyeGlaucoma;
+  optic_disc_cup: PerEyeMetrics;
+  vessels: { coverage_pct: number; pixel_count: number };
+  gradcam_image: string | null;
+  clahe_image: string | null;
+}
+
 export interface AnalysisResult {
   dr_classification: {
     grade: string;
@@ -263,6 +302,11 @@ export interface AnalysisResult {
   };
   gradcam_image: string | null;
   clahe_image: string | null;
+  per_instance?: PerInstanceResult[];
+  critical?: {
+    od: PerEyeAnalysis | null;
+    os: PerEyeAnalysis | null;
+  };
 }
 
 export type EyeSide = "right" | "left";

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Brain,
   Target,
@@ -148,6 +148,14 @@ export function AIPanel({
       cancelled = true;
     };
   }, [seriesInstanceUid]);
+
+  const autoRunRef = useRef(false);
+  useEffect(() => {
+    if (autoRun && studyInstanceUid && !autoRunRef.current) {
+      autoRunRef.current = true;
+      handleRunAnalysis();
+    }
+  }, [autoRun, studyInstanceUid]);
 
   async function handleRunAnalysis() {
     if (!studyInstanceUid) return;
