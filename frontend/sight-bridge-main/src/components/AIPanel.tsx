@@ -33,6 +33,40 @@ interface AIPanelProps {
 }
 
 const EYE_SIDES = ["right", "left"] as const;
+const DR_LABELS: Record<string, string> = {
+  no_dr: "No DR",
+  "no dr": "No DR",
+  mild_npdr: "Mild NPDR",
+  "mild npdr": "Mild NPDR",
+  moderate_npdr: "Moderate NPDR",
+  "moderate npdr": "Moderate NPDR",
+  severe_npdr: "Severe NPDR",
+  "severe npdr": "Severe NPDR",
+  proliferative_dr: "Proliferative DR",
+  "proliferative dr": "Proliferative DR",
+};
+const DR_ORDER = ["no_dr", "mild_npdr", "moderate_npdr", "severe_npdr", "proliferative_dr"];
+
+function formatDRLabel(label: string) {
+  const key = label.trim().toLowerCase();
+  return DR_LABELS[key] ?? label.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function normalizeDRProbabilities(probabilities: PerEyeAnalysis["dr_classification"]["probabilities"] | undefined) {
+  if (!probabilities) return [];
+  const rows = Array.isArray(probabilities)
+    ? probabilities.map((item) => ({ label: item.label, score: Number(item.score) || 0 }))
+    : Object.entries(probabilities).map(([label, score]) => ({ label, score: Number(score) || 0 }));
+
+  const order = new Map(DR_ORDER.map((label, index) => [label, index]));
+  return rows
+    .map((item) => ({ ...item, displayLabel: formatDRLabel(item.label) }))
+    .sort((a, b) => {
+      const ai = order.get(a.label.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+      const bi = order.get(b.label.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+      return ai - bi;
+    });
+}
 
 export function AIPanel({
   studyInstanceUid,
@@ -66,6 +100,7 @@ export function AIPanel({
       : (analysis as AnalysisResult | null);
   const activeReportText = eyeAnalysis ? reportByEye[activeEye] ?? null : reportText;
   const activeReportHtml = eyeAnalysis ? reportHtmlByEye[activeEye] ?? null : reportHtml;
+  const drProbabilities = normalizeDRProbabilities(activeAnalysis?.dr_classification.probabilities);
 
   useEffect(() => {
     if (!studyInstanceUid) return;
@@ -333,7 +368,7 @@ export function AIPanel({
                         : "text-emerald-400"
                     }`}
                   >
-                    {activeAnalysis.dr_classification.grade}
+                    {formatDRLabel(activeAnalysis.dr_classification.grade)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
@@ -342,16 +377,31 @@ export function AIPanel({
                     {(activeAnalysis.dr_classification.confidence * 100).toFixed(1)}%
                   </span>
                 </div>
-                {activeAnalysis.dr_classification.probabilities.length > 0 && (
-                  <div className="space-y-1 pt-1 border-t border-slate-700">
-                    {activeAnalysis.dr_classification.probabilities.map((p) => (
-                      <div key={p.label} className="flex items-center justify-between text-[11px]">
-                        <span className="text-slate-500">{p.label}</span>
-                        <span className="text-slate-400 font-mono">
-                          {(p.score * 100).toFixed(1)}%
-                        </span>
-                      </div>
-                    ))}
+                {drProbabilities.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-slate-700">
+                    {drProbabilities.map((p) => {
+                      const pct = Math.max(0, Math.min(100, p.score * 100));
+                      const isPredicted =
+                        p.label.toLowerCase() === activeAnalysis.dr_classification.grade.toLowerCase();
+                      return (
+                        <div key={p.label} className="grid grid-cols-[92px_1fr_42px] items-center gap-2 text-[11px]">
+                          <span className={`truncate ${isPredicted ? "text-cyan-100" : "text-slate-400"}`}>
+                            {p.displayLabel}
+                          </span>
+                          <div className="h-2 overflow-hidden rounded-full bg-slate-950/45">
+                            <div
+                              className={`h-full rounded-full transition-[width] duration-500 ${
+                                isPredicted ? "bg-cyan-300" : "bg-slate-500"
+                              }`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                          <span className={`text-right font-mono ${isPredicted ? "text-cyan-100" : "text-slate-400"}`}>
+                            {pct.toFixed(0)}%
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

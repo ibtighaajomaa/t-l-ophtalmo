@@ -249,6 +249,9 @@ export interface PerEyeGlaucoma {
   cup_area_px: number;
 }
 
+export type DRProbability = { label: string; score: number };
+export type DRProbabilities = DRProbability[] | Record<string, number>;
+
 export interface PerInstanceResult {
   index: number;
   optic_disc_cup: PerEyeMetrics;
@@ -256,7 +259,7 @@ export interface PerInstanceResult {
   vessels: { coverage_pct: number; pixel_count: number };
   lesions: { microaneurysms: number; hemorrhages: number; exudates: number; coverage_pct: number };
   severity_score: number;
-  dr_classification?: { grade: string; confidence: number; probabilities: { label: string; score: number }[] };
+  dr_classification?: { grade: string; confidence: number; probabilities: DRProbabilities };
   gradcam_image?: string | null;
   clahe_image?: string | null;
 }
@@ -264,7 +267,7 @@ export interface PerInstanceResult {
 export interface PerEyeAnalysis {
   index: number;
   severity_score: number;
-  dr_classification: { grade: string; confidence: number; probabilities: { label: string; score: number }[] };
+  dr_classification: { grade: string; confidence: number; probabilities: DRProbabilities };
   lesions: { microaneurysms: number; hemorrhages: number; exudates: number; coverage_pct: number };
   glaucoma: PerEyeGlaucoma;
   optic_disc_cup: PerEyeMetrics;
@@ -277,7 +280,7 @@ export interface AnalysisResult {
   dr_classification: {
     grade: string;
     confidence: number;
-    probabilities: { label: string; score: number }[];
+    probabilities: DRProbabilities;
   };
   lesions: {
     microaneurysms: number;
