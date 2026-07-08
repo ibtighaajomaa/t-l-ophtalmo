@@ -223,6 +223,7 @@ export function AIPanel({
       const result = await generateReport(activeAnalysis, patientId ?? studyInstanceUid ?? "inconnu", {
         patientAge,
         eye: eyeLabel,
+        seriesUid: seriesInstanceUid,
       });
       if (eyeAnalysis) {
         setReportByEye((prev) => ({ ...prev, [activeEye]: result.report_text }));

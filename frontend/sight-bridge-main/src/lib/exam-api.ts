@@ -351,7 +351,7 @@ export async function fetchAnalysis(
 export async function generateReport(
   analysisData: AnalysisResult,
   patientId: string,
-  options?: { patientAge?: number; eye?: string },
+  options?: { patientAge?: number; eye?: string; seriesUid?: string },
 ): Promise<{ report_text: string; report_html: string }> {
   const res = await fetch(`${BASE}/generate-report/`, {
     method: "POST",
@@ -361,6 +361,7 @@ export async function generateReport(
       patient_id: patientId,
       patient_age: options?.patientAge,
       eye: options?.eye,
+      series_uid: options?.seriesUid,
     }),
   });
   if (!res.ok) {

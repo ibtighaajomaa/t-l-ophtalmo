@@ -108,7 +108,6 @@ services:
       DJANGO_SUPERUSER_USERNAME: admin
       DJANGO_SUPERUSER_EMAIL: admin@teleophtalmo.com
       DJANGO_SUPERUSER_PASSWORD: admin
-      OPENROUTER_API_KEY: placeholder-replace-with-your-key
       EMAIL_HOST: smtp.rns.tn
       EMAIL_PORT: "587"
       EMAIL_HOST_USER: "tele.ophtalmo"
@@ -360,7 +359,7 @@ services:
       - "8010:8010"
     environment:
       DEVICE: auto
-      VOLMO_REPO_ID: Yale-BIDS-Chen/VOLMO-2B
+      MEDGEMMA_MODEL_ID: google/medgemma-1.5-4b-it
       HF_TOKEN: ${HF_TOKEN}
     volumes:
       - report-generator-hf-cache:/opt/hf-cache

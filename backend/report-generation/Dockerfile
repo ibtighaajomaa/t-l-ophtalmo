@@ -24,7 +24,7 @@ RUN pip install --upgrade pip
 
 # Install CPU-only torch first (smaller image). For GPU, see REPORT-GENERATOR.md.
 RUN pip install --no-cache-dir \
-        torch==2.5.1 torchvision==0.20.1 \
+        torch==2.5.1 \
         --index-url https://download.pytorch.org/whl/cpu
 
 COPY requirements.txt .

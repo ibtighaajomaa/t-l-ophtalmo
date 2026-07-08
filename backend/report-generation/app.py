@@ -1,39 +1,32 @@
+import html
 import io
-import os
 import json
-import threading
+import os
+import re
 from datetime import datetime
 
 import torch
-import torchvision.transforms as T
-from PIL import Image
-from torchvision.transforms.functional import InterpolationMode
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from PIL import Image
 from pydantic import BaseModel
-from huggingface_hub import snapshot_download, hf_hub_download
-from transformers import AutoModel, AutoTokenizer
-from llama_cpp import Llama
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
-from report_generator import generate_report, _extract_json, _build_html_from_sections
 
-# ---------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------
-VOLMO_REPO_ID = os.environ.get("VOLMO_REPO_ID", "Yale-BIDS-Chen/VOLMO-2B")
-DEVICE = os.environ.get("DEVICE", "auto")  # "auto", "cuda", or "cpu"
-TORCH_DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+MODEL_ID = os.environ.get("MEDGEMMA_MODEL_ID", "google/medgemma-1.5-4b-it")
+DEVICE = os.environ.get("DEVICE", "auto")
 MODEL_CACHE_DIR = os.environ.get("HF_HOME", "/opt/hf-cache")
+MAX_NEW_TOKENS = int(os.environ.get("MEDGEMMA_MAX_NEW_TOKENS", "4096"))
 
-# ---------------------------------------------------------
-# FastAPI app
-# ---------------------------------------------------------
+
 app = FastAPI(
     title="Tele-Ophtalmo Report Generator API",
-    description="API that generates a clinical report by feeding VOLMO-2B both "
-                "the fundus image and MONAI Label AI analysis data via .chat().",
-    version="2.0.0",
+    description=(
+        "API that generates ophthalmology reports with MedGemma from fundus "
+        "images and MONAI/DR model outputs."
+    ),
+    version="3.0.0",
 )
 
 app.add_middleware(
@@ -44,114 +37,166 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------------------------------------------------
-# Image preprocessing (InternVL / VOLMO architecture)
-# ---------------------------------------------------------
-IMAGENET_MEAN = (0.485, 0.456, 0.406)
-IMAGENET_STD = (0.229, 0.224, 0.225)
+
+def _cuda_available() -> bool:
+    return torch.cuda.is_available()
 
 
-def build_transform(input_size: int = 448):
-    return T.Compose([
-        T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
-        T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
-        T.ToTensor(),
-        T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-    ])
+def _torch_dtype() -> torch.dtype:
+    return torch.bfloat16 if _cuda_available() else torch.float32
 
 
-def _resolve_device() -> torch.device:
+def _device_map():
     if DEVICE == "cuda":
-        if not torch.cuda.is_available():
-            raise RuntimeError("DEVICE=cuda but no GPU is available.")
-        return torch.device("cuda")
+        if not _cuda_available():
+            raise RuntimeError("DEVICE=cuda but CUDA is not available.")
+        return "auto"
     if DEVICE == "cpu":
-        return torch.device("cpu")
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        return "cpu"
+    return "auto" if _cuda_available() else "cpu"
 
 
-# ---------------------------------------------------------
-# MONAI Label data -> human-readable text block for the prompt
-# ---------------------------------------------------------
-def format_monai_data(monai_data: dict) -> str:
-    """Turn the MONAI Label analysis JSON into a readable text block
-    that gets injected into the VOLMO prompt alongside the image."""
+def _decode_image(payload: bytes) -> Image.Image:
+    if not payload:
+        raise HTTPException(status_code=400, detail="Empty image file")
+    try:
+        return Image.open(io.BytesIO(payload)).convert("RGB")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid image: {exc}")
+
+
+def _format_percent(value):
+    if isinstance(value, (int, float)):
+        return f"{value:.1%}" if value <= 1 else f"{value:.2f}%"
+    return value if value not in (None, "") else "N/A"
+
+
+def format_analysis_data(report_data: dict) -> str:
     lines = []
+    cls = report_data.get("dr_classification") or report_data.get("classification") or {}
+    lesions = report_data.get("lesions") or report_data.get("quantification") or {}
+    optic = report_data.get("optic_disc_cup") or {}
+    glaucoma = report_data.get("glaucoma") or {}
+    vessels = report_data.get("vessels") or {}
 
-    # DR Classification
-    cls = monai_data.get("dr_classification") or monai_data.get("classification") or {}
     if cls:
-        lines.append("## DR Classification")
-        grade = cls.get("predicted_grade") or cls.get("grade") or "N/A"
-        lines.append(f"- Predicted Grade: {grade}")
-        probs = cls.get("probabilities", [])
-        if probs:
-            lines.append("- Probability distribution:")
-            for p in probs:
-                label = p.get("label", "?")
-                score = p.get("score", 0)
-                if isinstance(score, float) and score <= 1.0:
-                    lines.append(f"  - {label}: {score:.0%}")
-                else:
-                    lines.append(f"  - {label}: {score}")
-        conf = cls.get("confidence")
-        if conf is not None:
-            lines.append(f"- Confidence: {conf:.0%}" if isinstance(conf, float) else f"- Confidence: {conf}")
+        lines.append("## Sortie du modele DR classification")
+        lines.append(f"- Grade predit: {cls.get('predicted_grade') or cls.get('grade') or 'N/A'}")
+        lines.append(f"- Confiance: {_format_percent(cls.get('confidence'))}")
+        probabilities = cls.get("probabilities") or []
+        if probabilities:
+            lines.append("- Distribution des probabilites:")
+            for item in probabilities:
+                label = item.get("label", "?")
+                score = _format_percent(item.get("score"))
+                lines.append(f"  - {label}: {score}")
 
-    # Lesions
-    les = monai_data.get("lesions") or monai_data.get("quantification") or {}
-    if les:
-        lines.append("## Lesions")
-        micro = les.get("microaneurysms")
-        hemo = les.get("hemorrhages")
-        exu = les.get("exudates")
-        cov = les.get("coverage_pct")
-        if micro is not None:
-            lines.append(f"- Microaneurysms: {micro}")
-        if hemo is not None:
-            lines.append(f"- Hemorrhages: {hemo}")
-        if exu is not None:
-            lines.append(f"- Exudates: {exu}")
-        if cov is not None:
-            lines.append(f"- Coverage: {cov}%")
+    if lesions:
+        lines.append("## Quantification des lesions")
+        lines.append(f"- Microanevrismes: {lesions.get('microaneurysms', 'N/A')}")
+        lines.append(f"- Hemorragies: {lesions.get('hemorrhages', 'N/A')}")
+        lines.append(f"- Exsudats: {lesions.get('exudates', 'N/A')}")
+        lines.append(f"- Couverture lesionnelle: {_format_percent(lesions.get('coverage_pct'))}")
 
-    # Optic Disc / Cup
-    odc = monai_data.get("optic_disc_cup") or monai_data.get("glaucoma") or {}
-    if odc:
-        lines.append("## Optic Disc / Cup")
-        disc = odc.get("disc_area_px") or odc.get("disc_area")
-        cup = odc.get("cup_area_px") or odc.get("cup_area")
-        cdr = odc.get("cup_disc_ratio") or odc.get("vcdr")
-        if disc is not None:
-            lines.append(f"- Disc Area: {disc} px")
-        if cup is not None:
-            lines.append(f"- Cup Area: {cup} px")
-        if cdr is not None:
-            lines.append(f"- Cup/Disc Ratio: {cdr}")
-        risk = odc.get("risk")
-        if risk:
-            lines.append(f"- Glaucoma Risk: {risk}")
+    if optic or glaucoma:
+        lines.append("## Evaluation papille / glaucome")
+        vcdr = optic.get("cup_disc_ratio") or glaucoma.get("vcdr")
+        disc_area = optic.get("disc_area_px") or glaucoma.get("disc_area_px")
+        cup_area = optic.get("cup_area_px") or glaucoma.get("cup_area_px")
+        lines.append(f"- Rapport cupule/disque: {vcdr if vcdr is not None else 'N/A'}")
+        lines.append(f"- Risque glaucome: {glaucoma.get('risk', 'N/A')}")
+        lines.append(f"- Surface disque optique: {disc_area if disc_area is not None else 'N/A'} px")
+        lines.append(f"- Surface cupule: {cup_area if cup_area is not None else 'N/A'} px")
 
-    # Vessels
-    ves = monai_data.get("vessels") or {}
-    if ves:
-        lines.append("## Vessels")
-        vcov = ves.get("coverage_pct")
-        if vcov is not None:
-            lines.append(f"- Coverage: {vcov}%")
+    if vessels:
+        lines.append("## Analyse vasculaire")
+        lines.append(f"- Couverture / densite vasculaire: {_format_percent(vessels.get('coverage_pct'))}")
 
-    return "\n".join(lines) if lines else "No quantitative data provided."
+    if not lines:
+        return "Aucune donnee quantitative fournie."
+
+    lines.append("## JSON brut fourni par les modeles")
+    lines.append(json.dumps(report_data, ensure_ascii=False, indent=2))
+    return "\n".join(lines)
 
 
-# ---------------------------------------------------------
-# VOLMO report -> HTML
-# ---------------------------------------------------------
+def _report_prompt(
+    patient_id: str,
+    report_data: dict,
+    patient_age: int | None = None,
+    eye: str = "Non specifie",
+    has_image: bool = False,
+) -> str:
+    exam_date = datetime.now().strftime("%d/%m/%Y %H:%M")
+    age = f"{patient_age} ans" if patient_age else "Non renseigne"
+    analysis_text = format_analysis_data(report_data)
+    image_instruction = (
+        "Analyse aussi l'image couleur du fond d'oeil fournie et correle tes "
+        "observations visuelles avec les sorties des modeles."
+        if has_image
+        else "Aucune image n'est fournie dans cet appel; base le rapport sur les sorties des modeles."
+    )
+
+    return f"""Tu es un assistant medical specialise en ophtalmologie.
+Redige un compte rendu de fond d'oeil en francais medical professionnel.
+
+Regles importantes:
+- Utilise les sorties des modeles fournies ci-dessous, notamment dr_classification.
+- Ne modifie pas et n'invente pas les valeurs numeriques.
+- Si l'image contredit ou nuance les sorties des modeles, explique-le prudemment.
+- Mentionne les limites de l'analyse automatisee.
+- Le rapport doit etre utile a un ophtalmologiste, pas au patient directement.
+
+{image_instruction}
+
+## Patient
+- Identifiant: {patient_id}
+- Age: {age}
+- Oeil examine: {eye}
+- Date d'examen: {exam_date}
+
+{analysis_text}
+
+Structure obligatoire avec des titres markdown:
+## Constatations Cliniques
+## Classification de la Retinopathie Diabetique
+## Quantification des Lesions
+## Evaluation du Glaucome
+## Analyse Vasculaire
+## Diagnostic Suspecte
+## Stade de Severite
+## Recommandations
+## Limitations
+
+Redige maintenant le rapport complet."""
+
+
+def _analysis_prompt() -> str:
+    return """Analyse cette photographie couleur du fond d'oeil.
+Retourne uniquement un objet JSON valide, sans texte avant ni apres, avec cette structure:
+{
+  "dr_classification": {"grade": "string", "confidence": 0.0, "probabilities": [{"label": "string", "score": 0.0}]},
+  "lesions": {"microaneurysms": 0, "hemorrhages": 0, "exudates": 0, "coverage_pct": 0.0},
+  "glaucoma": {"vcdr": 0.0, "risk": "string", "disc_area_px": 0, "cup_area_px": 0},
+  "vessels": {"coverage_pct": 0.0}
+}
+Si une mesure ne peut pas etre estimee de maniere fiable, utilise null."""
+
+
+def _extract_json(text: str) -> dict:
+    text = text.strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start:end + 1]
+    return json.loads(text)
+
+
 def report_text_to_html(text: str) -> str:
-    """Convert a plain-text / markdown-ish report from VOLMO into basic HTML."""
-    import re
-    lines = text.strip().split("\n")
+    lines = text.strip().splitlines()
     parts = []
     in_list = False
+
     for raw in lines:
         line = raw.strip()
         if not line:
@@ -159,374 +204,179 @@ def report_text_to_html(text: str) -> str:
                 parts.append("</ul>")
                 in_list = False
             continue
-        # Markdown headers
+
         if line.startswith("### "):
             if in_list:
                 parts.append("</ul>")
                 in_list = False
-            parts.append(f"<h3>{line[4:]}</h3>")
+            parts.append(f"<h3>{html.escape(line[4:])}</h3>")
         elif line.startswith("## "):
             if in_list:
                 parts.append("</ul>")
                 in_list = False
-            parts.append(f"<h2>{line[3:]}</h2>")
+            parts.append(f"<h2>{html.escape(line[3:])}</h2>")
         elif line.startswith("# "):
             if in_list:
                 parts.append("</ul>")
                 in_list = False
-            parts.append(f"<h2>{line[2:]}</h2>")
+            parts.append(f"<h2>{html.escape(line[2:])}</h2>")
         elif line.startswith("- ") or line.startswith("* "):
             if not in_list:
                 parts.append("<ul>")
                 in_list = True
-            parts.append(f"<li>{line[2:]}</li>")
+            item = html.escape(line[2:])
+            item = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", item)
+            parts.append(f"<li>{item}</li>")
         else:
             if in_list:
                 parts.append("</ul>")
                 in_list = False
-            # Bold **text**
-            line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
-            parts.append(f"<p>{line}</p>")
+            content = html.escape(line)
+            content = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", content)
+            parts.append(f"<p>{content}</p>")
+
     if in_list:
         parts.append("</ul>")
+
     return "\n".join(parts)
 
 
-# ---------------------------------------------------------
-# Lazy singleton for the VOLMO model
-# ---------------------------------------------------------
-class VolmoEngine:
+class MedGemmaEngine:
     def __init__(self):
+        self.processor = None
         self.model = None
-        self.tokenizer = None
-        self.device = None
-        self.model_path = None
+        self.loaded_device_map = None
 
     def load(self):
         if self.model is not None:
             return
-        print("Loading VOLMO-2B model...")
-        self.device = _resolve_device()
-        self.model_path = snapshot_download(
-            repo_id=VOLMO_REPO_ID,
+        self.loaded_device_map = _device_map()
+        print(f"Loading {MODEL_ID} with device_map={self.loaded_device_map}...")
+        self.processor = AutoProcessor.from_pretrained(
+            MODEL_ID,
             cache_dir=MODEL_CACHE_DIR,
+            token=os.environ.get("HF_TOKEN"),
         )
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_path, trust_remote_code=True
-        )
-        self.model = AutoModel.from_pretrained(
-            self.model_path,
-            torch_dtype=TORCH_DTYPE,
-            low_cpu_mem_usage=True,
-            trust_remote_code=True,
-        ).eval().to(self.device)
-        print(f"VOLMO-2B loaded on device={self.device}")
+        self.model = AutoModelForImageTextToText.from_pretrained(
+            MODEL_ID,
+            cache_dir=MODEL_CACHE_DIR,
+            token=os.environ.get("HF_TOKEN"),
+            torch_dtype=_torch_dtype(),
+            device_map=self.loaded_device_map,
+        ).eval()
+        print(f"{MODEL_ID} loaded")
 
-    def _prepare_image(self, image: Image.Image):
+    @property
+    def input_device(self):
         self.load()
-        transform = build_transform()
-        return transform(image).unsqueeze(0).to(TORCH_DTYPE).to(self.device)
+        return next(self.model.parameters()).device
+
+    def generate_text(self, prompt: str, image: Image.Image | None = None) -> str:
+        self.load()
+        content = []
+        if image is not None:
+            content.append({"type": "image", "image": image})
+        content.append({"type": "text", "text": prompt})
+        messages = [{"role": "user", "content": content}]
+        inputs = self.processor.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        ).to(self.input_device)
+
+        for key, value in list(inputs.items()):
+            if torch.is_tensor(value) and torch.is_floating_point(value):
+                inputs[key] = value.to(dtype=_torch_dtype())
+
+        input_len = inputs["input_ids"].shape[-1]
+        with torch.inference_mode():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=MAX_NEW_TOKENS,
+                do_sample=False,
+            )
+        generated = outputs[0][input_len:]
+        return self.processor.decode(generated, skip_special_tokens=True).strip()
+
+    def generate_report(
+        self,
+        patient_id: str,
+        report_data: dict,
+        patient_age: int | None = None,
+        eye: str = "Non specifie",
+        image: Image.Image | None = None,
+    ) -> dict:
+        prompt = _report_prompt(
+            patient_id=patient_id,
+            report_data=report_data,
+            patient_age=patient_age,
+            eye=eye,
+            has_image=image is not None,
+        )
+        text = self.generate_text(prompt, image=image)
+        return {
+            "report_text": text,
+            "report_html": report_text_to_html(text),
+            "report_json": {
+                "engine": "medgemma-1.5-4b-it",
+                "report_engine": "medgemma-1.5-4b-it",
+                "model": MODEL_ID,
+                "used_image": image is not None,
+            },
+        }
 
     def analyze(self, image: Image.Image) -> dict:
-        """Ask VOLMO to output structured JSON metrics only (no MONAI data)."""
-        pixel_values = self._prepare_image(image)
-        prompt = """Analysez cette photographie du fond d'œil en tant qu'ophtalmologue expert.
-    Répondez UNIQUEMENT avec un objet JSON valide correspondant exactement à cette structure, sans texte supplémentaire :
-    {
-      "dr_classification": {"grade": "string", "confidence": 0.95, "probabilities": [{"label": "string", "score": 0.95}]},
-      "lesions": {"microaneurysms": 0, "hemorrhages": 0, "exudates": 0, "coverage_pct": 0.0},
-      "glaucoma": {"vcdr": 0.0, "risk": "string", "disc_area_px": 0, "cup_area_px": 0},
-      "vessels": {"coverage_pct": 0.0}
-    }
-    Si une métrique spécifique ne peut être quantifiée, estimez-la selon la présentation clinique ou retournez null."""
-        generation_config = dict(max_new_tokens=1024, do_sample=False)
-        response = self.model.chat(
-            self.tokenizer, pixel_values, prompt, generation_config
-        )
-        return _extract_json(response)
-
-    def generate_report(
-        self,
-        image: Image.Image,
-        monai_data: dict,
-        patient_id: str,
-    ) -> str:
-        """Feed VOLMO both the image AND the MONAI Label analysis data via .chat(),
-        asking it to write a professional clinical report in French directly."""
-        pixel_values = self._prepare_image(image)
-        monai_text = format_monai_data(monai_data)
-        exam_date = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-        prompt = f"""Vous êtes un ophtalmologue expérimenté. Analysez cette photographie couleur du fond d'œil et rédigez un compte-rendu ophtalmologique professionnel et complet en français, détaillant les anomalies observées, le diagnostic suspecté et le stade de sévérité de la maladie.
-
-L'image a également été pré-analisée par un système d'intelligence artificielle de segmentation et classification (MONAI Label) avec les résultats quantitatifs suivants :
-
-{monai_text}
-
-## Patient
-- Identifiant : {patient_id}
-- Date d'examen : {exam_date}
-
-En utilisant À LA FOIS votre propre analyse visuelle de l'image du fond d'œil ET les métriques quantitatives ci-dessus, rédigez un compte-rendu clinique complet en français médical professionnel.
-
-Ton : professionnel, clinique, précis. Utilisez la terminologie ophtalmologique française standard. Soyez rigoureux et nuancé comme un médecin.
-
-Structurez impérativement le rapport avec les sections suivantes (utilisez les en-têtes markdown ##) :
-
-## Constatations Cliniques
-Décrivez méthodiquement ce que vous observez sur l'image (papille, vasculature rétinienne, macula, périphérie) et corréléz avec les métriques IA. Mentionnez la qualité de l'image, la netteté du cliché, et les structures visibles.
-
-## Classification de la Rétinopathie Diabétique
-Précisez le grade de RD, analysez la distribution des probabilités et la confiance du modèle. Interprétez cliniquement le résultat.
-
-## Quantification des Lésions
-Analysez le nombre et la répartition des microanévrismes, hémorragies et exsudats. Commentez le pourcentage de couverture lésionnelle et sa signification clinique.
-
-## Évaluation du Glaucome
-Interprétez le rapport cupule/disque (C/D), la surface de la papille et de la cupule. Évaluez le risque de glaucome et la nécessité d'explorations complémentaires.
-
-## Analyse Vasculaire
-Analysez la densité et la couverture vasculaire. Commentez la régularité des vaisseaux, les calibres et la présence éventuelle de néovaisseaux.
-
-## Diagnostic Suspecté
-Formulez le ou les diagnostics suspects à partir de l'ensemble des données cliniques et paracliniques disponibles. Restez nuancé et justifiez votre raisonnement.
-
-## Stade de Sévérité
-Précisez le stade de sévérité de la pathologie selon les classifications en vigueur (classification internationale de la RD, stade d'Eaux-Blanches, etc.).
-
-## Recommandations
-Proposez des recommandations cliniques claires et hiérarchisées (surveillance, consultation spécialisée, examens complémentaires, délai de suivi, contrôle des facteurs de risque systémiques).
-
-## Limitations
-Décrivez les limites de l'examen et de l'analyse automatisée (qualité de l'image, artifacts, champ de vision, fiabilité des mesures quantitatives selon la qualité du cliché).
-
-Rédigez l'intégralité du rapport en français médical professionnel."""
-
-        generation_config = dict(max_new_tokens=4096, do_sample=False, temperature=0.3)
-        response = self.model.chat(
-            self.tokenizer, pixel_values, prompt, generation_config
-        )
-        return response.strip()
+        text = self.generate_text(_analysis_prompt(), image=image)
+        return _extract_json(text)
 
 
-volmo = VolmoEngine()
+medgemma = MedGemmaEngine()
 
 
-# ---------------------------------------------------------
-# Lazy singleton for the LLaMA model (GGUF, CPU via llama.cpp)
-# ---------------------------------------------------------
-LLAMA_GGUF_REPO = "bartowski/Llama-3.2-3B-Instruct-GGUF"
-LLAMA_GGUF_FILE = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-
-
-class LlamaReportEngine:
-    def __init__(self):
-        self.llm = None
-
-    def load(self):
-        if self.llm is not None:
-            return
-        print("Downloading LLaMA-3.2-3B-Instruct GGUF (Q4_K_M)...")
-        model_path = hf_hub_download(
-            repo_id=LLAMA_GGUF_REPO,
-            filename=LLAMA_GGUF_FILE,
-            cache_dir=MODEL_CACHE_DIR,
-        )
-        print(f"Loading GGUF model from {model_path}...")
-        self.llm = Llama(
-            model_path=model_path,
-            n_ctx=4096,
-            n_threads=max(os.cpu_count() or 4, 2),
-            verbose=False,
-        )
-        print("LLaMA-3.2-3B-Instruct GGUF loaded on CPU")
-
-    def generate_report(
-        self,
-        patient_id: str,
-        patient_age: int | None,
-        eye: str,
-        report_data: dict,
-    ) -> str:
-        self.load()
-        exam_date = datetime.now().strftime("%d/%m/%Y")
-        cls = report_data.get("dr_classification") or {}
-        les = report_data.get("lesions") or {}
-        odc = report_data.get("optic_disc_cup") or {}
-        gla = report_data.get("glaucoma") or {}
-        ves = report_data.get("vessels") or {}
-
-        grade = cls.get("grade", "N/A")
-        confidence = cls.get("confidence")
-        conf_str = f"{confidence:.1%}" if confidence is not None else "N/A"
-        probs = cls.get("probabilities", [])
-        prob_details = (
-            ", ".join(f"{p.get('label','?')}: {p.get('score',0):.1%}" for p in probs)
-            if probs
-            else "N/A"
-        )
-
-        micro = les.get("microaneurysms", "N/A")
-        hemo = les.get("hemorrhages", "N/A")
-        exu = les.get("exudates", "N/A")
-        coverage = les.get("coverage_pct", "N/A")
-        cov_str = f"{coverage:.2f}%" if isinstance(coverage, (int, float)) else "N/A"
-
-        vcdr = odc.get("cup_disc_ratio") or gla.get("vcdr", "N/A")
-        risk = gla.get("risk", "N/A")
-        disc_area = odc.get("disc_area_px") or gla.get("disc_area_px", "N/A")
-        cup_area = odc.get("cup_area_px") or gla.get("cup_area_px", "N/A")
-
-        vessel_cov = ves.get("coverage_pct", "N/A")
-        vessel_str = f"{vessel_cov:.2f}%" if isinstance(vessel_cov, (int, float)) else "N/A"
-
-        age_str = f"{patient_age} ans" if patient_age else "Non renseigné"
-
-        system_prompt = (
-            "Tu es un ophtalmologue expérimenté. Rédige un compte rendu ophtalmologique "
-            "structuré en français médical à partir des données quantitatives fournies. "
-            "Utilise UNIQUEMENT les chiffres donnés sans les inventer ni les modifier. "
-            "Sois précis, professionnel et factuel."
-        )
-
-        user_prompt = f"""Génère un compte rendu ophtalmologique avec le format suivant :
-
-COMPTE RENDU OPHTALMOLOGIQUE – FOND D'ŒIL
-
-1. Informations patient
-- Nom : {patient_id}
-- Âge : {age_str}
-- Date d'examen : {exam_date}
-- Œil examiné : {eye}
-
-2. Classification de la Rétinopathie Diabétique
-- Grade : {grade}
-- Confiance : {conf_str}
-- Distribution des probabilités : {prob_details}
-
-3. Quantification des Lésions
-- Microanévrismes : {micro}
-- Hémorragies : {hemo}
-- Exsudats : {exu}
-- Couverture lésionnelle : {cov_str}
-
-4. Évaluation du Glaucome
-- Rapport C/D (vCDR) : {vcdr}
-- Risque : {risk}
-- Surface disque optique : {disc_area} px²
-- Surface cupule : {cup_area} px²
-
-5. Analyse Vasculaire
-- Densité vasculaire : {vessel_str}
-
-6. Conclusion
-Rédige une conclusion clinique qui synthétise le grade de rétinopathie diabétique, le risque de glaucome, le stade de sévérité, et les recommandations de suivi ophtalmologique."""
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-
-        output = self.llm.create_chat_completion(
-            messages=messages,
-            max_tokens=1024,
-            temperature=0.1,
-        )
-        return output["choices"][0]["message"]["content"].strip()
-
-
-llama_engine = LlamaReportEngine()
-
-
-@app.on_event("startup")
-def _warmup_volmo():
-    threading.Thread(target=volmo.load, daemon=True).start()
-
-
-# ---------------------------------------------------------
-# Schemas
-# ---------------------------------------------------------
 class ReportRequest(BaseModel):
     patient_id: str
     report_data: dict
-
-
-class LlamaReportRequest(BaseModel):
-    patient_id: str
     patient_age: int | None = None
-    eye: str = "Non spécifié"
-    report_data: dict
+    eye: str = "Non specifie"
 
 
-# ---------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------
 @app.get("/health")
 def health():
     return {
         "status": "ok",
-        "device": str(_resolve_device()),
-        "cuda_available": torch.cuda.is_available(),
-        "volmo_loaded": volmo.model is not None,
-        "llama_loaded": llama_engine.llm is not None,
-        "report_engine": "volmo-chat",
+        "cuda_available": _cuda_available(),
+        "device_map": medgemma.loaded_device_map or _device_map(),
+        "model_loaded": medgemma.model is not None,
+        "model_id": MODEL_ID,
+        "report_engine": "medgemma-1.5-4b-it",
+        "hf_token_configured": bool(os.environ.get("HF_TOKEN")),
     }
 
 
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...)):
-    """Analyze a fundus image with VOLMO-2B and return structured JSON metrics only."""
-    payload = await file.read()
-    if not payload:
-        raise HTTPException(status_code=400, detail="Empty image file")
+    image = _decode_image(await file.read())
     try:
-        image = Image.open(io.BytesIO(payload))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
-
-    try:
-        data = volmo.analyze(image)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"VOLMO analysis failed: {e}")
-
+        data = medgemma.analyze(image)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"MedGemma analysis failed: {exc}")
     return JSONResponse(content={"analysis": data})
 
 
 @app.post("/report")
 def report(req: ReportRequest):
-    """Generate a formatted clinical report locally from already-computed analysis JSON
-    (deterministic formatter, no VOLMO model needed). Useful as a fallback."""
     try:
-        result = generate_report(
-            report_data=req.report_data, patient_id=req.patient_id
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Report generation failed: {e}")
-    return JSONResponse(content={"patient_id": req.patient_id, "report": result})
-
-
-@app.post("/report-llama")
-def report_llama(req: LlamaReportRequest):
-    """Generate a clinical report using LLaMA-3.2-3B-Instruct locally on CPU,
-    using the classification data (DR grade, lesions, glaucoma, vessels) as input."""
-    try:
-        text = llama_engine.generate_report(
+        result = medgemma.generate_report(
             patient_id=req.patient_id,
             patient_age=req.patient_age,
             eye=req.eye,
             report_data=req.report_data,
         )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"LLaMA report generation failed: {e}"
-        )
-
-    html = report_text_to_html(text)
-    return JSONResponse(content={
-        "report_text": text,
-        "report_html": html,
-        "report_json": {"engine": "llama-local"},
-    })
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"MedGemma report generation failed: {exc}")
+    return JSONResponse(content={"patient_id": req.patient_id, "report": result})
 
 
 @app.post("/generate")
@@ -534,62 +384,34 @@ async def generate(
     file: UploadFile = File(...),
     patient_id: str = Form(...),
     monai_data: str = Form(default="{}"),
+    patient_age: int | None = Form(default=None),
+    eye: str = Form(default="Non specifie"),
 ):
-    """Full pipeline: feed VOLMO-2B BOTH the fundus image AND the MONAI Label
-    analysis data (DR classification, lesions, optic disc/cup, vessels) via .chat(),
-    and ask it to write a comprehensive clinical report directly.
-
-    Form fields:
-      - file:        the fundus image (jpg/png)
-      - patient_id:  patient identifier
-      - monai_data:  JSON string with the MONAI Label analysis output, e.g.:
-          {
-            "dr_classification": {
-              "predicted_grade": "moderate_npdr",
-              "probabilities": [
-                {"label": "no_dr", "score": 0.01},
-                {"label": "mild_npdr", "score": 0.04},
-                {"label": "moderate_npdr", "score": 0.85},
-                {"label": "severe_npdr", "score": 0.07},
-                {"label": "proliferative_dr", "score": 0.02}
-              ]
-            },
-            "lesions": {"microaneurysms": 12, "hemorrhages": 121, "exudates": 277, "coverage_pct": 0.8},
-            "optic_disc_cup": {"disc_area_px": 678, "cup_area_px": 153, "cup_disc_ratio": 0.23},
-            "vessels": {"coverage_pct": 11.2}
-          }
-    """
-    payload = await file.read()
-    if not payload:
-        raise HTTPException(status_code=400, detail="Empty image file")
+    image = _decode_image(await file.read())
     try:
-        image = Image.open(io.BytesIO(payload))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
-
-    # Parse the MONAI data JSON
-    try:
-        monai = json.loads(monai_data) if monai_data else {}
-    except json.JSONDecodeError as e:
+        report_data = json.loads(monai_data) if monai_data else {}
+    except json.JSONDecodeError as exc:
         raise HTTPException(
             status_code=422,
-            detail=f"monai_data is not valid JSON: {e.msg}",
+            detail=f"monai_data is not valid JSON: {exc.msg}",
         )
 
-    # Feed both image + MONAI data to VOLMO via .chat()
     try:
-        report_text = volmo.generate_report(image, monai, patient_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"VOLMO report generation failed: {e}")
-
-    report_html = report_text_to_html(report_text)
+        result = medgemma.generate_report(
+            patient_id=patient_id,
+            patient_age=patient_age,
+            eye=eye,
+            report_data=report_data,
+            image=image,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"MedGemma report generation failed: {exc}")
 
     return JSONResponse(
         content={
             "patient_id": patient_id,
-            "monai_data": monai,
-            "report_text": report_text,
-            "report_html": report_html,
+            "monai_data": report_data,
+            **result,
         }
     )
 

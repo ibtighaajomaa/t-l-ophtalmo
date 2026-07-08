@@ -18,7 +18,6 @@ from .serializers import (
     DoctorNoteSerializer,
 )
 from users.authentication import KeycloakAuthentication
-from .report_generator import ReportGenerator
 from .dicom_patient import patient_metadata
 from .analysis_utils import aggregate_per_eye
 
@@ -1093,33 +1092,12 @@ def generate_report(request):
 
     patient_age = request.data.get('patient_age')
     eye = request.data.get('eye', 'Non spécifié')
-
-    REPORT_GENERATOR_URL = os.environ.get(
+    report_generator_url = os.environ.get(
         'REPORT_GENERATOR_URL', 'http://report-generator:8010'
     )
 
-    # Tier 1: LLaMA-3.2-3B-Instruct local (CPU)
-    try:
-        llama_resp = requests.post(
-            f'{REPORT_GENERATOR_URL}/report-llama',
-            json={
-                'patient_id': patient_id,
-                'patient_age': patient_age,
-                'eye': eye,
-                'report_data': report_data,
-            },
-            timeout=600,
-        )
-        if llama_resp.status_code == 200:
-            return Response(llama_resp.json())
-        logger.warning(f"LLaMA /report-llama returned {llama_resp.status_code}")
-    except Exception as e:
-        logger.warning(f"LLaMA report failed: {e}")
-
-    # Tier 2: VOLMO-2B full pipeline (image + MONAI data)
     if series_uid:
         try:
-            # Resolve Orthanc internal ID from SeriesInstanceUID
             find_resp = requests.post(
                 f'{ORTHANC_URL}/tools/find',
                 json={"Level": "Series", "Query": {"SeriesInstanceUID": series_uid}},
@@ -1133,76 +1111,76 @@ def generate_report(request):
                 if series_detail.status_code == 200:
                     instances = series_detail.json().get('Instances', [])
                     if instances:
-                        # Fetch rendered fundus image from Orthanc
-                        first_instance_id = instances[0]
                         image_resp = requests.get(
-                            f'{ORTHANC_URL}/instances/{first_instance_id}/rendered',
+                            f'{ORTHANC_URL}/instances/{instances[0]}/rendered',
                             timeout=30,
                         )
                         if image_resp.status_code == 200:
-                            # Forward to VOLMO-2B: image + MONAI data
-                            volmo_resp = requests.post(
-                                f'{REPORT_GENERATOR_URL}/generate',
-                                files={'file': ('fundus.png', image_resp.content, 'image/png')},
-                                data={
-                                    'patient_id': patient_id,
-                                    'monai_data': json.dumps(report_data),
+                            form_data = {
+                                'patient_id': patient_id,
+                                'eye': eye,
+                                'monai_data': json.dumps(report_data),
+                            }
+                            if patient_age not in (None, ''):
+                                form_data['patient_age'] = patient_age
+                            medgemma_resp = requests.post(
+                                f'{report_generator_url}/generate',
+                                files={
+                                    'file': (
+                                        'fundus.png',
+                                        image_resp.content,
+                                        image_resp.headers.get('Content-Type', 'image/png'),
+                                    )
                                 },
+                                data=form_data,
                                 timeout=600,
                             )
-                            if volmo_resp.status_code == 200:
-                                result = volmo_resp.json()
+                            if medgemma_resp.status_code == 200:
+                                result = medgemma_resp.json()
                                 return Response({
                                     'report_text': result.get('report_text', ''),
                                     'report_html': result.get('report_html', ''),
-                                    'report_json': {
-                                        'report_engine': 'volmo-chat',
-                                    },
+                                    'report_json': result.get('report_json', {
+                                        'report_engine': 'medgemma-1.5-4b-it',
+                                        'used_image': True,
+                                    }),
                                 })
                             logger.warning(
-                                f"VOLMO-2B /generate returned {volmo_resp.status_code}"
+                                f"MedGemma /generate returned {medgemma_resp.status_code}: "
+                                f"{medgemma_resp.text[:500]}"
                             )
         except Exception as e:
-            logger.warning(f"VOLMO-2B image pipeline failed: {e}")
-            # Fall through to local fallback
+            logger.warning(f"MedGemma image report generation failed: {e}")
 
-    # Tier 3: local deterministic report via the VOLMO-2B service (/report endpoint)
     try:
         fallback_resp = requests.post(
-            f'{REPORT_GENERATOR_URL}/report',
-            json={'patient_id': patient_id, 'report_data': report_data},
-            timeout=60,
+            f'{report_generator_url}/report',
+            json={
+                'patient_id': patient_id,
+                'patient_age': patient_age,
+                'eye': eye,
+                'report_data': report_data,
+            },
+            timeout=600,
         )
         if fallback_resp.status_code == 200:
             result = fallback_resp.json()
-            report = result.get('report', {})
+            report = result.get('report', result)
             return Response({
                 'report_text': report.get('report_text', ''),
                 'report_html': report.get('report_html', ''),
                 'report_json': report.get('report_json', {
-                    'report_engine': 'local-formatter',
+                    'report_engine': 'medgemma-1.5-4b-it',
+                    'used_image': False,
                 }),
             })
-        else:
-            raise RuntimeError(
-                f"Report generator service returned {fallback_resp.status_code}"
-            )
-    except requests.exceptions.ConnectionError:
-        # Last resort: use the built-in OpenRouter-based generator
-        api_key = os.environ.get('OPENROUTER_API_KEY')
-        if api_key:
-            generator = ReportGenerator(api_key=api_key)
-            result = generator.generate_report(
-                report_data=report_data,
-                patient_id=patient_id,
-            )
-            return Response({
-                'report_text': result['report_text'],
-                'report_html': result['report_html'],
-                'report_json': result['report_json'],
-            })
         return Response(
-            {'error': 'Report generator service unreachable and no OPENROUTER_API_KEY configured'},
+            {'error': f'Report generator service returned {fallback_resp.status_code}'},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+    except requests.exceptions.ConnectionError:
+        return Response(
+            {'error': 'Report generator service unreachable'},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     except Exception as e:
