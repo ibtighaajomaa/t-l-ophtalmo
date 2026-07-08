@@ -815,18 +815,29 @@ def tache_auto_segmentation():
     SEG_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
     MONAI_LABEL = "http://monai-label:8000"
 
-    # MONAI's DICOM cache and the Orthanc SEG snapshot are shared resources.
-    # Prevent Celery Beat and a chained backfill task from processing two
-    # batches concurrently and racing over that cache.
+    logger.info("[AutoSeg] === Démarrage de la tâche de segmentation automatique ===")
+
+    # ==========================================
+    # ÉTAPE 1 : Gestion du verrou de concurrence
+    # ==========================================
     lock_key = 'ophtalmo:auto_segmentation_running'
     if not cache.add(lock_key, '1', timeout=20 * 60):
+        logger.warning("[AutoSeg] Tâche déjà en cours d'exécution (verrou actif). Annulation de cette instance.")
         return {'status': 'already_running'}
 
+    # ==========================================
+    # ÉTAPE 2 : Vérification de la santé de l'IA
+    # ==========================================
+    logger.debug(f"[AutoSeg] Vérification de la disponibilité du serveur MONAI Label à l'adresse : {MONAI_LABEL}")
     if not _monai_label_ready(MONAI_LABEL):
         cache.delete(lock_key)
-        logger.info("[AutoSeg] MONAI Label is not ready; keeping pending exams queued")
+        logger.error("[AutoSeg] Le serveur MONAI Label n'est pas prêt ou injoignable. Libération du verrou.")
         return {'status': 'monai_not_ready'}
 
+    # ==========================================
+    # ÉTAPE 3 : Sélection du lot d'examens (Batch)
+    # ==========================================
+    logger.debug("[AutoSeg] Recherche d'examens en attente de segmentation...")
     exams = Exam.objects.filter(
         segmentation_status='pending',
         exam_type='Rétinographie',
@@ -839,35 +850,58 @@ def tache_auto_segmentation():
 
     if not exams:
         cache.delete(lock_key)
+        logger.info("[AutoSeg] Aucun examen en attente de segmentation. Fin de la tâche et libération du verrou.")
         return {'status': 'no_pending_exams'}
 
+    logger.info(f"[AutoSeg] {len(exams)} examen(s) trouvé(s) à traiter dans ce lot.")
+
+    # Configuration du matériel d'exécution (CPU/GPU)
     device = "cuda" if os.environ.get("USE_CUDA", "false") == "true" else "cpu"
+    logger.info(f"[AutoSeg] Utilisation du matériel d'exécution d'IA sélectionné : {device.upper()}")
     processed = 0
 
+    # ==========================================
+    # ÉTAPE 4 : Boucle principale sur chaque examen
+    # ==========================================
     for exam in exams:
         study_id = exam.study_instance_uid
         orthanc_study_id = _resolve_orthanc_id(study_id)
 
-        # Mark as in_progress immediately to prevent double-processing
+        logger.info(
+            f"[AutoSeg] [Examen {exam.id}] Début du traitement - Patient: {exam.patient_name} (ID: {exam.patient_id}) - "
+            f"StudyInstanceUID: {study_id} (ID Interne Orthanc: {orthanc_study_id})"
+        )
+
+        # Passage du statut à "En cours" pour verrouiller l'examen en base de données
         exam.segmentation_status = 'in_progress'
         exam.save(update_fields=['segmentation_status'])
+        logger.debug(f"[Examen {exam.id}] Statut mis à jour à 'in_progress' en base de données.")
 
-        # Find every OP series within the study. Each eye can arrive as a
-        # separate OP series, so stopping at the first one skips the other eye.
+        # Récupération des séries de type rétinographie (OP) depuis Orthanc
         try:
+            logger.debug(f"[Examen {exam.id}] Collecte des séries de rétinographie (OP) dans Orthanc...")
             orthanc_meta, op_series = _collect_op_series(ORTHANC_URL, orthanc_study_id)
             if not op_series:
+                logger.warning(
+                    f"[Examen {exam.id}] Aucune série de modalité OP trouvée dans l'étude {orthanc_study_id}. "
+                    "Marquage comme 'completed' (sans analyse)."
+                )
                 exam.segmentation_status = 'completed'
                 exam.segmentation_models_status = {'skipped': 'no OP series found'}
                 exam.save(update_fields=['segmentation_status', 'segmentation_models_status'])
                 continue
+            logger.info(f"[Examen {exam.id}] {len(op_series)} série(s) OP détectée(s) pour traitement.")
         except Exception as e:
+            logger.error(
+                f"[Examen {exam.id}] Échec de la vérification ou de la communication avec Orthanc : {str(e)}", 
+                exc_info=True
+            )
             exam.segmentation_status = 'failed'
             exam.segmentation_error = f'Orthanc check failed: {str(e)[:200]}'
             exam.save(update_fields=['segmentation_status', 'segmentation_error'])
             continue
 
-        # Get the DICOM StudyInstanceUID to ensure SEG lands in the same study
+        # Extraction des métadonnées requises pour la cohérence
         op_study_uid = orthanc_meta.get('MainDicomTags', {}).get('StudyInstanceUID', '')
         expected_patient_id = orthanc_meta.get('PatientMainDicomTags', {}).get('PatientID', '')
         base_params = {"device": device}
@@ -878,52 +912,67 @@ def tache_auto_segmentation():
         series_reports = {}
         all_ok = True
 
+        # ==========================================
+        # ÉTAPE 5 : Analyse série par série (oeil par oeil)
+        # ==========================================
         for op_series_item in op_series:
             op_series_uid = op_series_item['series_instance_uid']
             op_orthanc_series_id = op_series_item['orthanc_series_id']
             series_status = {}
 
+            logger.info(
+                f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Début du traitement oeil - "
+                f"ID Interne Série Orthanc: {op_orthanc_series_id}"
+            )
+
+            # Étape A : Synchronisation du cache DICOM de MONAI
             try:
-                # SeriesInstanceUID is not always unique in imported synthetic
-                # OP files. Populate MONAI's cache from this exact Orthanc
-                # series so DICOMweb cannot select the same UID from another
-                # patient/study.
+                logger.debug(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Synchronisation du cache MONAI local...")
                 _prepare_monai_series_cache(
                     ORTHANC_URL,
                     op_orthanc_series_id,
                     op_series_uid,
                     study_id,
                 )
+                logger.debug(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Cache synchronisé avec succès.")
             except Exception as e:
+                logger.error(
+                    f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Échec de la préparation du cache : {str(e)}", 
+                    exc_info=True
+                )
                 series_status['cache'] = f'failed ({str(e)[:100]})'
                 models_status[op_series_uid] = series_status
                 all_ok = False
-                logger.exception("[AutoSeg] Could not prepare exact MONAI source")
                 continue
 
+            # Étape B : Classification de la latéralité (Oeil gauche vs Oeil droit)
             try:
-                series_status['eye_laterality'] = _run_eye_laterality(
+                logger.info(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Exécution du classifieur de latéralité de l'oeil...")
+                lat_result = _run_eye_laterality(
                     MONAI_LABEL,
                     op_series_uid,
                     base_params,
                 )
+                series_status['eye_laterality'] = lat_result
+                logger.info(
+                    f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Résultat latéralité : "
+                    f"Latéralité={lat_result.get('laterality')} (Confiance: {lat_result.get('confidence')})"
+                )
             except Exception as e:
-                # Laterality should be visible in status, but should not block
-                # the clinical segmentation pipeline for this eye.
                 series_status['eye_laterality'] = f'failed ({str(e)[:100]})'
                 logger.warning(
-                    "[AutoSeg] eye_laterality failed for series %s: %s",
-                    op_series_uid,
-                    e,
+                    f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Le modèle de latéralité a échoué : {str(e)}",
+                    exc_info=True
                 )
 
-            # Snapshot per source series so SEGs created for one eye are fixed
-            # only against that eye's referenced source series.
+            # Étape C : Capture des segmentations pré-existantes (Snapshot avant traitement)
             seg_ids_before = _snapshot_seg_series(ORTHANC_URL)
+            logger.debug(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Instantané Orthanc pré-traitement : {len(seg_ids_before)} segmentations détectées.")
 
+            # Étape D : Passage des modèles de segmentation d'IA (OD/OC, Vaisseaux, Lésions)
             for model in SEG_MODELS:
                 try:
-                    logger.info("[AutoSeg] Running %s on series %s...", model, op_series_uid[:50])
+                    logger.info(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Lancement du modèle : {model}")
                     resp = requests.post(
                         f"{MONAI_LABEL}/infer/{model}",
                         params={"image": op_series_uid},
@@ -932,22 +981,25 @@ def tache_auto_segmentation():
                     )
                     if resp.status_code == 200:
                         series_status[model] = 'ok'
-                        logger.info("[AutoSeg] %s succeeded for series %s", model, op_series_uid)
+                        logger.info(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Modèle {model} exécuté avec succès.")
                     else:
                         series_status[model] = f'failed (HTTP {resp.status_code})'
-                        logger.warning(
-                            "[AutoSeg] %s returned %s for series %s",
-                            model,
-                            resp.status_code,
-                            op_series_uid,
-                        )
                         all_ok = False
+                        logger.warning(
+                            f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Le modèle {model} a échoué. "
+                            f"Code HTTP de retour : {resp.status_code} - Réponse : {resp.text[:200]}"
+                        )
                 except Exception as e:
                     series_status[model] = f'failed ({str(e)[:100]})'
-                    logger.error("[AutoSeg] %s failed for series %s: %s", model, op_series_uid, e)
                     all_ok = False
+                    logger.error(
+                        f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Erreur système lors du modèle {model} : {str(e)}",
+                        exc_info=True
+                    )
 
+            # Étape E : Lancement de l'analyse globale et classification DR (Rétinopathie)
             try:
+                logger.info(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Lancement de la classification globale (rétinopathie)...")
                 analyze_resp = requests.post(
                     f"{MONAI_LABEL}/infer/analyze",
                     json={
@@ -963,21 +1015,26 @@ def tache_auto_segmentation():
                     analysis["eye_laterality"] = series_status.get("eye_laterality")
                     series_reports[op_series_uid] = analysis
                     series_status['dr_classification'] = 'ok'
+                    logger.info(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Classification globale terminée avec succès.")
                 else:
                     series_status['dr_classification'] = f'failed (HTTP {analyze_resp.status_code})'
                     logger.warning(
-                        "[AutoSeg] /infer/analyze returned %s for series %s",
-                        analyze_resp.status_code,
-                        op_series_uid,
+                        f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] L'analyse globale a échoué. "
+                        f"Code HTTP de retour : {analyze_resp.status_code}"
                     )
             except Exception as e:
                 series_status['dr_classification'] = f'failed ({str(e)[:100]})'
-                logger.warning("[AutoSeg] /infer/analyze failed for series %s: %s", op_series_uid, e)
+                logger.error(
+                    f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Erreur système lors de l'analyse globale : {str(e)}",
+                    exc_info=True
+                )
 
-            # Fix SEG patient/study association in Orthanc — safety net for any patch failures
+            # Étape F : Sécurisation et correction d'association des fichiers DICOM-SEG créés
             try:
+                logger.debug(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Détection et correction des métadonnées des nouveaux fichiers SEG...")
                 seg_ids_after = _snapshot_seg_series(ORTHANC_URL)
                 new_seg_ids = seg_ids_after - seg_ids_before
+
                 if new_seg_ids:
                     _fix_seg_association(
                         ORTHANC_URL,
@@ -987,30 +1044,32 @@ def tache_auto_segmentation():
                         op_series_uid,
                     )
                     logger.info(
-                        "[AutoSeg] Checked %s new SEG series for source series %s",
-                        len(new_seg_ids),
-                        op_series_uid,
+                        f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] {len(new_seg_ids)} fichier(s) DICOM-SEG associé(s) "
+                        f"avec succès au patient {expected_patient_id}."
                     )
                 else:
                     all_ok = False
                     series_status['dicom_seg'] = 'failed (no DICOM-SEG created)'
                     logger.error(
-                        "[AutoSeg] MONAI returned success but created no DICOM-SEG for series %s",
-                        op_series_uid,
+                        f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Succès d'exécution indiqué par l'IA, "
+                        f"mais aucune nouvelle série DICOM-SEG n'a été détectée dans Orthanc."
                     )
             except Exception as e:
                 all_ok = False
                 series_status['dicom_seg'] = f'failed ({str(e)[:100]})'
-                logger.warning(
-                    "[AutoSeg] SEG association fix failed for series %s: %s",
-                    op_series_uid,
-                    e,
+                logger.error(
+                    f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Erreur critique lors de la correction du fichier DICOM-SEG : {str(e)}",
+                    exc_info=True
                 )
 
             models_status[op_series_uid] = series_status
 
+        # ==========================================
+        # ÉTAPE 6 : Agrégation et écriture des rapports d'analyse
+        # ==========================================
         per_eye = aggregate_per_eye(series_reports)
         if per_eye:
+            logger.info(f"[Examen {exam.id}] Données d'IA agrégées avec succès par oeil. Début de la rédaction du projet de compte rendu...")
             reports_by_eye = {}
             report_generation_status = "skipped"
             report_generation_error = ""
@@ -1022,7 +1081,9 @@ def tache_auto_segmentation():
                     if not eye_report:
                         continue
                     eye_label = "Œil droit" if side == "right" else "Œil gauche"
+                    
                     try:
+                        logger.debug(f"[Examen {exam.id}] Génération du compte rendu IA écrit pour l'œil : {eye_label}")
                         generated = build_ai_report_text(
                             expected_patient_id or exam.patient_id,
                             eye_report,
@@ -1032,11 +1093,11 @@ def tache_auto_segmentation():
                     except Exception as e:
                         report_errors.append(f"{eye_label}: {str(e)[:200]}")
                         logger.warning(
-                            "[AutoSeg] AI draft report generation failed for %s: %s",
-                            eye_label,
-                            e,
+                            f"[Examen {exam.id}] Échec de génération de texte pour {eye_label} : {str(e)}",
+                            exc_info=True
                         )
                         continue
+
                     reports_by_eye[side] = {
                         "eye": eye_label,
                         "report_text": generated.get("report_text") or "",
@@ -1058,6 +1119,8 @@ def tache_auto_segmentation():
                         "per_eye": per_eye,
                         "reports_by_eye": reports_by_eye,
                     }
+
+                    # Enregistrement ou mise à jour du MedicalReport en base de données
                     report = (
                         MedicalReport.objects.filter(
                             examination_id=str(exam.id),
@@ -1066,7 +1129,9 @@ def tache_auto_segmentation():
                         .order_by("-created_at")
                         .first()
                     )
+                    
                     if report:
+                        logger.info(f"[Examen {exam.id}] Mise à jour du MedicalReport existant (ID: {report.id}).")
                         report.patient_id = expected_patient_id or exam.patient_id
                         report.ai_content = combined
                         report.ai_confidence = worst_dr_confidence(per_eye)
@@ -1080,8 +1145,10 @@ def tache_auto_segmentation():
                                 "updated_at",
                             ]
                         )
+                        # On supprime la v1 existante pour la remplacer par la nouvelle version d'IA fraîchement générée
                         MedicalReportVersion.objects.filter(report=report, version_number=1).delete()
                     else:
+                        logger.info(f"[Examen {exam.id}] Création d'un nouveau MedicalReport d'analyse automatique.")
                         report = MedicalReport.objects.create(
                             patient_id=expected_patient_id or exam.patient_id,
                             examination_id=str(exam.id),
@@ -1091,22 +1158,27 @@ def tache_auto_segmentation():
                             ai_confidence=worst_dr_confidence(per_eye),
                             ai_report_data=ai_report_data,
                         )
+
+                    # Création de la version historique officielle n°1 du rapport (Généré par l'IA)
                     MedicalReportVersion.objects.create(
                         report=report,
                         version_number=1,
                         content=combined,
                         version_type=MedicalReportVersion.VersionType.AI,
                     )
+                    logger.info(f"[Examen {exam.id}] Version 1 (AI) du compte rendu médical enregistrée en base de données.")
                 else:
                     report_generation_status = "failed"
                     report_generation_error = (
-                        "; ".join(report_errors) or "Report generator returned empty content"
+                        "; ".join(report_errors) or "Le générateur de rapport a renvoyé un contenu vide."
                     )
+                    logger.warning(f"[Examen {exam.id}] Rédaction de compte rendu annulée ou vide : {report_generation_error}")
             except Exception as e:
                 report_generation_status = "failed"
                 report_generation_error = str(e)[:500]
-                logger.warning("[AutoSeg] AI draft report generation skipped: %s", e)
+                logger.error(f"[Examen {exam.id}] Échec critique lors de l'écriture du rapport d'IA : {str(e)}", exc_info=True)
 
+            # Enregistrement des données JSON techniques d'analyse globale
             report_json = {
                 "source": "monai_label_auto",
                 "status": "AI_ANALYZED",
@@ -1117,40 +1189,46 @@ def tache_auto_segmentation():
                 "report_generation_status": report_generation_status,
                 "report_generation_error": report_generation_error,
             }
+            
             analysis_report = AnalysisReport.objects.filter(series_instance_uid=study_id).first()
             if analysis_report:
+                logger.debug(f"[Examen {exam.id}] Mise à jour de la table AnalysisReport technique pour l'étude : {study_id}")
                 analysis_report.user = None
                 analysis_report.report_json = report_json
                 analysis_report.save(update_fields=["user", "report_json"])
             else:
+                logger.debug(f"[Examen {exam.id}] Création d'une nouvelle entrée AnalysisReport technique pour l'étude : {study_id}")
                 AnalysisReport.objects.create(
                     series_instance_uid=study_id,
                     user=None,
                     report_json=report_json,
                 )
 
-        # Update exam based on results
+        # ==========================================
+        # ÉTAPE 7 : Finalisation de l'état de l'examen
+        # ==========================================
         exam.segmentation_models_status = models_status
         exam.segmentation_retries += 1
 
         if all_ok:
             exam.segmentation_status = 'completed'
             exam.segmentation_error = ''
-            logger.info(f"[AutoSeg] All segmentations completed for study {study_id}")
+            logger.info(f"[Examen {exam.id}] Succès de l'analyse IA. Examen configuré sur 'completed'.")
         else:
-            # Partial failure: retry up to MAX_RETRIES times
+            # En cas de dysfonctionnement partiel, l'examen peut retenter l'analyse
             if exam.segmentation_retries >= MAX_RETRIES:
                 exam.segmentation_status = 'failed'
                 failed_models = _failed_model_names(models_status)
                 exam.segmentation_error = f'Échec après {MAX_RETRIES} tentatives: {", ".join(failed_models)}'
-                logger.warning(
-                    f"[AutoSeg] Giving up on study {study_id} after {MAX_RETRIES} retries. "
-                    f"Failed models: {failed_models}"
+                logger.error(
+                    f"[Examen {exam.id}] Abandon de la segmentation après {MAX_RETRIES} tentatives d'analyse. "
+                    f"Modèles d'IA en échec : {failed_models}"
                 )
             else:
                 exam.segmentation_status = 'pending'
-                logger.info(
-                    f"[AutoSeg] Study {study_id} will retry (attempt {exam.segmentation_retries}/{MAX_RETRIES})"
+                logger.warning(
+                    f"[Examen {exam.id}] Échec partiel d'analyse. L'examen sera replacé en attente (pending) "
+                    f"pour une nouvelle tentative (Essai {exam.segmentation_retries}/{MAX_RETRIES})"
                 )
 
         exam.save(update_fields=[
@@ -1159,13 +1237,14 @@ def tache_auto_segmentation():
         ])
         processed += 1
 
-    # Déclencher la distribution pour assigner les examens terminés (ou échoués) aux médecins
+    # ==========================================
+    # ÉTAPE 8 : Actions post-lot (Distribution et récurrence)
+    # ==========================================
     if processed > 0:
+        logger.info(f"[AutoSeg] Fin de l'analyse du lot. Déclenchement de la distribution des examens aux médecins...")
         tache_distribution.delay()
 
-    # This task intentionally processes at most 10 exams per invocation. Keep
-    # draining the queue so a backfill of existing OP studies does not stop
-    # after the first batch.
+    # Vérification s'il reste d'autres examens dans la file d'attente globale
     more_pending = Exam.objects.filter(
         segmentation_status='pending',
         exam_type='Rétinographie',
@@ -1175,8 +1254,14 @@ def tache_auto_segmentation():
     ).exclude(
         study_instance_uid__exact='',
     ).exists()
+    
     if more_pending:
+        logger.info("[AutoSeg] Des examens en attente sont encore présents. Planification automatique du prochain lot de segmentation (countdown=2s).")
         tache_auto_segmentation.apply_async(countdown=2)
+    else:
+        logger.info("[AutoSeg] File d'attente de segmentation entièrement vide.")
 
+    # Libération finale du verrou
     cache.delete(lock_key)
+    logger.info("[AutoSeg] Libération du verrou. Fin d'exécution de la tâche.")
     return {'processed': processed}

@@ -92,6 +92,7 @@ class Exam(models.Model):
     def save(self, *args, **kwargs):
         if not self.assigned_to and self.status == self.Status.EN_COURS:
             self.status = self.Status.EN_ATTENTE
+            kwargs.pop('update_fields', None)
         super().save(*args, **kwargs)
 
     def __str__(self):
