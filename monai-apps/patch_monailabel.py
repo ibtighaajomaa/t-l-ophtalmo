@@ -2166,6 +2166,65 @@ else:
     print(f"WARNING: convert.py not found for Patch 21: {CONVERT}")
 
 
+# Patch 22: Let backend drive per-source-instance OP segmentation.
+# The backend prepares MONAI's DICOM cache with exactly one source DICOM and
+# passes source_sop_instance_uid.  Keep that DICOM directory intact, but clear
+# stale derived NIfTI/local-index state so MONAI converts the current single
+# cached instance instead of re-downloading the whole OP series.
+PATCH22_MARKER = "OHIF OP SEG: preserve single-instance cache"
+if os.path.exists(INFER):
+    with open(INFER) as f:
+        content = f.read()
+
+    if PATCH22_MARKER not in content:
+        old_cache22 = '''            if os.path.isdir(_study_cache_dir):
+                shutil.rmtree(_study_cache_dir, ignore_errors=True)
+            if os.path.isfile(_study_cache_nifti):
+                os.unlink(_study_cache_nifti)
+            logger.info(
+                f"Cleared series-only cache for study-specific inference: "
+                f"{str(study_uid_hint)[:40]}..."
+            )'''
+        new_cache22 = '''            _source_sop_uid = p.get("source_sop_instance_uid") or request.get("source_sop_instance_uid")
+            if _source_sop_uid:
+                # OHIF OP SEG: preserve single-instance cache
+                # Backend already populated _study_cache_dir with one DICOM.
+                # Remove stale derived files/index entries only.
+                if os.path.isfile(_study_cache_nifti):
+                    os.unlink(_study_cache_nifti)
+                try:
+                    if hasattr(ds._datastore, "_images"):
+                        ds._datastore._images.pop(_study_cache_image, None)
+                except Exception:
+                    pass
+                logger.info(
+                    f"Preserved single-instance cache for SOP {_source_sop_uid}; "
+                    f"cleared derived NIfTI for {str(study_uid_hint)[:40]}..."
+                )
+            else:
+                if os.path.isdir(_study_cache_dir):
+                    shutil.rmtree(_study_cache_dir, ignore_errors=True)
+                if os.path.isfile(_study_cache_nifti):
+                    os.unlink(_study_cache_nifti)
+                logger.info(
+                    f"Cleared series-only cache for study-specific inference: "
+                    f"{str(study_uid_hint)[:40]}..."
+                )'''
+        if old_cache22 in content:
+            content = content.replace(old_cache22, new_cache22, 1)
+            with open(INFER, "w") as f:
+                f.write(content)
+            print("infer.py Patch 22: preserve single-instance cache for OP SEG")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 22 — study cache clear block not found in infer.py")
+    else:
+        patches_applied = True
+        print("infer.py: Patch 22 already applied")
+else:
+    print(f"WARNING: infer.py not found for Patch 22: {INFER}")
+
+
 if not patches_applied:
     print("No patches needed (already applied or versions mismatch)")
 else:

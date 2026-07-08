@@ -452,9 +452,54 @@ def _collect_op_series(orthanc_url, orthanc_study_id):
             'orthanc_series_id': sid,
             'series_instance_uid': series_uid,
             'dicom_laterality': _series_dicom_laterality(orthanc_url, sid, series),
+            'instances': _collect_op_instances(orthanc_url, series),
         })
 
     return study, op_series
+
+
+def _instance_number(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _collect_op_instances(orthanc_url, series):
+    """Return source DICOM instances for one OP series, sorted stably."""
+    instances = []
+    for instance_id in series.get('Instances', []):
+        try:
+            resp = requests.get(
+                f'{orthanc_url}/instances/{instance_id}/simplified-tags',
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                continue
+            tags = resp.json() or {}
+            instances.append({
+                'orthanc_instance_id': instance_id,
+                'sop_instance_uid': tags.get('SOPInstanceUID') or '',
+                'instance_number': _instance_number(tags.get('InstanceNumber')),
+                'dicom_laterality': _normalize_laterality(
+                    tags.get('ImageLaterality')
+                    or tags.get('Laterality')
+                    or tags.get('SeriesDescription')
+                ),
+            })
+        except Exception as exc:
+            logger.debug(
+                "[OPSeries] Could not read instance metadata for %s: %s",
+                instance_id,
+                exc,
+            )
+    return sorted(
+        instances,
+        key=lambda item: (
+            item.get('instance_number') or 0,
+            item.get('sop_instance_uid') or item.get('orthanc_instance_id') or '',
+        ),
+    )
 
 
 def _normalize_laterality(value):
@@ -553,6 +598,45 @@ def _prepare_monai_series_cache(orthanc_url, orthanc_series_id, series_instance_
     )
 
 
+def _monai_cache_dir_for_series(series_instance_uid):
+    monai_cache = os.environ.get('MONAI_CACHE_DIR', '/root/.cache/monailabel')
+    dicom_root = os.path.join(monai_cache, 'dicom')
+    if os.path.isdir(dicom_root):
+        import shutil
+        shutil.rmtree(dicom_root, ignore_errors=True)
+        logger.info("[AutoSeg] Cleared MONAI DICOM cache: %s", dicom_root)
+
+    dicomweb_url = 'http://orthanc-container:8042/dicom-web'
+    cache_hash = hashlib.md5(dicomweb_url.encode()).hexdigest()
+    cache_dir = os.path.join(dicom_root, cache_hash, series_instance_uid)
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+
+def _prepare_monai_instance_cache(
+    orthanc_url,
+    orthanc_instance_id,
+    series_instance_uid,
+    study_id,
+):
+    """Populate MONAI cache with exactly one OP source instance."""
+    cache_dir = _monai_cache_dir_for_series(series_instance_uid)
+    instance_resp = requests.get(
+        f'{orthanc_url}/instances/{orthanc_instance_id}/file',
+        timeout=30,
+    )
+    instance_resp.raise_for_status()
+    with open(os.path.join(cache_dir, f'{orthanc_instance_id}.dcm'), 'wb') as output:
+        output.write(instance_resp.content)
+
+    logger.info(
+        "[AutoSeg] Cached source instance %s for series %s from study %s",
+        orthanc_instance_id,
+        series_instance_uid,
+        study_id,
+    )
+
+
 def _run_eye_laterality(monai_label_url, series_instance_uid, base_params, dicom_laterality=''):
     """Run optional eye laterality classifier and normalize its response."""
     dicom_laterality = _normalize_laterality(dicom_laterality)
@@ -609,6 +693,7 @@ def _run_eye_laterality(monai_label_url, series_instance_uid, base_params, dicom
 
 
 def _failed_model_names(models_status):
+    ignored_keys = {'source_instances', 'segmented_instances'}
     failed = []
     for series_uid, series_status in models_status.items():
         if not isinstance(series_status, dict):
@@ -619,6 +704,8 @@ def _failed_model_names(models_status):
             if model == 'eye_laterality' and isinstance(model_status, dict):
                 if model_status.get('status') not in ('ok', 'skipped'):
                     failed.append(f'{series_uid}:eye_laterality')
+                continue
+            if model in ignored_keys:
                 continue
             if model_status not in ('ok', 'manual'):
                 failed.append(f'{series_uid}:{model}')
@@ -1140,33 +1227,106 @@ def tache_auto_segmentation():
             seg_ids_before = _snapshot_seg_series(ORTHANC_URL)
             logger.debug(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Instantané Orthanc pré-traitement : {len(seg_ids_before)} segmentations détectées.")
 
-            # Étape D : Passage des modèles de segmentation d'IA (OD/OC, Vaisseaux, Lésions)
-            for model in SEG_MODELS:
+            # Étape D : Passage des modèles de segmentation d'IA sur chaque instance source.
+            # MONAI reçoit toujours le SeriesInstanceUID comme image id, mais le cache
+            # local est remplacé par une seule instance DICOM avant chaque inférence.
+            source_instances = op_series_item.get('instances') or []
+            if source_instances:
+                series_status['source_instances'] = [
+                    {
+                        'sop_instance_uid': item.get('sop_instance_uid'),
+                        'instance_number': item.get('instance_number'),
+                        'laterality': item.get('dicom_laterality') or op_series_item.get('dicom_laterality'),
+                    }
+                    for item in source_instances
+                ]
+            else:
+                source_instances = [{'orthanc_instance_id': None, 'sop_instance_uid': None, 'instance_number': None}]
+
+            model_results = {model: [] for model in SEG_MODELS}
+            segmented_instances = []
+
+            for instance_index, source_instance in enumerate(source_instances, start=1):
+                instance_id = source_instance.get('orthanc_instance_id')
+                sop_uid = source_instance.get('sop_instance_uid')
+
                 try:
-                    logger.info(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Lancement du modèle : {model}")
-                    resp = requests.post(
-                        f"{MONAI_LABEL}/infer/{model}",
-                        params={"image": op_series_uid},
-                        data={"params": json.dumps(base_params)},
-                        timeout=300,
-                    )
-                    if resp.status_code == 200:
-                        series_status[model] = 'ok'
-                        logger.info(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Modèle {model} exécuté avec succès.")
-                    else:
-                        series_status[model] = f'failed (HTTP {resp.status_code})'
-                        all_ok = False
-                        logger.warning(
-                            f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Le modèle {model} a échoué. "
-                            f"Code HTTP de retour : {resp.status_code} - Réponse : {resp.text[:200]}"
+                    if instance_id:
+                        _prepare_monai_instance_cache(
+                            ORTHANC_URL,
+                            instance_id,
+                            op_series_uid,
+                            study_id,
                         )
-                except Exception as e:
-                    series_status[model] = f'failed ({str(e)[:100]})'
-                    all_ok = False
-                    logger.error(
-                        f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Erreur système lors du modèle {model} : {str(e)}",
-                        exc_info=True
+                    logger.info(
+                        f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] "
+                        f"Segmentation instance {instance_index}/{len(source_instances)} "
+                        f"(SOP={sop_uid or 'series-cache'})"
                     )
+                except Exception as e:
+                    all_ok = False
+                    for model in SEG_MODELS:
+                        model_results[model].append(f'failed cache ({str(e)[:100]})')
+                    logger.error(
+                        f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] "
+                        f"Échec de la préparation du cache instance {instance_index}: {str(e)}",
+                        exc_info=True,
+                    )
+                    continue
+
+                instance_status = {
+                    'sop_instance_uid': sop_uid,
+                    'instance_number': source_instance.get('instance_number'),
+                    'models': {},
+                }
+                for model in SEG_MODELS:
+                    try:
+                        logger.info(
+                            f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] "
+                            f"Lancement du modèle {model} sur instance {instance_index}/{len(source_instances)}"
+                        )
+                        resp = requests.post(
+                            f"{MONAI_LABEL}/infer/{model}",
+                            params={"image": op_series_uid},
+                            data={
+                                "params": json.dumps({
+                                    **base_params,
+                                    "source_sop_instance_uid": sop_uid,
+                                })
+                            },
+                            timeout=300,
+                        )
+                        if resp.status_code == 200:
+                            model_results[model].append('ok')
+                            instance_status['models'][model] = 'ok'
+                            logger.info(
+                                f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] "
+                                f"Modèle {model} exécuté avec succès sur instance {instance_index}."
+                            )
+                        else:
+                            status = f'failed (HTTP {resp.status_code})'
+                            model_results[model].append(status)
+                            instance_status['models'][model] = status
+                            all_ok = False
+                            logger.warning(
+                                f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Le modèle {model} a échoué "
+                                f"sur instance {instance_index}. Code HTTP : {resp.status_code} - Réponse : {resp.text[:200]}"
+                            )
+                    except Exception as e:
+                        status = f'failed ({str(e)[:100]})'
+                        model_results[model].append(status)
+                        instance_status['models'][model] = status
+                        all_ok = False
+                        logger.error(
+                            f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Erreur système lors du modèle "
+                            f"{model} sur instance {instance_index}: {str(e)}",
+                            exc_info=True,
+                        )
+                segmented_instances.append(instance_status)
+
+            series_status['segmented_instances'] = segmented_instances
+            for model, results in model_results.items():
+                series_status[model] = 'ok' if results and all(result == 'ok' for result in results) else results
 
             # Étape E : Lancement de l'analyse globale et classification DR (Rétinopathie)
             try:
