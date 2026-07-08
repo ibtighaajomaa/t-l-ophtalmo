@@ -706,6 +706,7 @@ def run_analysis(request):
     try:
         from .tasks import (
             _collect_op_series,
+            _delete_prior_ai_seg_series,
             _fix_seg_association,
             _resolve_orthanc_id,
             _prepare_monai_series_cache,
@@ -741,6 +742,11 @@ def run_analysis(request):
     for op_series_item in op_series:
         op_series_uid = op_series_item['series_instance_uid']
         op_orthanc_series_id = op_series_item['orthanc_series_id']
+        _delete_prior_ai_seg_series(
+            ORTHANC_URL,
+            orthanc_study_id,
+            op_series_uid,
+        )
         try:
             _prepare_monai_series_cache(
                 ORTHANC_URL,

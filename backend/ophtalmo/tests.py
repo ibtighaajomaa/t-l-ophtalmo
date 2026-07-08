@@ -4,7 +4,11 @@ from django.test import TestCase, override_settings
 from unittest.mock import patch, MagicMock
 from rest_framework.test import APIRequestFactory
 from ophtalmo.models import Exam, ImageQualityAssessment
-from ophtalmo.tasks import tache_auto_quality, tache_auto_segmentation
+from ophtalmo.tasks import (
+    _delete_prior_ai_seg_series,
+    tache_auto_quality,
+    tache_auto_segmentation,
+)
 from ophtalmo.views import request_composite_segmentation
 from ophtalmo.distribution import get_examens_en_attente, distribuer_examens
 
@@ -34,6 +38,70 @@ class SegmentationModelTest(TestCase):
                 date=TODAY,
             )
             self.assertEqual(exam.segmentation_status, status_code)
+
+
+class SegmentationCleanupTest(TestCase):
+    @patch('ophtalmo.tasks.requests.delete')
+    @patch('ophtalmo.tasks.requests.get')
+    def test_deletes_only_prior_ai_seg_for_same_source_series(self, mock_get, mock_delete):
+        source_series_uid = '1.2.3.source'
+        other_source_uid = '1.2.3.other'
+
+        def response(data, status_code=200):
+            mock_response = MagicMock(status_code=status_code)
+            mock_response.json.return_value = data
+            mock_response.raise_for_status.return_value = None
+            return mock_response
+
+        def get_side_effect(url, **kwargs):
+            if url.endswith('/studies/study-1'):
+                return response({'Series': ['seg-match', 'seg-manual', 'seg-other-source', 'op-source']})
+            if url.endswith('/series/seg-match'):
+                return response({
+                    'Instances': ['inst-match'],
+                    'MainDicomTags': {
+                        'Modality': 'SEG',
+                        'SeriesDescription': 'vessel_seg',
+                    },
+                })
+            if url.endswith('/series/seg-manual'):
+                return response({
+                    'Instances': ['inst-manual'],
+                    'MainDicomTags': {
+                        'Modality': 'SEG',
+                        'SeriesDescription': 'manual_contour',
+                    },
+                })
+            if url.endswith('/series/seg-other-source'):
+                return response({
+                    'Instances': ['inst-other'],
+                    'MainDicomTags': {
+                        'Modality': 'SEG',
+                        'SeriesDescription': 'optic_disc_cup',
+                    },
+                })
+            if url.endswith('/series/op-source'):
+                return response({'MainDicomTags': {'Modality': 'OP'}})
+            if url.endswith('/instances/inst-match/tags?simplify'):
+                return response({'ReferencedSeriesSequence': [{'SeriesInstanceUID': source_series_uid}]})
+            if url.endswith('/instances/inst-other/tags?simplify'):
+                return response({'ReferencedSeriesSequence': [{'SeriesInstanceUID': other_source_uid}]})
+            return response({})
+
+        mock_get.side_effect = get_side_effect
+        mock_delete.return_value.status_code = 200
+
+        deleted = _delete_prior_ai_seg_series(
+            'http://orthanc-container:8042',
+            'study-1',
+            source_series_uid,
+        )
+
+        self.assertEqual(deleted, 1)
+        mock_delete.assert_called_once_with(
+            'http://orthanc-container:8042/series/seg-match',
+            timeout=30,
+        )
 
 
 class QualityAssociationTest(TestCase):

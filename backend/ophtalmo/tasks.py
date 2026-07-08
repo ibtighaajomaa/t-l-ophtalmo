@@ -272,6 +272,88 @@ def _snapshot_seg_series(orthanc_url):
     return seg_ids
 
 
+AI_SEG_SERIES_DESCRIPTIONS = {"optic_disc_cup", "vessel_seg", "lesion_seg"}
+
+
+def _delete_prior_ai_seg_series(
+    orthanc_url,
+    orthanc_study_id,
+    source_series_uid,
+    model_names=None,
+):
+    """Delete old AI-generated SEG series for one OP source series.
+
+    This prevents repeated automatic/manual AI runs from accumulating duplicate
+    DICOM-SEG series in Orthanc. It only deletes SEG series whose description is
+    one of our AI model names and whose ReferencedSeriesSequence points back to
+    the exact source OP SeriesInstanceUID.
+    """
+    if not orthanc_study_id or not source_series_uid:
+        return 0
+
+    allowed_descriptions = set(model_names or AI_SEG_SERIES_DESCRIPTIONS)
+    deleted = 0
+
+    try:
+        study_resp = requests.get(f'{orthanc_url}/studies/{orthanc_study_id}', timeout=15)
+        study_resp.raise_for_status()
+        series_ids = study_resp.json().get('Series', [])
+    except requests.RequestException as e:
+        logger.warning("[SegCleanup] Could not list study %s: %s", orthanc_study_id, e)
+        return 0
+
+    for sid in series_ids:
+        try:
+            series_resp = requests.get(f'{orthanc_url}/series/{sid}', timeout=10)
+            if series_resp.status_code != 200:
+                continue
+            series = series_resp.json()
+            tags = series.get('MainDicomTags', {}) or {}
+            if tags.get('Modality') != 'SEG':
+                continue
+            if tags.get('SeriesDescription') not in allowed_descriptions:
+                continue
+
+            instances = series.get('Instances') or []
+            if not instances:
+                continue
+            tags_resp = requests.get(
+                f"{orthanc_url}/instances/{instances[0]}/tags?simplify",
+                timeout=10,
+            )
+            if tags_resp.status_code != 200:
+                continue
+
+            referenced_uids = {
+                item.get('SeriesInstanceUID')
+                for item in (tags_resp.json().get('ReferencedSeriesSequence') or [])
+                if isinstance(item, dict)
+            }
+            referenced_uids.discard(None)
+            if source_series_uid not in referenced_uids:
+                continue
+
+            delete_resp = requests.delete(f'{orthanc_url}/series/{sid}', timeout=30)
+            if delete_resp.status_code in (200, 204):
+                deleted += 1
+                logger.info(
+                    "[SegCleanup] Deleted prior %s SEG series %s for source %s",
+                    tags.get('SeriesDescription'),
+                    sid,
+                    source_series_uid,
+                )
+            else:
+                logger.warning(
+                    "[SegCleanup] Failed deleting SEG series %s: HTTP %s",
+                    sid,
+                    delete_resp.status_code,
+                )
+        except Exception as e:
+            logger.warning("[SegCleanup] Error checking SEG series %s: %s", sid, e)
+
+    return deleted
+
+
 def _fix_seg_association(
     orthanc_url,
     candidate_ids,
@@ -966,6 +1048,18 @@ def tache_auto_segmentation():
                 )
 
             # Étape C : Capture des segmentations pré-existantes (Snapshot avant traitement)
+            deleted_prior_seg = _delete_prior_ai_seg_series(
+                ORTHANC_URL,
+                orthanc_study_id,
+                op_series_uid,
+                SEG_MODELS,
+            )
+            if deleted_prior_seg:
+                logger.info(
+                    f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] "
+                    f"{deleted_prior_seg} ancien(s) DICOM-SEG IA supprimé(s) avant régénération."
+                )
+
             seg_ids_before = _snapshot_seg_series(ORTHANC_URL)
             logger.debug(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Instantané Orthanc pré-traitement : {len(seg_ids_before)} segmentations détectées.")
 
