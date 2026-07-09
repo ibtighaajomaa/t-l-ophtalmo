@@ -6,8 +6,8 @@ Pillow==11.1.0
 requests==2.32.3
 huggingface_hub>=0.26.3
 transformers>=4.50.0
-torch==2.5.1
-torchvision==0.20.1
+torch==2.6.0
+torchvision==0.21.0
 sentencepiece==0.2.0
 protobuf==5.29.3
 accelerate>=1.1.1

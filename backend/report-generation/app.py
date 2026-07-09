@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import time
 from datetime import datetime
 
 import torch
@@ -63,6 +64,16 @@ def _decode_image(payload: bytes) -> Image.Image:
         return Image.open(io.BytesIO(payload)).convert("RGB")
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid image: {exc}")
+
+
+def _generation_token_limit(max_new_tokens: int | None = None) -> int:
+    if max_new_tokens is None:
+        return MAX_NEW_TOKENS
+    return max(1, min(int(max_new_tokens), MAX_NEW_TOKENS))
+
+
+def _clean_generated_text(text: str) -> str:
+    return re.sub(r"<unused\d+>", "", text).strip()
 
 
 def _format_percent(value):
@@ -271,7 +282,12 @@ class MedGemmaEngine:
         self.load()
         return next(self.model.parameters()).device
 
-    def generate_text(self, prompt: str, image: Image.Image | None = None) -> str:
+    def generate_text(
+        self,
+        prompt: str,
+        image: Image.Image | None = None,
+        max_new_tokens: int | None = None,
+    ) -> str:
         self.load()
         content = []
         if image is not None:
@@ -281,6 +297,7 @@ class MedGemmaEngine:
         inputs = self.processor.apply_chat_template(
             messages,
             add_generation_prompt=True,
+            enable_thinking=False,
             tokenize=True,
             return_dict=True,
             return_tensors="pt",
@@ -291,14 +308,29 @@ class MedGemmaEngine:
                 inputs[key] = value.to(dtype=_torch_dtype())
 
         input_len = inputs["input_ids"].shape[-1]
+        bad_words_ids = None
+        tokenizer = getattr(self.processor, "tokenizer", None)
+        if tokenizer is not None:
+            thought_token_id = tokenizer.convert_tokens_to_ids("<unused94>")
+            if isinstance(thought_token_id, int) and thought_token_id >= 0:
+                bad_words_ids = [[thought_token_id]]
+
+        generation_kwargs = {
+            "max_new_tokens": _generation_token_limit(max_new_tokens),
+            "do_sample": False,
+        }
+        if bad_words_ids:
+            generation_kwargs["bad_words_ids"] = bad_words_ids
+
         with torch.inference_mode():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=MAX_NEW_TOKENS,
-                do_sample=False,
+                **generation_kwargs,
             )
         generated = outputs[0][input_len:]
-        return self.processor.decode(generated, skip_special_tokens=True).strip()
+        return _clean_generated_text(
+            self.processor.decode(generated, skip_special_tokens=True)
+        )
 
     def generate_report(
         self,
@@ -307,6 +339,7 @@ class MedGemmaEngine:
         patient_age: int | None = None,
         eye: str = "Non specifie",
         image: Image.Image | None = None,
+        max_new_tokens: int | None = None,
     ) -> dict:
         prompt = _report_prompt(
             patient_id=patient_id,
@@ -315,7 +348,10 @@ class MedGemmaEngine:
             eye=eye,
             has_image=image is not None,
         )
-        text = self.generate_text(prompt, image=image)
+        started_at = time.perf_counter()
+        token_limit = _generation_token_limit(max_new_tokens)
+        text = self.generate_text(prompt, image=image, max_new_tokens=token_limit)
+        generation_time_seconds = time.perf_counter() - started_at
         return {
             "report_text": text,
             "report_html": report_text_to_html(text),
@@ -324,6 +360,8 @@ class MedGemmaEngine:
                 "report_engine": "medgemma-1.5-4b-it",
                 "model": MODEL_ID,
                 "used_image": image is not None,
+                "generation_time_seconds": round(generation_time_seconds, 3),
+                "max_new_tokens": token_limit,
             },
         }
 
@@ -340,6 +378,7 @@ class ReportRequest(BaseModel):
     report_data: dict
     patient_age: int | None = None
     eye: str = "Non specifie"
+    max_new_tokens: int | None = None
 
 
 @app.get("/health")
@@ -383,6 +422,7 @@ def report(req: ReportRequest):
             patient_age=req.patient_age,
             eye=req.eye,
             report_data=req.report_data,
+            max_new_tokens=req.max_new_tokens,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"MedGemma report generation failed: {exc}")
@@ -396,6 +436,7 @@ async def generate(
     monai_data: str = Form(default="{}"),
     patient_age: int | None = Form(default=None),
     eye: str = Form(default="Non specifie"),
+    max_new_tokens: int | None = Form(default=None),
 ):
     image = _decode_image(await file.read())
     try:
@@ -413,6 +454,7 @@ async def generate(
             eye=eye,
             report_data=report_data,
             image=image,
+            max_new_tokens=max_new_tokens,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"MedGemma report generation failed: {exc}")

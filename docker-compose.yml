@@ -390,6 +390,7 @@ services:
     environment:
       DEVICE: auto
       MEDGEMMA_MODEL_ID: google/medgemma-1.5-4b-it
+      MEDGEMMA_MAX_NEW_TOKENS: "1024"
       MEDGEMMA_WARMUP: "true"
       HF_TOKEN: ${HF_TOKEN}
     volumes:
