@@ -254,6 +254,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'ophtalmo.tasks.tache_auto_quality',
         'schedule': timedelta(seconds=60),
     },
+    'auto-report-generation': {
+        'task': 'ophtalmo.tasks.tache_auto_report_generation',
+        'schedule': timedelta(seconds=60),
+    },
 }
 
 # Distribution settings

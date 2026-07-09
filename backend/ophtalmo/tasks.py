@@ -900,6 +900,86 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
     return {"status": status, "medical_report_id": report.id}
 
 
+@shared_task(name='ophtalmo.tasks.tache_auto_report_generation')
+def tache_auto_report_generation(limit=20):
+    """
+    Queue MedGemma report generation for classified exams.
+
+    This is the automatic safety net after MONAI classification: once an
+    AnalysisReport contains per-eye DR/classification data, the medical report
+    is generated and stored without a user click.
+    """
+    from .analysis_utils import aggregate_per_eye
+    from .models import AnalysisReport, Exam
+
+    queued = 0
+    skipped = 0
+
+    reports = AnalysisReport.objects.order_by("analysis_date")[: limit * 3]
+    for analysis_report in reports:
+        report_json = analysis_report.report_json or {}
+        status = report_json.get("report_generation_status") or "pending"
+        if status != "pending" or report_json.get("report_generation_task_queued"):
+            skipped += 1
+            continue
+
+        per_eye = report_json.get("per_eye") or aggregate_per_eye(
+            report_json.get("series_reports") or {}
+        )
+        if not per_eye:
+            skipped += 1
+            continue
+
+        study_uid = (
+            report_json.get("study_instance_uid")
+            or analysis_report.series_instance_uid
+        )
+        exam = Exam.objects.filter(study_instance_uid=study_uid).first()
+        if not exam:
+            exam = (
+                Exam.objects.filter(
+                    image_quality_results__series_instance_uid=analysis_report.series_instance_uid
+                )
+                .distinct()
+                .first()
+            )
+        if not exam:
+            skipped += 1
+            continue
+
+        if exam.report_generation_status == Exam.ReportGenerationStatus.COMPLETED:
+            skipped += 1
+            continue
+
+        report_json["per_eye"] = per_eye
+        report_json["report_generation_status"] = "pending"
+        report_json["report_generation_task_queued"] = True
+        report_json["report_generation_error"] = ""
+        analysis_report.report_json = report_json
+        analysis_report.save(update_fields=["report_json"])
+
+        exam.report_generation_status = Exam.ReportGenerationStatus.PENDING
+        exam.report_generation_error = ""
+        exam.report_generated_at = None
+        exam.save(update_fields=[
+            "report_generation_status",
+            "report_generation_error",
+            "report_generated_at",
+            "updated_at",
+        ])
+
+        tache_generate_ai_report.apply_async(
+            args=[exam.id, analysis_report.series_instance_uid],
+            queue="reports",
+        )
+        queued += 1
+
+        if queued >= limit:
+            break
+
+    return {"queued": queued, "skipped": skipped}
+
+
 @shared_task(name='ophtalmo.tasks.tache_distribution')
 def tache_distribution():
     """
@@ -1101,8 +1181,8 @@ def tache_sync_orthanc_incremental():
 
 
 @shared_task(name='ophtalmo.tasks.tache_auto_quality')
-def tache_auto_quality():
-    """Evaluate every OP instance in new Orthanc exams with FTHNet on CPU."""
+def tache_auto_quality(exam_id=None):
+    """Evaluate OP instances with FTHNet, then queue segmentation."""
     from .models import Exam, ImageQualityAssessment
 
     exams = Exam.objects.filter(
@@ -1112,7 +1192,10 @@ def tache_auto_quality():
         study_instance_uid__isnull=True,
     ).exclude(
         study_instance_uid__exact='',
-    )[:10]
+    )
+    if exam_id is not None:
+        exams = exams.filter(pk=exam_id)
+    exams = exams[:10]
 
     if not exams:
         return {'status': 'no_pending_exams'}
@@ -1223,13 +1306,16 @@ def tache_auto_quality():
 
     # A quality failure does not block the existing clinical segmentation.
     if processed:
-        tache_auto_segmentation.delay()
+        if exam_id is not None:
+            tache_auto_segmentation.delay(exam_id)
+        else:
+            tache_auto_segmentation.delay()
 
     return {'processed': processed, 'images_analyzed': images_analyzed}
 
 
 @shared_task(name='ophtalmo.tasks.tache_auto_segmentation')
-def tache_auto_segmentation():
+def tache_auto_segmentation(exam_id=None):
     """
     Parcourt les examens OP en segmentation_status='pending' et déclenche
     la segmentation MONAI Label (OD/OC, vaisseaux, lésions), la classification
@@ -1278,7 +1364,10 @@ def tache_auto_segmentation():
         study_instance_uid__isnull=True,
     ).exclude(
         study_instance_uid__exact='',
-    )[:10]
+    )
+    if exam_id is not None:
+        exams = exams.filter(pk=exam_id)
+    exams = exams[:10]
 
     if not exams:
         cache.delete(lock_key)
@@ -1662,6 +1751,7 @@ def tache_auto_segmentation():
                 "per_eye": per_eye,
                 "reports_by_eye": {},
                 "report_generation_status": "pending",
+                "report_generation_task_queued": True,
                 "report_generation_error": "",
             }
             
@@ -1735,15 +1825,17 @@ def tache_auto_segmentation():
         tache_distribution.delay()
 
     # Vérification s'il reste d'autres examens dans la file d'attente globale
-    more_pending = Exam.objects.filter(
-        segmentation_status='pending',
-        exam_type='Rétinographie',
-        quality_status__in=['completed', 'failed'],
-    ).exclude(
-        study_instance_uid__isnull=True,
-    ).exclude(
-        study_instance_uid__exact='',
-    ).exists()
+    more_pending = False
+    if exam_id is None:
+        more_pending = Exam.objects.filter(
+            segmentation_status='pending',
+            exam_type='Rétinographie',
+            quality_status__in=['completed', 'failed'],
+        ).exclude(
+            study_instance_uid__isnull=True,
+        ).exclude(
+            study_instance_uid__exact='',
+        ).exists()
     
     if more_pending:
         logger.info("[AutoSeg] Des examens en attente sont encore présents. Planification automatique du prochain lot de segmentation (countdown=2s).")

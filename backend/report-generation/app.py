@@ -73,13 +73,75 @@ def _generation_token_limit(max_new_tokens: int | None = None) -> int:
 
 
 def _clean_generated_text(text: str) -> str:
-    return re.sub(r"<unused\d+>", "", text).strip()
+    text = re.sub(r"<unused\d+>", "", text).strip()
+    return _dedupe_report_text(text)
+
+
+def _normalize_repeated_line(line: str) -> str:
+    line = re.sub(r"^[\-*]\s+", "", line.strip().lower())
+    line = re.sub(r"\*\*", "", line)
+    line = re.sub(r"\s+", " ", line)
+    return line.rstrip(" .;:")
+
+
+def _dedupe_report_text(text: str) -> str:
+    lines = []
+    seen_limitations = set()
+    in_limitations = False
+    limitation_count = 0
+    repeated_limitations = 0
+
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            if lines and lines[-1].strip():
+                lines.append("")
+            continue
+
+        heading = stripped.lstrip("# ").strip().lower()
+        if heading == "limitations":
+            in_limitations = True
+            limitation_count = 0
+            repeated_limitations = 0
+            lines.append(line)
+            continue
+        if stripped.startswith("#") and heading != "limitations":
+            in_limitations = False
+
+        if in_limitations and heading != "limitations":
+            normalized = _normalize_repeated_line(stripped)
+            if normalized in seen_limitations:
+                repeated_limitations += 1
+                if repeated_limitations >= 2:
+                    break
+                continue
+            seen_limitations.add(normalized)
+            limitation_count += 1
+            if limitation_count > 5:
+                break
+
+        lines.append(line)
+
+    return "\n".join(lines).strip()
 
 
 def _format_percent(value):
     if isinstance(value, (int, float)):
         return f"{value:.1%}" if value <= 1 else f"{value:.2f}%"
     return value if value not in (None, "") else "N/A"
+
+
+def _probability_items(probabilities):
+    if isinstance(probabilities, dict):
+        return probabilities.items()
+    if isinstance(probabilities, list):
+        items = []
+        for item in probabilities:
+            if isinstance(item, dict):
+                items.append((item.get("label", "?"), item.get("score")))
+        return items
+    return []
 
 
 def format_analysis_data(report_data: dict) -> str:
@@ -97,9 +159,8 @@ def format_analysis_data(report_data: dict) -> str:
         probabilities = cls.get("probabilities") or []
         if probabilities:
             lines.append("- Distribution des probabilites:")
-            for item in probabilities:
-                label = item.get("label", "?")
-                score = _format_percent(item.get("score"))
+            for label, score in _probability_items(probabilities):
+                score = _format_percent(score)
                 lines.append(f"  - {label}: {score}")
 
     if lesions:
@@ -126,8 +187,6 @@ def format_analysis_data(report_data: dict) -> str:
     if not lines:
         return "Aucune donnee quantitative fournie."
 
-    lines.append("## JSON brut fourni par les modeles")
-    lines.append(json.dumps(report_data, ensure_ascii=False, indent=2))
     return "\n".join(lines)
 
 
@@ -155,7 +214,10 @@ Regles importantes:
 - Utilise les sorties des modeles fournies ci-dessous, notamment dr_classification.
 - Ne modifie pas et n'invente pas les valeurs numeriques.
 - Si l'image contredit ou nuance les sorties des modeles, explique-le prudemment.
-- Mentionne les limites de l'analyse automatisee.
+- Mentionne les limites de l'analyse automatisee en 3 phrases maximum.
+- N'ecris jamais deux fois la meme phrase.
+- Termine le rapport immediatement apres la section Limitations.
+- Longueur cible: 250 a 450 mots.
 - Le rapport doit etre utile a un ophtalmologiste, pas au patient directement.
 
 {image_instruction}
@@ -179,7 +241,7 @@ Structure obligatoire avec des titres markdown:
 ## Recommandations
 ## Limitations
 
-Redige maintenant le rapport complet."""
+Redige maintenant le rapport complet, sans repetition."""
 
 
 def _analysis_prompt() -> str:
