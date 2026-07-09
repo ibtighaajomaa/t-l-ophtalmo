@@ -351,8 +351,8 @@ export async function fetchAnalysis(
 export async function generateReport(
   analysisData: AnalysisResult,
   patientId: string,
-  options?: { patientAge?: number; eye?: string; seriesUid?: string },
-): Promise<{ report_text: string; report_html: string }> {
+  options?: { patientAge?: number; eye?: string; seriesUid?: string; studyInstanceUid?: string },
+): Promise<{ report_text?: string; report_html?: string; status?: string; report_generation_status?: string }> {
   const res = await fetch(`${BASE}/generate-report/`, {
     method: "POST",
     headers: getHeaders(),
@@ -361,6 +361,7 @@ export async function generateReport(
       patient_id: patientId,
       patient_age: options?.patientAge,
       eye: options?.eye,
+      study_instance_uid: options?.studyInstanceUid,
       series_uid: options?.seriesUid,
     }),
   });

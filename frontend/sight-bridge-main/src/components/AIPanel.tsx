@@ -223,17 +223,22 @@ export function AIPanel({
       const result = await generateReport(activeAnalysis, patientId ?? studyInstanceUid ?? "inconnu", {
         patientAge,
         eye: eyeLabel,
+        studyInstanceUid,
         seriesUid: seriesInstanceUid,
       });
+      if (result.status === "queued") {
+        setError("Rapport IA mis en file. Il sera affiché dès qu'il est prêt.");
+        return;
+      }
       if (eyeAnalysis) {
-        setReportByEye((prev) => ({ ...prev, [activeEye]: result.report_text }));
+        setReportByEye((prev) => ({ ...prev, [activeEye]: result.report_text || "" }));
         setReportHtmlByEye((prev) => ({
           ...prev,
-          [activeEye]: result.report_html || result.report_text.replace(/\n/g, "<br>"),
+          [activeEye]: result.report_html || (result.report_text || "").replace(/\n/g, "<br>"),
         }));
       } else {
-        setReportText(result.report_text);
-        setReportHtml(result.report_html || result.report_text.replace(/\n/g, "<br>"));
+        setReportText(result.report_text || "");
+        setReportHtml(result.report_html || (result.report_text || "").replace(/\n/g, "<br>"));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Report generation failed");

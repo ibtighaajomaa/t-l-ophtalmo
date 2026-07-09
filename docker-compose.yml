@@ -178,6 +178,36 @@ services:
       - "smtp.rns.tn:193.95.84.21"
 
   # =========================
+  #  CELERY REPORT WORKER
+  # =========================
+  celery-report-worker:
+    build:
+      context: ./backend
+    container_name: celery-report-worker
+    restart: unless-stopped
+    command: celery -A config worker -l info -Q reports -c 1
+    environment:
+      DB_NAME: teleophtalmo
+      DB_USER: django
+      DB_PASSWORD: django_password
+      DB_HOST: postgres-django
+      DB_PORT: "5432"
+      KEYCLOAK_SERVER_URL: http://keycloak:8080/auth/
+      KEYCLOAK_REALM: HopitalRealm
+      KEYCLOAK_CLIENT_ID: django-backend
+      KEYCLOAK_CLIENT_SECRET: n3EKYvRxe3rkaP6eMoFYTHPSnlG9j4Pv
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      REPORT_GENERATOR_URL: http://report-generator:8010
+      ORTHANC_URL: http://orthanc-container:8042
+    depends_on:
+      - redis
+      - postgres-django
+      - report-generator
+    networks:
+      - teleophtalmo
+
+  # =========================
   #  CELERY BEAT (Scheduler)
   # =========================
   celery-beat:
@@ -360,6 +390,7 @@ services:
     environment:
       DEVICE: auto
       MEDGEMMA_MODEL_ID: google/medgemma-1.5-4b-it
+      MEDGEMMA_WARMUP: "true"
       HF_TOKEN: ${HF_TOKEN}
     volumes:
       - report-generator-hf-cache:/opt/hf-cache

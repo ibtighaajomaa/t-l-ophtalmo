@@ -31,6 +31,12 @@ class Exam(models.Model):
         COMPLETED = "completed", "Terminé"
         FAILED = "failed", "Échec"
 
+    class ReportGenerationStatus(models.TextChoices):
+        PENDING = "pending", "En attente"
+        IN_PROGRESS = "in_progress", "En cours"
+        COMPLETED = "completed", "Terminé"
+        FAILED = "failed", "Échec"
+
     study_instance_uid = models.CharField(max_length=255, unique=True, blank=True, null=True)
     patient_id = models.CharField(max_length=255, blank=True, default="")
     patient_name = models.CharField(max_length=255)
@@ -79,6 +85,14 @@ class Exam(models.Model):
     quality_score = models.FloatField(null=True, blank=True)
     quality_category = models.CharField(max_length=20, blank=True, default="")
     quality_error = models.TextField(blank=True, default="")
+
+    report_generation_status = models.CharField(
+        max_length=20,
+        choices=ReportGenerationStatus.choices,
+        default=ReportGenerationStatus.PENDING,
+    )
+    report_generation_error = models.TextField(blank=True, default="")
+    report_generated_at = models.DateTimeField(null=True, blank=True)
 
     is_reassigned_24h = models.BooleanField(default=False)
     reassigned_from = models.ForeignKey(

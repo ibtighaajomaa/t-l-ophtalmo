@@ -16,6 +16,7 @@ import requests
 from celery import shared_task
 from django.core.cache import cache
 from django.db import transaction
+from django.utils import timezone
 from .dicom_patient import patient_metadata
 
 logger = logging.getLogger(__name__)
@@ -712,6 +713,193 @@ def _failed_model_names(models_status):
     return failed
 
 
+def _set_exam_report_status(exam, status, error=""):
+    exam.report_generation_status = status
+    exam.report_generation_error = error or ""
+    if status == "completed":
+        exam.report_generated_at = timezone.now()
+    update_fields = [
+        "report_generation_status",
+        "report_generation_error",
+        "report_generated_at",
+        "updated_at",
+    ]
+    exam.save(update_fields=update_fields)
+
+
+def _merge_analysis_report_status(study_uid, **updates):
+    from .models import AnalysisReport
+
+    analysis_report = AnalysisReport.objects.filter(series_instance_uid=study_uid).first()
+    if not analysis_report:
+        return None
+    report_json = analysis_report.report_json or {}
+    report_json.update(updates)
+    analysis_report.report_json = report_json
+    analysis_report.save(update_fields=["report_json"])
+    return analysis_report
+
+
+@shared_task(
+    name='ophtalmo.tasks.tache_generate_ai_report',
+    bind=True,
+    queue='reports',
+    autoretry_for=(requests.RequestException,),
+    retry_backoff=True,
+    retry_kwargs={'max_retries': 2},
+)
+def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
+    """
+    Generate and persist the MedGemma report without blocking segmentation or UI.
+    """
+    from .analysis_utils import aggregate_per_eye, worst_dr_confidence
+    from .models import AnalysisReport, Exam, MedicalReport, MedicalReportVersion
+    from .report_utils import build_ai_report_text
+
+    exam = Exam.objects.get(pk=exam_id)
+    study_uid = study_uid or exam.study_instance_uid
+    lookup_uids = [uid for uid in (study_uid, _resolve_orthanc_id(study_uid)) if uid]
+    analysis_report = AnalysisReport.objects.filter(series_instance_uid__in=lookup_uids).first()
+
+    if not analysis_report:
+        message = "Analyse IA introuvable pour générer le rapport."
+        _set_exam_report_status(exam, "failed", message)
+        return {"status": "failed", "error": message}
+
+    report_json = analysis_report.report_json or {}
+    if not force and report_json.get("report_generation_status") == "completed":
+        _set_exam_report_status(exam, "completed", "")
+        return {"status": "completed", "skipped": True}
+
+    _set_exam_report_status(exam, "in_progress", "")
+    _merge_analysis_report_status(
+        analysis_report.series_instance_uid,
+        report_generation_status="in_progress",
+        report_generation_error="",
+    )
+
+    per_eye = report_json.get("per_eye") or aggregate_per_eye(report_json.get("series_reports") or {})
+    if not per_eye:
+        message = "Aucune donnée par oeil disponible pour générer le rapport."
+        _set_exam_report_status(exam, "failed", message)
+        _merge_analysis_report_status(
+            analysis_report.series_instance_uid,
+            report_generation_status="failed",
+            report_generation_error=message,
+        )
+        return {"status": "failed", "error": message}
+
+    reports_by_eye = {}
+    eye_texts = []
+    report_errors = []
+    patient_id = exam.patient_id or "inconnu"
+
+    for side in ("right", "left"):
+        eye_report = per_eye.get(side)
+        if not eye_report:
+            continue
+        eye_label = "Œil droit" if side == "right" else "Œil gauche"
+        try:
+            generated = build_ai_report_text(
+                patient_id,
+                eye_report,
+                eye_label,
+                patient_age=exam.patient_age,
+            )
+        except Exception as exc:
+            report_errors.append(f"{eye_label}: {str(exc)[:200]}")
+            logger.warning(
+                "[Examen %s] Echec de génération du rapport pour %s: %s",
+                exam.id,
+                eye_label,
+                exc,
+                exc_info=True,
+            )
+            continue
+
+        reports_by_eye[side] = {
+            "eye": eye_label,
+            "report_text": generated.get("report_text") or "",
+            "report_html": generated.get("report_html") or "",
+            "report_json": generated.get("report_json") or {},
+            "status": "generated",
+        }
+        text = generated.get("report_text") or ""
+        if text:
+            eye_texts.append(f"{eye_label}:\n{text}")
+
+    if not eye_texts:
+        message = "; ".join(report_errors) or "Le générateur de rapport a renvoyé un contenu vide."
+        _set_exam_report_status(exam, "failed", message)
+        _merge_analysis_report_status(
+            analysis_report.series_instance_uid,
+            reports_by_eye=reports_by_eye,
+            report_generation_status="failed",
+            report_generation_error=message,
+        )
+        return {"status": "failed", "error": message}
+
+    combined = "\n\n".join(eye_texts)
+    ai_report_data = {
+        "per_eye": per_eye,
+        "reports_by_eye": reports_by_eye,
+    }
+    report = (
+        MedicalReport.objects.filter(
+            examination_id=str(exam.id),
+            status=MedicalReport.Status.AI_GENERATED,
+        )
+        .order_by("-created_at")
+        .first()
+    )
+
+    if report:
+        report.patient_id = patient_id
+        report.ai_content = combined
+        report.ai_confidence = worst_dr_confidence(per_eye)
+        report.ai_report_data = ai_report_data
+        report.save(
+            update_fields=[
+                "patient_id",
+                "ai_content",
+                "ai_confidence",
+                "ai_report_data",
+                "updated_at",
+            ]
+        )
+        MedicalReportVersion.objects.filter(report=report, version_number=1).delete()
+    else:
+        report = MedicalReport.objects.create(
+            patient_id=patient_id,
+            examination_id=str(exam.id),
+            generated_by_ai=True,
+            status=MedicalReport.Status.AI_GENERATED,
+            ai_content=combined,
+            ai_confidence=worst_dr_confidence(per_eye),
+            ai_report_data=ai_report_data,
+        )
+
+    MedicalReportVersion.objects.create(
+        report=report,
+        version_number=1,
+        content=combined,
+        version_type=MedicalReportVersion.VersionType.AI,
+    )
+
+    status = "completed"
+    error = "; ".join(report_errors)
+    _set_exam_report_status(exam, "completed", error)
+    _merge_analysis_report_status(
+        analysis_report.series_instance_uid,
+        per_eye=per_eye,
+        reports_by_eye=reports_by_eye,
+        report_generation_status=status,
+        report_generation_error=error,
+    )
+    logger.info("[Examen %s] Rapport IA MedGemma enregistré en base.", exam.id)
+    return {"status": status, "medical_report_id": report.id}
+
+
 @shared_task(name='ophtalmo.tasks.tache_distribution')
 def tache_distribution():
     """
@@ -1052,9 +1240,8 @@ def tache_auto_segmentation():
     Après la segmentation, déclenche la distribution pour que l'examen
     passe de 'En attente' → 'En cours' avec assignation à un médecin.
     """
-    from .analysis_utils import aggregate_per_eye, worst_dr_confidence
-    from .models import AnalysisReport, Exam, MedicalReport, MedicalReportVersion
-    from .report_utils import build_ai_report_text
+    from .analysis_utils import aggregate_per_eye
+    from .models import AnalysisReport, Exam
 
     MAX_RETRIES = 3
     SEG_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
@@ -1461,114 +1648,10 @@ def tache_auto_segmentation():
         # ==========================================
         per_eye = aggregate_per_eye(series_reports)
         if per_eye:
-            logger.info(f"[Examen {exam.id}] Données d'IA agrégées avec succès par oeil. Début de la rédaction du projet de compte rendu...")
-            reports_by_eye = {}
-            report_generation_status = "skipped"
-            report_generation_error = ""
-            try:
-                eye_texts = []
-                report_errors = []
-                for side in ("right", "left"):
-                    eye_report = per_eye.get(side)
-                    if not eye_report:
-                        continue
-                    eye_label = "Œil droit" if side == "right" else "Œil gauche"
-                    
-                    try:
-                        logger.debug(f"[Examen {exam.id}] Génération du compte rendu IA écrit pour l'œil : {eye_label}")
-                        generated = build_ai_report_text(
-                            expected_patient_id or exam.patient_id,
-                            eye_report,
-                            eye_label,
-                            patient_age=exam.patient_age,
-                        )
-                    except Exception as e:
-                        report_errors.append(f"{eye_label}: {str(e)[:200]}")
-                        logger.warning(
-                            f"[Examen {exam.id}] Échec de génération de texte pour {eye_label} : {str(e)}",
-                            exc_info=True
-                        )
-                        continue
-
-                    reports_by_eye[side] = {
-                        "eye": eye_label,
-                        "report_text": generated.get("report_text") or "",
-                        "report_html": generated.get("report_html") or "",
-                        "report_json": generated.get("report_json") or {},
-                        "status": "generated",
-                    }
-                    text = generated.get("report_text") or ""
-                    if text:
-                        eye_texts.append(f"{eye_label}:\n{text}")
-
-                if eye_texts:
-                    report_generation_status = (
-                        "completed" if len(reports_by_eye) == len(per_eye) and not report_errors else "partial"
-                    )
-                    report_generation_error = "; ".join(report_errors)
-                    combined = "\n\n".join(eye_texts)
-                    ai_report_data = {
-                        "per_eye": per_eye,
-                        "reports_by_eye": reports_by_eye,
-                    }
-
-                    # Enregistrement ou mise à jour du MedicalReport en base de données
-                    report = (
-                        MedicalReport.objects.filter(
-                            examination_id=str(exam.id),
-                            status=MedicalReport.Status.AI_GENERATED,
-                        )
-                        .order_by("-created_at")
-                        .first()
-                    )
-                    
-                    if report:
-                        logger.info(f"[Examen {exam.id}] Mise à jour du MedicalReport existant (ID: {report.id}).")
-                        report.patient_id = expected_patient_id or exam.patient_id
-                        report.ai_content = combined
-                        report.ai_confidence = worst_dr_confidence(per_eye)
-                        report.ai_report_data = ai_report_data
-                        report.save(
-                            update_fields=[
-                                "patient_id",
-                                "ai_content",
-                                "ai_confidence",
-                                "ai_report_data",
-                                "updated_at",
-                            ]
-                        )
-                        # On supprime la v1 existante pour la remplacer par la nouvelle version d'IA fraîchement générée
-                        MedicalReportVersion.objects.filter(report=report, version_number=1).delete()
-                    else:
-                        logger.info(f"[Examen {exam.id}] Création d'un nouveau MedicalReport d'analyse automatique.")
-                        report = MedicalReport.objects.create(
-                            patient_id=expected_patient_id or exam.patient_id,
-                            examination_id=str(exam.id),
-                            generated_by_ai=True,
-                            status=MedicalReport.Status.AI_GENERATED,
-                            ai_content=combined,
-                            ai_confidence=worst_dr_confidence(per_eye),
-                            ai_report_data=ai_report_data,
-                        )
-
-                    # Création de la version historique officielle n°1 du rapport (Généré par l'IA)
-                    MedicalReportVersion.objects.create(
-                        report=report,
-                        version_number=1,
-                        content=combined,
-                        version_type=MedicalReportVersion.VersionType.AI,
-                    )
-                    logger.info(f"[Examen {exam.id}] Version 1 (AI) du compte rendu médical enregistrée en base de données.")
-                else:
-                    report_generation_status = "failed"
-                    report_generation_error = (
-                        "; ".join(report_errors) or "Le générateur de rapport a renvoyé un contenu vide."
-                    )
-                    logger.warning(f"[Examen {exam.id}] Rédaction de compte rendu annulée ou vide : {report_generation_error}")
-            except Exception as e:
-                report_generation_status = "failed"
-                report_generation_error = str(e)[:500]
-                logger.error(f"[Examen {exam.id}] Échec critique lors de l'écriture du rapport d'IA : {str(e)}", exc_info=True)
+            logger.info(
+                f"[Examen {exam.id}] Données d'IA agrégées par oeil. "
+                "Le compte rendu MedGemma sera généré en arrière-plan."
+            )
 
             # Enregistrement des données JSON techniques d'analyse globale
             report_json = {
@@ -1577,9 +1660,9 @@ def tache_auto_segmentation():
                 "study_instance_uid": study_id,
                 "series_reports": series_reports,
                 "per_eye": per_eye,
-                "reports_by_eye": reports_by_eye,
-                "report_generation_status": report_generation_status,
-                "report_generation_error": report_generation_error,
+                "reports_by_eye": {},
+                "report_generation_status": "pending",
+                "report_generation_error": "",
             }
             
             analysis_report = AnalysisReport.objects.filter(series_instance_uid=study_id).first()
@@ -1595,6 +1678,21 @@ def tache_auto_segmentation():
                     user=None,
                     report_json=report_json,
                 )
+
+            exam.report_generation_status = "pending"
+            exam.report_generation_error = ""
+            exam.report_generated_at = None
+            exam.save(update_fields=[
+                "report_generation_status",
+                "report_generation_error",
+                "report_generated_at",
+                "updated_at",
+            ])
+            tache_generate_ai_report.apply_async(
+                args=[exam.id, study_id],
+                queue="reports",
+            )
+            logger.info(f"[Examen {exam.id}] Tâche de génération de rapport IA mise en file.")
 
         # ==========================================
         # ÉTAPE 7 : Finalisation de l'état de l'examen

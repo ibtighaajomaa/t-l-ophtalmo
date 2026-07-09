@@ -1069,8 +1069,14 @@ def latest_analysis(request):
         'stored_study_uid': report.series_instance_uid,
         'analysis': report_json.get('per_eye') or report_json,
         'reports_by_eye': reports_by_eye,
-        'report_generation_status': report_json.get('report_generation_status'),
-        'report_generation_error': report_json.get('report_generation_error', ''),
+        'report_generation_status': (
+            report_json.get('report_generation_status')
+            or (exam.report_generation_status if exam else None)
+        ),
+        'report_generation_error': (
+            report_json.get('report_generation_error')
+            or (exam.report_generation_error if exam else '')
+        ),
         'medical_report': (
             MedicalReportSerializer(medical_report).data if medical_report else None
         ),
@@ -1083,6 +1089,7 @@ def latest_analysis(request):
 def generate_report(request):
     report_data = request.data.get('report_data')
     patient_id = request.data.get('patient_id', 'inconnu')
+    study_uid = request.data.get('study_instance_uid')
     series_uid = request.data.get('series_uid')
     if not report_data:
         return Response(
@@ -1090,105 +1097,82 @@ def generate_report(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    patient_age = request.data.get('patient_age')
-    eye = request.data.get('eye', 'Non spécifié')
-    report_generator_url = os.environ.get(
-        'REPORT_GENERATOR_URL', 'http://report-generator:8010'
-    )
+    exam = None
+    if request.data.get('exam_id'):
+        exam = Exam.objects.filter(pk=request.data.get('exam_id')).first()
+    if not exam and study_uid:
+        exam = Exam.objects.filter(study_instance_uid=study_uid).first()
+    if not exam and series_uid:
+        exam = (
+            Exam.objects.filter(image_quality_results__series_instance_uid=series_uid)
+            .distinct()
+            .first()
+        )
+    if not exam and patient_id:
+        exam = Exam.objects.filter(patient_id=patient_id).order_by('-created_at').first()
 
-    if series_uid:
+    if not exam:
+        return Response(
+            {'error': 'Unable to find the exam for background report generation'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    study_uid = study_uid or exam.study_instance_uid
+    if not study_uid:
+        return Response(
+            {'error': 'study_instance_uid is required for background report generation'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    report = AnalysisReport.objects.filter(series_instance_uid=study_uid).first()
+    if not report:
         try:
-            find_resp = requests.post(
-                f'{ORTHANC_URL}/tools/find',
-                json={"Level": "Series", "Query": {"SeriesInstanceUID": series_uid}},
-                timeout=10,
-            )
-            if find_resp.status_code == 200 and find_resp.json():
-                orthanc_series_id = find_resp.json()[0]
-                series_detail = requests.get(
-                    f'{ORTHANC_URL}/series/{orthanc_series_id}', timeout=10
-                )
-                if series_detail.status_code == 200:
-                    instances = series_detail.json().get('Instances', [])
-                    if instances:
-                        image_resp = requests.get(
-                            f'{ORTHANC_URL}/instances/{instances[0]}/rendered',
-                            timeout=30,
-                        )
-                        if image_resp.status_code == 200:
-                            form_data = {
-                                'patient_id': patient_id,
-                                'eye': eye,
-                                'monai_data': json.dumps(report_data),
-                            }
-                            if patient_age not in (None, ''):
-                                form_data['patient_age'] = patient_age
-                            medgemma_resp = requests.post(
-                                f'{report_generator_url}/generate',
-                                files={
-                                    'file': (
-                                        'fundus.png',
-                                        image_resp.content,
-                                        image_resp.headers.get('Content-Type', 'image/png'),
-                                    )
-                                },
-                                data=form_data,
-                                timeout=600,
-                            )
-                            if medgemma_resp.status_code == 200:
-                                result = medgemma_resp.json()
-                                return Response({
-                                    'report_text': result.get('report_text', ''),
-                                    'report_html': result.get('report_html', ''),
-                                    'report_json': result.get('report_json', {
-                                        'report_engine': 'medgemma-1.5-4b-it',
-                                        'used_image': True,
-                                    }),
-                                })
-                            logger.warning(
-                                f"MedGemma /generate returned {medgemma_resp.status_code}: "
-                                f"{medgemma_resp.text[:500]}"
-                            )
-        except Exception as e:
-            logger.warning(f"MedGemma image report generation failed: {e}")
-
-    try:
-        fallback_resp = requests.post(
-            f'{report_generator_url}/report',
-            json={
-                'patient_id': patient_id,
-                'patient_age': patient_age,
-                'eye': eye,
-                'report_data': report_data,
+            per_eye = aggregate_per_eye({'manual': report_data})
+        except Exception:
+            per_eye = {}
+        if not per_eye and isinstance(report_data, dict):
+            side = 'right' if 'right' in str(request.data.get('eye', '')).lower() else 'left'
+            per_eye = {side: report_data}
+        report = AnalysisReport.objects.create(
+            series_instance_uid=study_uid,
+            user=request.user if request.user.is_authenticated else None,
+            report_json={
+                'source': 'manual_report_queue',
+                'status': 'AI_ANALYZED',
+                'study_instance_uid': study_uid,
+                'series_reports': {'manual': report_data},
+                'per_eye': per_eye,
+                'reports_by_eye': {},
+                'report_generation_status': 'pending',
+                'report_generation_error': '',
             },
-            timeout=600,
-        )
-        if fallback_resp.status_code == 200:
-            result = fallback_resp.json()
-            report = result.get('report', result)
-            return Response({
-                'report_text': report.get('report_text', ''),
-                'report_html': report.get('report_html', ''),
-                'report_json': report.get('report_json', {
-                    'report_engine': 'medgemma-1.5-4b-it',
-                    'used_image': False,
-                }),
-            })
-        return Response(
-            {'error': f'Report generator service returned {fallback_resp.status_code}'},
-            status=status.HTTP_502_BAD_GATEWAY,
-        )
-    except requests.exceptions.ConnectionError:
-        return Response(
-            {'error': 'Report generator service unreachable'},
-            status=status.HTTP_503_SERVICE_UNAVAILABLE,
-        )
-    except Exception as e:
-        return Response(
-            {'error': str(e)},
-            status=status.HTTP_502_BAD_GATEWAY,
         )
 
+    exam.report_generation_status = Exam.ReportGenerationStatus.PENDING
+    exam.report_generation_error = ''
+    exam.report_generated_at = None
+    exam.save(update_fields=[
+        'report_generation_status',
+        'report_generation_error',
+        'report_generated_at',
+        'updated_at',
+    ])
+
+    from .tasks import tache_generate_ai_report
+
+    async_result = tache_generate_ai_report.apply_async(
+        args=[exam.id, report.series_instance_uid, True],
+        queue='reports',
+    )
+    return Response(
+        {
+            'status': 'queued',
+            'task_id': async_result.id,
+            'report_generation_status': 'pending',
+            'message': 'AI report generation queued',
+        },
+        status=status.HTTP_202_ACCEPTED,
+    )
 
 @api_view(['GET', 'POST'])
 @authentication_classes([KeycloakAuthentication])

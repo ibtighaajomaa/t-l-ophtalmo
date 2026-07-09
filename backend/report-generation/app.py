@@ -355,6 +355,16 @@ def health():
     }
 
 
+@app.on_event("startup")
+def warmup_model():
+    if os.environ.get("MEDGEMMA_WARMUP", "true").lower() not in {"1", "true", "yes"}:
+        return
+    try:
+        medgemma.load()
+    except Exception as exc:
+        print(f"MedGemma warmup failed: {exc}")
+
+
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...)):
     image = _decode_image(await file.read())

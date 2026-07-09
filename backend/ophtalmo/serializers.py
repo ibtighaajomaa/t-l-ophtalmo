@@ -36,6 +36,8 @@ class ExamSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
             'quality_status', 'quality_score', 'quality_category',
             'quality_error', 'image_quality_results',
+            'report_generation_status', 'report_generation_error',
+            'report_generated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'assigned_to_name', 'created_by_name', 'reassigned_from_name']
 
