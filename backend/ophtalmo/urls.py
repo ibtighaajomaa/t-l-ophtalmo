@@ -4,6 +4,10 @@ from . import views
 urlpatterns = [
     path('api/exams/', views.exam_list, name='exam-list'),
     path('api/exams/stats/', views.exam_stats, name='exam-stats'),
+    path('api/dmi/exams/', views.dmi_exam_upsert, name='dmi-exam-upsert'),
+    path('api/dmi/exams/<str:numero_examen>/acquisition-dicom/', views.dmi_exam_acquisition_dicom, name='dmi-exam-acquisition-dicom'),
+    path('api/dmi/exams/<str:numero_examen>/compte-rendu/', views.dmi_exam_compte_rendu, name='dmi-exam-compte-rendu'),
+    path('api/dmi/exams/<str:numero_examen>/status/', views.dmi_exam_status, name='dmi-exam-status'),
     path('api/exams/sync-orthanc/', views.sync_orthanc, name='exam-sync-orthanc'),
     path('api/exams/orthanc-webhook/', views.orthanc_webhook, name='orthanc-webhook'),
     path('api/exams/monai-webhook/', views.monai_inference_webhook, name='monai-inference-webhook'),

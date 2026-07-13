@@ -20,6 +20,13 @@ from .serializers import (
 from users.authentication import KeycloakAuthentication
 from .dicom_patient import patient_metadata
 from .analysis_utils import aggregate_per_eye
+from .dmi_integration import (
+    audit_dmi_call,
+    build_compte_rendu_payload,
+    build_dicom_acquisition_payload,
+    is_valid_dmi_request,
+    upsert_exam_from_dmi,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +276,196 @@ def exam_stats(request):
         'Interprété': interprete,
         'Urgent': urgent,
     })
+
+
+def _dmi_unauthorized_response():
+    return Response(
+        {'error': 'Token DMI manquant ou invalide'},
+        status=status.HTTP_401_UNAUTHORIZED,
+    )
+
+
+def _dmi_response(request, body, http_status, numero_examen="", error_message=""):
+    audit_dmi_call(
+        request,
+        numero_examen=numero_examen,
+        success=200 <= http_status < 400,
+        status_code=http_status,
+        error_message=error_message,
+    )
+    return Response(body, status=http_status)
+
+
+def _get_dmi_exam_or_404(numero_examen):
+    return Exam.objects.filter(dmi_exam_id=numero_examen).first()
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def dmi_exam_upsert(request):
+    """
+    Endpoint consommé par le DMI pour créer ou mettre à jour un examen
+    dans la worklist Télé-Ophtalmo.
+    """
+    if not is_valid_dmi_request(request):
+        audit_dmi_call(
+            request,
+            numero_examen=request.data.get('numero_examen', '') if isinstance(request.data, dict) else '',
+            success=False,
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error_message='Token DMI manquant ou invalide',
+        )
+        return _dmi_unauthorized_response()
+
+    try:
+        exam, created = upsert_exam_from_dmi(request.data)
+    except ValueError as exc:
+        return _dmi_response(
+            request,
+            {'error': str(exc)},
+            status.HTTP_400_BAD_REQUEST,
+            numero_examen=request.data.get('numero_examen', '') if isinstance(request.data, dict) else '',
+            error_message=str(exc),
+        )
+    except Exception as exc:
+        logger.exception("Erreur upsert DMI examen")
+        return _dmi_response(
+            request,
+            {'error': 'Impossible de créer ou mettre à jour l’examen', 'details': str(exc)},
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            numero_examen=request.data.get('numero_examen', '') if isinstance(request.data, dict) else '',
+            error_message=str(exc),
+        )
+
+    return _dmi_response(
+        request,
+        {
+            'created': created,
+            'exam': ExamSerializer(exam).data,
+        },
+        status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        numero_examen=exam.dmi_exam_id,
+    )
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def dmi_exam_acquisition_dicom(request, numero_examen):
+    """Endpoint lu par le DMI pour récupérer l'acquisition DICOM et la qualité."""
+    if not is_valid_dmi_request(request):
+        audit_dmi_call(
+            request,
+            numero_examen=numero_examen,
+            success=False,
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error_message='Token DMI manquant ou invalide',
+        )
+        return _dmi_unauthorized_response()
+
+    exam = _get_dmi_exam_or_404(numero_examen)
+    if not exam:
+        return _dmi_response(
+            request,
+            {'error': 'Examen introuvable'},
+            status.HTTP_404_NOT_FOUND,
+            numero_examen=numero_examen,
+            error_message='Examen introuvable',
+        )
+
+    return _dmi_response(
+        request,
+        build_dicom_acquisition_payload(exam),
+        status.HTTP_200_OK,
+        numero_examen=exam.dmi_exam_id,
+    )
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def dmi_exam_compte_rendu(request, numero_examen):
+    """Endpoint lu par le DMI pour récupérer le compte rendu final signé."""
+    if not is_valid_dmi_request(request):
+        audit_dmi_call(
+            request,
+            numero_examen=numero_examen,
+            success=False,
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error_message='Token DMI manquant ou invalide',
+        )
+        return _dmi_unauthorized_response()
+
+    exam = _get_dmi_exam_or_404(numero_examen)
+    if not exam:
+        return _dmi_response(
+            request,
+            {'error': 'Examen introuvable'},
+            status.HTTP_404_NOT_FOUND,
+            numero_examen=numero_examen,
+            error_message='Examen introuvable',
+        )
+
+    report_filters = Q(examination_id=exam.dmi_exam_id)
+    if exam.study_instance_uid:
+        report_filters |= Q(examination_id=exam.study_instance_uid)
+    if exam.patient_id:
+        report_filters |= Q(patient_id=exam.patient_id)
+
+    report = (
+        MedicalReport.objects.filter(report_filters, status=MedicalReport.Status.SIGNED)
+        .order_by('-signed_at', '-updated_at')
+        .first()
+    )
+    if not report:
+        return _dmi_response(
+            request,
+            {'error': 'Compte rendu final signé non disponible'},
+            status.HTTP_404_NOT_FOUND,
+            numero_examen=exam.dmi_exam_id,
+            error_message='Compte rendu final signé non disponible',
+        )
+
+    return _dmi_response(
+        request,
+        build_compte_rendu_payload(exam, report),
+        status.HTTP_200_OK,
+        numero_examen=exam.dmi_exam_id,
+    )
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def dmi_exam_status(request, numero_examen):
+    """Endpoint lu par le DMI pour récupérer uniquement le statut local."""
+    if not is_valid_dmi_request(request):
+        audit_dmi_call(
+            request,
+            numero_examen=numero_examen,
+            success=False,
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error_message='Token DMI manquant ou invalide',
+        )
+        return _dmi_unauthorized_response()
+
+    exam = _get_dmi_exam_or_404(numero_examen)
+    if not exam:
+        return _dmi_response(
+            request,
+            {'error': 'Examen introuvable'},
+            status.HTTP_404_NOT_FOUND,
+            numero_examen=numero_examen,
+            error_message='Examen introuvable',
+        )
+
+    return _dmi_response(
+        request,
+        {
+            'numero_examen': exam.dmi_exam_id,
+            'statut': exam.status,
+            'updated_at': exam.updated_at.isoformat() if exam.updated_at else None,
+        },
+        status.HTTP_200_OK,
+        numero_examen=exam.dmi_exam_id,
+    )
 
 
 ORTHANC_URL = os.environ.get('ORTHANC_URL', 'http://orthanc-container:8042')

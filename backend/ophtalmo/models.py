@@ -43,6 +43,16 @@ class Exam(models.Model):
     patient_birth_date = models.DateField(blank=True, null=True)
     patient_age = models.IntegerField(blank=True, null=True)
     patient_history = models.TextField(blank=True, default="")
+    dmi_exam_id = models.CharField(max_length=100, blank=True, default="", db_index=True)
+    dmi_service_code = models.CharField(max_length=50, blank=True, default="")
+    dmi_service_name = models.CharField(max_length=255, blank=True, default="")
+    dmi_provenance = models.CharField(max_length=100, blank=True, default="")
+    dmi_matricule = models.CharField(max_length=100, blank=True, default="")
+    dmi_date_episode = models.DateField(blank=True, null=True)
+    dmi_medecin_referent_code = models.CharField(max_length=100, blank=True, default="")
+    dmi_medecin_referent_nom = models.CharField(max_length=255, blank=True, default="")
+    dmi_code_ccam = models.CharField(max_length=50, blank=True, default="")
+    clinical_info = models.JSONField(null=True, blank=True)
     exam_type = models.CharField(max_length=50, choices=ExamType.choices, default=ExamType.RETINOGRAPHIE)
     date = models.DateField()
     priority = models.CharField(max_length=20, choices=Priority.choices, default=Priority.NORMAL)
@@ -111,6 +121,27 @@ class Exam(models.Model):
 
     def __str__(self):
         return f"{self.patient_name} — {self.exam_type} ({self.date})"
+
+
+class DMIAuditLog(models.Model):
+    endpoint = models.CharField(max_length=255)
+    method = models.CharField(max_length=10)
+    caller_ip = models.CharField(max_length=64, blank=True, default="")
+    numero_examen = models.CharField(max_length=100, blank=True, default="", db_index=True)
+    success = models.BooleanField(default=False)
+    status_code = models.PositiveIntegerField(default=0)
+    error_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["numero_examen", "created_at"]),
+            models.Index(fields=["success", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.method} {self.endpoint} {self.numero_examen or '-'} ({self.status_code})"
 
 
 class ImageQualityAssessment(models.Model):

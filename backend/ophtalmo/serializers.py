@@ -28,6 +28,10 @@ class ExamSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'study_instance_uid', 'patient_id', 'patient_name',
             'patient_birth_date', 'patient_age', 'patient_history',
+            'dmi_exam_id', 'dmi_service_code', 'dmi_service_name',
+            'dmi_provenance', 'dmi_matricule', 'dmi_date_episode',
+            'dmi_medecin_referent_code', 'dmi_medecin_referent_nom',
+            'dmi_code_ccam', 'clinical_info',
             'exam_type', 'date', 'priority', 'status',
             'assigned_to', 'assigned_to_name',
             'created_by', 'created_by_name',

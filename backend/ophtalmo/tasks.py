@@ -1847,3 +1847,4 @@ def tache_auto_segmentation(exam_id=None):
     cache.delete(lock_key)
     logger.info("[AutoSeg] Libération du verrou. Fin d'exécution de la tâche.")
     return {'processed': processed}
+

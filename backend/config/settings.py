@@ -210,6 +210,11 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() in ['true', '1', 't', 'y', 'yes']
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'support@teleophta.fr')
 
+# =========================
+#  DMI API INTEGRATION
+# =========================
+DMI_API_TOKEN = os.environ.get('DMI_API_TOKEN', '')
+
 # Keycloak settings
 KC_ADMIN_URL = "http://172.20.1.188/auth"
 KC_REALM = "HopitalRealm"
