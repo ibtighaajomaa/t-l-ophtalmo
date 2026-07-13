@@ -300,12 +300,13 @@ def _get_dmi_exam_or_404(numero_examen):
     return Exam.objects.filter(dmi_exam_id=numero_examen).first()
 
 
-@api_view(['POST'])
+@api_view(['POST', 'PUT', 'PATCH'])
 @permission_classes([AllowAny])
 def dmi_exam_upsert(request):
     """
     Endpoint consommé par le DMI pour créer ou mettre à jour un examen
     dans la worklist Télé-Ophtalmo.
+    POST crée ou met à jour. PUT/PATCH sont acceptés pour les mises à jour.
     """
     if not is_valid_dmi_request(request):
         audit_dmi_call(
