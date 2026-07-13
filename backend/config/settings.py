@@ -26,7 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-e%zjcmvjmkmxt*mel5bz4u=-7@+sbrnpd)vp=)_1$w$rg=5c7z'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DEBUG', 'False').lower() in ['true', '1', 't', 'y', 'yes']
 
 ALLOWED_HOSTS = ['*']
 
@@ -62,7 +62,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-e%zjcmvjmkmxt*mel5bz4u=-7@+sbrnpd)vp=)_1$w$rg=5c7z'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DEBUG', 'False').lower() in ['true', '1', 't', 'y', 'yes']
 
 ALLOWED_HOSTS = ['*']
 

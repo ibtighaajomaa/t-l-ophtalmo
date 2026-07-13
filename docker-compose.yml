@@ -99,6 +99,7 @@ services:
       DB_PASSWORD: django_password
       DB_HOST: postgres-django
       DB_PORT: "5432"
+      DEBUG: "False"
       KEYCLOAK_SERVER_URL: http://keycloak:8080/auth/
       KEYCLOAK_REALM: HopitalRealm
       KEYCLOAK_CLIENT_ID: django-backend
