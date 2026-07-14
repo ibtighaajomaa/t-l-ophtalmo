@@ -126,6 +126,12 @@ function CompteRenduPage() {
       const updated = await updateMedicalReport(report.id, html, {
         studyInstanceUid: exam?.studyInstanceUid,
       });
+      window.dispatchEvent(
+        new CustomEvent("teleoph.medical-report-updated", {
+          detail: { examinationId: updated.examination_id, reportId: updated.id },
+        }),
+      );
+      localStorage.setItem("teleoph.medical-report-updated", String(Date.now()));
       setReport(updated);
       const normalized = normalizeReportHtml(reportContent(updated) || html);
       setEditorHtml(normalized);

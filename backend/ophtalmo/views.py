@@ -1238,7 +1238,6 @@ def latest_analysis(request):
         medical_report = (
             MedicalReport.objects.filter(
                 examination_id=str(exam.id),
-                status=MedicalReport.Status.AI_GENERATED,
             )
             .order_by('-created_at')
             .first()
@@ -1247,7 +1246,6 @@ def latest_analysis(request):
         medical_report = (
             MedicalReport.objects.filter(
                 examination_id__in=lookup_uids,
-                status=MedicalReport.Status.AI_GENERATED,
             )
             .order_by('-created_at')
             .first()
@@ -1416,7 +1414,11 @@ def medical_report_list(request):
         qs = MedicalReport.objects.all()
         exam_id = request.query_params.get('examination_id')
         if exam_id:
-            qs = qs.filter(examination_id=exam_id)
+            lookup_ids = {exam_id}
+            exam = Exam.objects.filter(study_instance_uid=exam_id).first()
+            if exam:
+                lookup_ids.add(str(exam.id))
+            qs = qs.filter(examination_id__in=lookup_ids)
         limit = int(request.query_params.get('limit', 50))
         qs = qs[:limit]
         serializer = MedicalReportSerializer(qs, many=True)

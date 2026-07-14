@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import {
   Brain,
   Target,
@@ -12,7 +12,7 @@ import {
   Plus,
   MessageSquare,
 } from "lucide-react";
-import type { AnalysisResult, DoctorNote } from "@/lib/exam-api";
+import type { AnalysisResult, DoctorNote, MedicalReport } from "@/lib/exam-api";
 import type { EyeSide, PerEyeAnalysis } from "@/lib/exam-api";
 import {
   runAIAnalysis,
@@ -68,6 +68,24 @@ function normalizeDRProbabilities(probabilities: PerEyeAnalysis["dr_classificati
     });
 }
 
+function getReportContent(report: MedicalReport) {
+  return report.final_content || report.doctor_content || report.ai_content || "";
+}
+
+function toReportHtml(content: string) {
+  if (/<(h[1-6]|p|ul|ol|li|br|strong|b|em|i|u|div|section)\b/i.test(content)) {
+    return content;
+  }
+  return content.replace(/\n/g, "<br>");
+}
+
+function stripHtml(content: string) {
+  if (typeof document === "undefined") return content.replace(/<[^>]+>/g, " ");
+  const element = document.createElement("div");
+  element.innerHTML = content;
+  return element.textContent || element.innerText || "";
+}
+
 export function AIPanel({
   studyInstanceUid,
   seriesInstanceUid,
@@ -98,9 +116,29 @@ export function AIPanel({
     eyeAnalysis
       ? eyeAnalysis[activeEye] ?? null
       : (analysis as AnalysisResult | null);
-  const activeReportText = eyeAnalysis ? reportByEye[activeEye] ?? null : reportText;
-  const activeReportHtml = eyeAnalysis ? reportHtmlByEye[activeEye] ?? null : reportHtml;
+  const activeReportText = eyeAnalysis ? reportByEye[activeEye] ?? reportText : reportText;
+  const activeReportHtml = eyeAnalysis ? reportHtmlByEye[activeEye] ?? reportHtml : reportHtml;
   const drProbabilities = normalizeDRProbabilities(activeAnalysis?.dr_classification.probabilities);
+
+  const loadMedicalReport = useCallback(async () => {
+    if (!examinationId) return;
+    const reports = await fetchMedicalReports(examinationId.replace(/^EX-/, ""));
+    if (reports.length === 0) return;
+    const report = reports[0];
+    const content = getReportContent(report);
+    if (!content) return;
+    const html = toReportHtml(content);
+    const text = stripHtml(content);
+    const splitText = splitReportByEye(text);
+    setReportText(text);
+    setReportHtml(html);
+    setReportByEye(splitText);
+    setReportHtmlByEye(
+      Object.fromEntries(
+        Object.entries(splitText).map(([side, value]) => [side, toReportHtml(value)]),
+      ) as Partial<Record<EyeSide, string>>,
+    );
+  }, [examinationId]);
 
   useEffect(() => {
     if (!studyInstanceUid) return;
@@ -138,31 +176,27 @@ export function AIPanel({
   }, [studyInstanceUid]);
 
   useEffect(() => {
-    if (!examinationId) return;
-    let cancelled = false;
-    fetchMedicalReports(examinationId.replace(/^EX-/, ""))
-      .then((reports) => {
-        if (cancelled || reports.length === 0) return;
-        const report = reports[0];
-        if (report.ai_content) {
-          const splitText = splitReportByEye(report.ai_content);
-          setReportText(report.ai_content);
-          setReportHtml(report.ai_content.replace(/\n/g, "<br>"));
-          setReportByEye(splitText);
-          setReportHtmlByEye(
-            Object.fromEntries(
-              Object.entries(splitText).map(([side, text]) => [side, text.replace(/\n/g, "<br>")]),
-            ) as Partial<Record<EyeSide, string>>,
-          );
-        }
-      })
-      .catch(() => {
-        // Draft report is optional.
-      });
-    return () => {
-      cancelled = true;
+    loadMedicalReport().catch(() => {
+      // Draft report is optional.
+    });
+
+    const handleReportUpdate = () => {
+      loadMedicalReport().catch(() => {});
     };
-  }, [examinationId]);
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === "teleoph.medical-report-updated") handleReportUpdate();
+    };
+
+    window.addEventListener("teleoph.medical-report-updated", handleReportUpdate);
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("focus", handleReportUpdate);
+    return () => {
+      window.removeEventListener("teleoph.medical-report-updated", handleReportUpdate);
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("focus", handleReportUpdate);
+    };
+  }, [loadMedicalReport]);
 
   useEffect(() => {
     if (!seriesInstanceUid) return;
