@@ -63,3 +63,4 @@ ADD ohif/ohif-nginx-http.conf /etc/nginx/conf.d/default.conf
 
 COPY --from=builder /sources/Viewers/platform/app/dist /usr/share/nginx/html/
 COPY ohif/default-app-config.js /usr/share/nginx/html/app-config.js
+COPY ohif/assets /usr/share/nginx/html/assets

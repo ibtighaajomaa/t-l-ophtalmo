@@ -754,7 +754,7 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
     """
     from .analysis_utils import aggregate_per_eye, worst_dr_confidence
     from .models import AnalysisReport, Exam, MedicalReport, MedicalReportVersion
-    from .report_utils import build_ai_report_text
+    from .report_utils import build_ai_report_text, build_ai_summary_report
 
     exam = Exam.objects.get(pk=exam_id)
     study_uid = study_uid or exam.study_instance_uid
@@ -839,10 +839,33 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
         )
         return {"status": "failed", "error": message}
 
-    combined = "\n\n".join(eye_texts)
+    summary_error = ""
+    try:
+        summary = build_ai_summary_report(
+            patient_id,
+            reports_by_eye,
+            per_eye,
+            patient_age=exam.patient_age,
+        )
+    except Exception as exc:
+        summary_error = f"Synthèse bilatérale: {str(exc)[:200]}"
+        logger.warning(
+            "[Examen %s] Echec de génération de la synthèse bilatérale: %s",
+            exam.id,
+            exc,
+            exc_info=True,
+        )
+        summary = {
+            "report_text": "\n\n".join(eye_texts),
+            "report_html": "",
+            "report_json": {"report_type": "fallback_eye_concatenation"},
+        }
+
+    combined = summary.get("report_text") or "\n\n".join(eye_texts)
     ai_report_data = {
         "per_eye": per_eye,
         "reports_by_eye": reports_by_eye,
+        "summary_report": summary,
     }
     report = (
         MedicalReport.objects.filter(
@@ -887,7 +910,7 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
     )
 
     status = "completed"
-    error = "; ".join(report_errors)
+    error = "; ".join([item for item in [*report_errors, summary_error] if item])
     _set_exam_report_status(exam, "completed", error)
     _merge_analysis_report_status(
         analysis_report.series_instance_uid,

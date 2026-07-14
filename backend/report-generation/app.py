@@ -88,7 +88,7 @@ def _dedupe_report_text(text: str) -> str:
     lines = []
     seen_limitations = set()
     in_limitations = False
-    limitation_count = 0
+    limitation_sentences = 0
     repeated_limitations = 0
 
     for raw in text.splitlines():
@@ -102,7 +102,7 @@ def _dedupe_report_text(text: str) -> str:
         heading = stripped.lstrip("# ").strip().lower()
         if heading == "limitations":
             in_limitations = True
-            limitation_count = 0
+            limitation_sentences = 0
             repeated_limitations = 0
             lines.append(line)
             continue
@@ -117,8 +117,9 @@ def _dedupe_report_text(text: str) -> str:
                     break
                 continue
             seen_limitations.add(normalized)
-            limitation_count += 1
-            if limitation_count > 5:
+            limitation_sentences += len(re.findall(r"[.!?](?:\s|$)", stripped))
+            if limitation_sentences >= 2:
+                lines.append(line)
                 break
 
         lines.append(line)
@@ -214,10 +215,12 @@ Regles importantes:
 - Utilise les sorties des modeles fournies ci-dessous, notamment dr_classification.
 - Ne modifie pas et n'invente pas les valeurs numeriques.
 - Si l'image contredit ou nuance les sorties des modeles, explique-le prudemment.
-- Mentionne les limites de l'analyse automatisee en 3 phrases maximum.
-- N'ecris jamais deux fois la meme phrase.
+- Chaque section doit etre courte: 1 phrase, sauf Limitations qui contient exactement 2 phrases completes.
+- N'utilise pas de liste numerotee ni de liste a puces dans le compte rendu final.
+- N'ecris jamais deux fois la meme idee ou la meme phrase.
+- La section Recommandations ne doit pas repeter les constatations cliniques; elle doit seulement proposer la conduite a tenir.
 - Termine le rapport immediatement apres la section Limitations.
-- Longueur cible: 250 a 450 mots.
+- Longueur cible: 180 a 300 mots.
 - Le rapport doit etre utile a un ophtalmologiste, pas au patient directement.
 
 {image_instruction}
@@ -241,7 +244,63 @@ Structure obligatoire avec des titres markdown:
 ## Recommandations
 ## Limitations
 
-Redige maintenant le rapport complet, sans repetition."""
+Redige maintenant le rapport complet, sans repetition, avec des phrases completes."""
+
+
+def _summary_prompt(
+    patient_id: str,
+    reports_by_eye: dict,
+    per_eye: dict,
+    patient_age: int | None = None,
+) -> str:
+    age = f"{patient_age} ans" if patient_age else "Non renseigne"
+    eye_sections = []
+    for side, label in (("right", "Oeil droit"), ("left", "Oeil gauche")):
+        eye_report = (reports_by_eye or {}).get(side) or {}
+        eye_data = (per_eye or {}).get(side) or {}
+        dr = eye_data.get("dr_classification") or {}
+        glaucoma = eye_data.get("glaucoma") or {}
+        vessels = eye_data.get("vessels") or {}
+        lesions = eye_data.get("lesions") or {}
+        detail = eye_report.get("report_text") or "Non disponible"
+        eye_sections.append(
+            f"""## {label}
+- Grade DR: {dr.get('grade', 'N/A')}
+- Confiance DR: {_format_percent(dr.get('confidence'))}
+- Risque glaucome: {glaucoma.get('risk', 'N/A')}
+- Rapport cupule/disque: {glaucoma.get('vcdr', 'N/A')}
+- Couverture lesionnelle: {_format_percent(lesions.get('coverage_pct'))}
+- Couverture vasculaire: {_format_percent(vessels.get('coverage_pct'))}
+- Rapport detaille:
+{detail[:2400]}"""
+        )
+
+    return f"""Tu es un ophtalmologiste redacteur.
+Redige la synthese finale bilaterale du compte rendu de fond d'oeil en francais medical professionnel.
+
+Regles:
+- Ne recopie pas les rapports par oeil.
+- Resume et compare les deux yeux.
+- Mentionne l'oeil le plus a risque si applicable.
+- Mentionne les limites qualite si elles ressortent des rapports.
+- Les recommandations doivent etre courtes et actionnables.
+- Pas de liste numerotee ni de liste a puces.
+- Longueur cible: 120 a 220 mots.
+- Termine apres la section Limitations.
+
+## Patient
+- Identifiant: {patient_id}
+- Age: {age}
+
+{chr(10).join(eye_sections)}
+
+Structure obligatoire:
+## Synthese Bilaterale
+## Impression Diagnostique
+## Recommandations
+## Limitations
+
+Redige maintenant uniquement la synthese finale, sans repetition."""
 
 
 def _analysis_prompt() -> str:
@@ -427,6 +486,38 @@ class MedGemmaEngine:
             },
         }
 
+    def generate_summary_report(
+        self,
+        patient_id: str,
+        reports_by_eye: dict,
+        per_eye: dict,
+        patient_age: int | None = None,
+        max_new_tokens: int | None = None,
+    ) -> dict:
+        prompt = _summary_prompt(
+            patient_id=patient_id,
+            reports_by_eye=reports_by_eye,
+            per_eye=per_eye,
+            patient_age=patient_age,
+        )
+        started_at = time.perf_counter()
+        token_limit = _generation_token_limit(max_new_tokens)
+        text = self.generate_text(prompt, max_new_tokens=token_limit)
+        generation_time_seconds = time.perf_counter() - started_at
+        return {
+            "report_text": text,
+            "report_html": report_text_to_html(text),
+            "report_json": {
+                "engine": "medgemma-1.5-4b-it",
+                "report_engine": "medgemma-1.5-4b-it",
+                "report_type": "bilateral_summary",
+                "model": MODEL_ID,
+                "used_image": False,
+                "generation_time_seconds": round(generation_time_seconds, 3),
+                "max_new_tokens": token_limit,
+            },
+        }
+
     def analyze(self, image: Image.Image) -> dict:
         text = self.generate_text(_analysis_prompt(), image=image)
         return _extract_json(text)
@@ -440,6 +531,14 @@ class ReportRequest(BaseModel):
     report_data: dict
     patient_age: int | None = None
     eye: str = "Non specifie"
+    max_new_tokens: int | None = None
+
+
+class SummaryReportRequest(BaseModel):
+    patient_id: str
+    reports_by_eye: dict
+    per_eye: dict
+    patient_age: int | None = None
     max_new_tokens: int | None = None
 
 
@@ -488,6 +587,21 @@ def report(req: ReportRequest):
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"MedGemma report generation failed: {exc}")
+    return JSONResponse(content={"patient_id": req.patient_id, "report": result})
+
+
+@app.post("/summary-report")
+def summary_report(req: SummaryReportRequest):
+    try:
+        result = medgemma.generate_summary_report(
+            patient_id=req.patient_id,
+            patient_age=req.patient_age,
+            reports_by_eye=req.reports_by_eye,
+            per_eye=req.per_eye,
+            max_new_tokens=req.max_new_tokens,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"MedGemma summary generation failed: {exc}")
     return JSONResponse(content={"patient_id": req.patient_id, "report": result})
 
 

@@ -65,6 +65,7 @@ def build_ai_report_text(patient_id, report_data, eye, patient_age=None, series_
                     "patient_id": patient_id or "inconnu",
                     "eye": eye or "Non spécifié",
                     "monai_data": json.dumps(report_data or {}),
+                    "max_new_tokens": 1024,
                 }
                 if patient_age not in (None, ""):
                     form_data["patient_age"] = patient_age
@@ -98,6 +99,7 @@ def build_ai_report_text(patient_id, report_data, eye, patient_age=None, series_
         "patient_age": patient_age,
         "eye": eye or "Non spécifié",
         "report_data": report_data,
+        "max_new_tokens": 1024,
     }
     resp = requests.post(f"{url}/report", json=payload, timeout=600)
     resp.raise_for_status()
@@ -106,4 +108,26 @@ def build_ai_report_text(patient_id, report_data, eye, patient_age=None, series_
         "report_text": result.get("report_text", ""),
         "report_html": result.get("report_html", ""),
         "report_json": result.get("report_json", {"report_engine": "medgemma-1.5-4b-it"}),
+    }
+
+
+def build_ai_summary_report(patient_id, reports_by_eye, per_eye, patient_age=None):
+    url = os.environ.get("REPORT_GENERATOR_URL", "http://report-generator:8010")
+    payload = {
+        "patient_id": patient_id or "inconnu",
+        "patient_age": patient_age,
+        "reports_by_eye": reports_by_eye or {},
+        "per_eye": per_eye or {},
+        "max_new_tokens": 1024,
+    }
+    resp = requests.post(f"{url}/summary-report", json=payload, timeout=600)
+    resp.raise_for_status()
+    result = resp.json().get("report", {})
+    return {
+        "report_text": result.get("report_text", ""),
+        "report_html": result.get("report_html", ""),
+        "report_json": result.get(
+            "report_json",
+            {"report_engine": "medgemma-1.5-4b-it", "report_type": "bilateral_summary"},
+        ),
     }

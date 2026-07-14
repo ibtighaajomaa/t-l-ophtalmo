@@ -1,6 +1,19 @@
 window.config = {
   routerBasename: '/ohif',
 
+  whiteLabeling: {
+    createLogoComponentFn: React =>
+      React.createElement('img', {
+        src: '/ohif/assets/logo-ministere-sante-v1.png',
+        alt: 'Ministere de la Sante',
+        style: {
+          height: '36px',
+          width: 'auto',
+          objectFit: 'contain',
+        },
+      }),
+  },
+
   // =========================
   // 🧩 EXTENSIONS
   // =========================
