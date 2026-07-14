@@ -1483,6 +1483,8 @@ def medical_report_detail(request, pk):
         report.doctor_content = doctor_content
         if report.status == MedicalReport.Status.AI_GENERATED:
             report.status = MedicalReport.Status.UNDER_REVIEW
+        if report.status == MedicalReport.Status.SIGNED or report.final_content:
+            report.final_content = doctor_content
         report.save()
 
         max_ver = report.versions.aggregate(m=Max('version_number'))['m'] or 0

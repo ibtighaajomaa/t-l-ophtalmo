@@ -569,7 +569,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                             href={`/compte-rendu/${encodeURIComponent(exam.id)}`}
                             title="Afficher le compte rendu"
                             aria-label={`Afficher le compte rendu de ${exam.patientName}`}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200 transition hover:bg-indigo-100"
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 transition hover:bg-emerald-100"
                           >
                             <FileText className="h-4 w-4" />
                           </a>
@@ -579,7 +579,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                             onClick={() => setReportUnavailableExam(exam)}
                             title="Compte rendu non disponible"
                             aria-label={`Compte rendu non disponible pour ${exam.patientName}`}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200 transition hover:bg-indigo-100"
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-red-50 text-red-700 ring-1 ring-red-200 transition hover:bg-red-100"
                           >
                             <FileText className="h-4 w-4" />
                           </button>

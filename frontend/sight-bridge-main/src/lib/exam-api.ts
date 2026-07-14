@@ -401,6 +401,26 @@ export async function fetchMedicalReports(examinationId: string): Promise<Medica
   return res.json();
 }
 
+export async function updateMedicalReport(
+  reportId: number,
+  doctorContent: string,
+  options?: { studyInstanceUid?: string },
+): Promise<MedicalReport> {
+  const res = await fetch(`${BASE}/medical-reports/${reportId}/`, {
+    method: "PUT",
+    headers: getHeaders(),
+    body: JSON.stringify({
+      doctor_content: doctorContent,
+      study_instance_uid: options?.studyInstanceUid,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Échec de l'enregistrement du compte rendu.");
+  }
+  return res.json();
+}
+
 export async function syncWithOrthanc(): Promise<{
   created: number;
   updated: number;
