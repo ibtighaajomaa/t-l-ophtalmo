@@ -20,6 +20,7 @@ import { Route as AppAnalyseRouteImport } from './routes/_app.analyse'
 import { Route as AppAdminRouteImport } from './routes/_app.admin'
 import { Route as AppWorklistIdRouteImport } from './routes/_app.worklist.$id'
 import { Route as AppHistoriqueExamensRouteImport } from './routes/_app.historique.examens'
+import { Route as AppCompteRenduIdRouteImport } from './routes/_app.compte-rendu.$id'
 
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
   id: '/reset-password',
@@ -75,6 +76,11 @@ const AppHistoriqueExamensRoute = AppHistoriqueExamensRouteImport.update({
   path: '/historique/examens',
   getParentRoute: () => AppRoute,
 } as any)
+const AppCompteRenduIdRoute = AppCompteRenduIdRouteImport.update({
+  id: '/compte-rendu/$id',
+  path: '/compte-rendu/$id',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -85,6 +91,7 @@ export interface FileRoutesByFullPath {
   '/calendrier': typeof AppCalendrierRoute
   '/logs': typeof AppLogsRoute
   '/worklist': typeof AppWorklistRouteWithChildren
+  '/compte-rendu/$id': typeof AppCompteRenduIdRoute
   '/historique/examens': typeof AppHistoriqueExamensRoute
   '/worklist/$id': typeof AppWorklistIdRoute
 }
@@ -97,6 +104,7 @@ export interface FileRoutesByTo {
   '/calendrier': typeof AppCalendrierRoute
   '/logs': typeof AppLogsRoute
   '/worklist': typeof AppWorklistRouteWithChildren
+  '/compte-rendu/$id': typeof AppCompteRenduIdRoute
   '/historique/examens': typeof AppHistoriqueExamensRoute
   '/worklist/$id': typeof AppWorklistIdRoute
 }
@@ -111,6 +119,7 @@ export interface FileRoutesById {
   '/_app/calendrier': typeof AppCalendrierRoute
   '/_app/logs': typeof AppLogsRoute
   '/_app/worklist': typeof AppWorklistRouteWithChildren
+  '/_app/compte-rendu/$id': typeof AppCompteRenduIdRoute
   '/_app/historique/examens': typeof AppHistoriqueExamensRoute
   '/_app/worklist/$id': typeof AppWorklistIdRoute
 }
@@ -125,6 +134,7 @@ export interface FileRouteTypes {
     | '/calendrier'
     | '/logs'
     | '/worklist'
+    | '/compte-rendu/$id'
     | '/historique/examens'
     | '/worklist/$id'
   fileRoutesByTo: FileRoutesByTo
@@ -137,6 +147,7 @@ export interface FileRouteTypes {
     | '/calendrier'
     | '/logs'
     | '/worklist'
+    | '/compte-rendu/$id'
     | '/historique/examens'
     | '/worklist/$id'
   id:
@@ -150,6 +161,7 @@ export interface FileRouteTypes {
     | '/_app/calendrier'
     | '/_app/logs'
     | '/_app/worklist'
+    | '/_app/compte-rendu/$id'
     | '/_app/historique/examens'
     | '/_app/worklist/$id'
   fileRoutesById: FileRoutesById
@@ -240,6 +252,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppHistoriqueExamensRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/compte-rendu/$id': {
+      id: '/_app/compte-rendu/$id'
+      path: '/compte-rendu/$id'
+      fullPath: '/compte-rendu/$id'
+      preLoaderRoute: typeof AppCompteRenduIdRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
@@ -261,6 +280,7 @@ interface AppRouteChildren {
   AppCalendrierRoute: typeof AppCalendrierRoute
   AppLogsRoute: typeof AppLogsRoute
   AppWorklistRoute: typeof AppWorklistRouteWithChildren
+  AppCompteRenduIdRoute: typeof AppCompteRenduIdRoute
   AppHistoriqueExamensRoute: typeof AppHistoriqueExamensRoute
 }
 
@@ -270,6 +290,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppCalendrierRoute: AppCalendrierRoute,
   AppLogsRoute: AppLogsRoute,
   AppWorklistRoute: AppWorklistRouteWithChildren,
+  AppCompteRenduIdRoute: AppCompteRenduIdRoute,
   AppHistoriqueExamensRoute: AppHistoriqueExamensRoute,
 }
 

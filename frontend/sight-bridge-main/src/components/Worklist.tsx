@@ -4,6 +4,7 @@ import {
   Filter,
   Search,
   MonitorPlay,
+  FileText,
   RefreshCw,
   Clock,
   Loader2,
@@ -30,7 +31,9 @@ const STATUS_STYLES: Record<ExamStatus, string> = {
 
 function QualityBadge({ exam, onClick }: { exam: Exam; onClick: () => void }) {
   const hasDetailedResults = (exam.imageQualityResults?.length ?? 0) > 0;
-  const hasSummary = Boolean(exam.qualityCategory) && exam.qualityScore != null;
+  const summaryCategory = exam.qualityCategory;
+  const summaryScore = exam.qualityScore;
+  const hasSummary = Boolean(summaryCategory) && summaryScore != null;
 
   if (exam.qualityStatus === "pending" || exam.qualityStatus === "in_progress") {
     return (
@@ -75,13 +78,24 @@ function QualityBadge({ exam, onClick }: { exam: Exam; onClick: () => void }) {
     acceptable: "Acceptable",
     bad: "Mauvaise",
   };
+  if (!summaryCategory || summaryScore == null) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="cursor-pointer text-xs text-slate-500 hover:ring-2"
+      >
+        Détails
+      </button>
+    );
+  }
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex cursor-pointer rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 transition hover:ring-2 ${styles[exam.qualityCategory]}`}
+      className={`inline-flex cursor-pointer rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 transition hover:ring-2 ${styles[summaryCategory]}`}
     >
-      {labels[exam.qualityCategory]} · {exam.qualityScore.toFixed(1)}
+      {labels[summaryCategory]} · {summaryScore.toFixed(1)}
     </button>
   );
 }
@@ -222,6 +236,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
   const [filterDate, setFilterDate] = useState<string>("");
   const [historyExam, setHistoryExam] = useState<Exam | null>(null);
   const [qualityModalExam, setQualityModalExam] = useState<Exam | null>(null);
+  const [reportUnavailableExam, setReportUnavailableExam] = useState<Exam | null>(null);
 
   const [stats, setStats] = useState({ attente: 0, cours: 0, interprete: 0 });
 
@@ -449,13 +464,17 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                 <th className="px-4 py-3 text-left font-semibold">Qualité IA</th>
                 <th className="px-4 py-3 text-left font-semibold">Statut</th>
                 {showAssignedTo && <th className="px-4 py-3 text-left font-semibold">Assigné à</th>}
+                <th className="px-4 py-3 text-center font-semibold">Compte rendu</th>
                 <th className="px-4 py-3 text-right font-semibold">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-500">
+                  <td
+                    colSpan={showAssignedTo ? 11 : 10}
+                    className="px-4 py-10 text-center text-sm text-slate-500"
+                  >
                     <Loader2 className="inline h-5 w-5 animate-spin mr-2" />
                     Chargement des examens…
                   </td>
@@ -544,6 +563,28 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                           )}
                         </td>
                       )}
+                      <td className="px-4 py-3 text-center">
+                        {exam.status === "Interprété" ? (
+                          <a
+                            href={`/compte-rendu/${encodeURIComponent(exam.id)}`}
+                            title="Afficher le compte rendu"
+                            aria-label={`Afficher le compte rendu de ${exam.patientName}`}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200 transition hover:bg-indigo-100"
+                          >
+                            <FileText className="h-4 w-4" />
+                          </a>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setReportUnavailableExam(exam)}
+                            title="Compte rendu non disponible"
+                            aria-label={`Compte rendu non disponible pour ${exam.patientName}`}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200 transition hover:bg-indigo-100"
+                          >
+                            <FileText className="h-4 w-4" />
+                          </button>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-2">
                           {dicomStudyInstanceUid && (
@@ -566,7 +607,10 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
               )}
               {!loading && filtered.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-500">
+                  <td
+                    colSpan={showAssignedTo ? 11 : 10}
+                    className="px-4 py-10 text-center text-sm text-slate-500"
+                  >
                     Aucun examen ne correspond aux filtres.
                   </td>
                 </tr>
@@ -616,6 +660,55 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
       {qualityModalExam &&
         ReactDOM.createPortal(
           <QualityModal exam={qualityModalExam} onClose={() => setQualityModalExam(null)} />,
+          document.body,
+        )}
+      {reportUnavailableExam &&
+        ReactDOM.createPortal(
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="report-unavailable-title"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setReportUnavailableExam(null);
+            }}
+          >
+            <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2
+                    id="report-unavailable-title"
+                    className="text-lg font-semibold text-slate-900"
+                  >
+                    Compte rendu non disponible
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {reportUnavailableExam.patientName} · statut {reportUnavailableExam.status}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setReportUnavailableExam(null)}
+                  aria-label="Fermer"
+                  className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <p className="mt-5 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-amber-200">
+                Le compte rendu n'est pas disponible.
+              </p>
+              <div className="mt-5 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setReportUnavailableExam(null)}
+                  className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
+                >
+                  Fermer
+                </button>
+              </div>
+            </div>
+          </div>,
           document.body,
         )}
     </div>

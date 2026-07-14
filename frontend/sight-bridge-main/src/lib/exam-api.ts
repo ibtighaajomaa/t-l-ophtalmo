@@ -378,8 +378,15 @@ export interface MedicalReport {
   examination_id: string;
   status: string;
   ai_content: string;
+  doctor_content: string;
+  final_content: string;
   ai_report_data: unknown;
+  validated_by_name: string | null;
+  validated_at: string | null;
+  signed_by_name: string | null;
+  signed_at: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export async function fetchMedicalReports(examinationId: string): Promise<MedicalReport[]> {
