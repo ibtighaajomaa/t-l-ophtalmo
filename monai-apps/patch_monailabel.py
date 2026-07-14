@@ -987,6 +987,143 @@ async def analyze(request: dict):
     glaucoma = _glaucoma_metrics(optic_data)
     vessels = _vessel_metrics(vessel_data)
     lesions = _lesion_metrics(lesion_data)
+
+    def _normalize_uint8(arr):
+        arr = np.asarray(arr)
+        arr = np.nan_to_num(arr.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        lo = float(np.percentile(arr, 1))
+        hi = float(np.percentile(arr, 99))
+        if hi <= lo:
+            hi = float(arr.max()) if arr.size else 1.0
+            lo = float(arr.min()) if arr.size else 0.0
+        if hi <= lo:
+            return np.zeros(arr.shape, dtype=np.uint8)
+        arr = np.clip((arr - lo) / (hi - lo), 0, 1)
+        return (arr * 255).astype(np.uint8)
+
+    def _read_source_rgb():
+        try:
+            import pathlib
+            from pydicom import dcmread
+            files = list(pathlib.Path(cache_dir).glob("*")) if os.path.isdir(cache_dir) else []
+            if not files:
+                return None
+            selected = None
+            for file_path in files:
+                try:
+                    ds = dcmread(str(file_path))
+                    if not source_sop_uid or str(getattr(ds, "SOPInstanceUID", "")) == str(source_sop_uid):
+                        selected = ds
+                        break
+                except Exception:
+                    continue
+            if selected is None:
+                selected = dcmread(str(files[0]))
+            arr = selected.pixel_array
+            arr = np.squeeze(arr)
+            while arr.ndim > 3:
+                arr = arr[0]
+                arr = np.squeeze(arr)
+            if arr.ndim == 2:
+                gray = _normalize_uint8(arr)
+                if str(getattr(selected, "PhotometricInterpretation", "")).upper() == "MONOCHROME1":
+                    gray = 255 - gray
+                rgb = np.stack([gray, gray, gray], axis=-1)
+            else:
+                if arr.shape[0] in (3, 4) and arr.shape[-1] not in (3, 4):
+                    arr = np.moveaxis(arr, 0, -1)
+                rgb = _normalize_uint8(arr[..., :3])
+            return rgb
+        except Exception as e:
+            logger.warning("Explainability source image unavailable: %s", e)
+            return None
+
+    def _resize_for_payload(rgb, max_side=640):
+        try:
+            import cv2
+            h, w = rgb.shape[:2]
+            scale = min(1.0, float(max_side) / float(max(h, w)))
+            if scale < 1.0:
+                return cv2.resize(rgb, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+        except Exception:
+            pass
+        return rgb
+
+    def _png_b64(rgb):
+        try:
+            import base64
+            import cv2
+            ok, encoded = cv2.imencode(".png", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            return base64.b64encode(encoded.tobytes()).decode("ascii") if ok else None
+        except Exception as e:
+            logger.warning("PNG encoding failed: %s", e)
+            return None
+
+    def _make_clahe(rgb):
+        try:
+            import cv2
+            lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+            l_chan, a_chan, b_chan = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = cv2.merge([clahe.apply(l_chan), a_chan, b_chan])
+            return cv2.cvtColor(enhanced, cv2.COLOR_LAB2RGB)
+        except Exception as e:
+            logger.warning("CLAHE generation failed: %s", e)
+            return None
+
+    def _make_attention_overlay(rgb):
+        try:
+            import cv2
+            import torch
+            from PIL import Image
+            dr_task = instance._infers.get("dr_classification")
+            processor = getattr(dr_task, "_hf_processor", None)
+            model = getattr(dr_task, "_hf_model", None)
+            if processor is None or model is None:
+                return None
+            try:
+                if hasattr(model, "set_attn_implementation"):
+                    model.set_attn_implementation("eager")
+                elif hasattr(model, "config"):
+                    model.config._attn_implementation = "eager"
+            except Exception as e:
+                logger.warning("Could not switch attention implementation: %s", e)
+            device = next(model.parameters()).device
+            pil_image = Image.fromarray(rgb)
+            inputs = processor(images=pil_image, return_tensors="pt")
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            with torch.no_grad():
+                outputs = model(**inputs, output_attentions=True)
+            attentions = getattr(outputs, "attentions", None)
+            if not attentions:
+                return None
+            cls_attention = attentions[-1][0].mean(dim=0)[0, 1:].detach().float().cpu().numpy()
+            grid = int(np.sqrt(cls_attention.size))
+            if grid * grid != cls_attention.size:
+                return None
+            heat = cls_attention.reshape(grid, grid)
+            heat = heat - heat.min()
+            if heat.max() > 0:
+                heat = heat / heat.max()
+            heat = cv2.resize(heat, (rgb.shape[1], rgb.shape[0]), interpolation=cv2.INTER_CUBIC)
+            heat_u8 = np.uint8(np.clip(heat, 0, 1) * 255)
+            color = cv2.applyColorMap(heat_u8, cv2.COLORMAP_JET)
+            color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
+            return cv2.addWeighted(rgb, 0.58, color, 0.42, 0)
+        except Exception as e:
+            logger.warning("Attention heatmap generation failed: %s", e)
+            return None
+
+    source_rgb = _read_source_rgb()
+    clahe_image = None
+    gradcam_image = None
+    if source_rgb is not None:
+        payload_rgb = _resize_for_payload(source_rgb)
+        clahe_rgb = _make_clahe(payload_rgb)
+        overlay_rgb = _make_attention_overlay(payload_rgb)
+        clahe_image = _png_b64(clahe_rgb) if clahe_rgb is not None else None
+        gradcam_image = _png_b64(overlay_rgb) if overlay_rgb is not None else None
+
     slice_result = {
         "index": 0,
         "source_sop_instance_uid": source_sop_uid,
@@ -996,6 +1133,8 @@ async def analyze(request: dict):
         "vessels": vessels,
         "lesions": lesions,
         "severity_score": _severity(dr, glaucoma),
+        "gradcam_image": gradcam_image,
+        "clahe_image": clahe_image,
     }
 
     return {
@@ -1009,8 +1148,8 @@ async def analyze(request: dict):
         "optic_disc_cup": optic,
         "glaucoma": glaucoma,
         "vessels": vessels,
-        "gradcam_image": None,
-        "clahe_image": None,
+        "gradcam_image": gradcam_image,
+        "clahe_image": clahe_image,
         "per_instance": [slice_result],
         "critical": {
             "od": slice_result if optic.get("laterality") == "OD" else None,

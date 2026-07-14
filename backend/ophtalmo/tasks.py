@@ -1327,7 +1327,7 @@ def tache_auto_segmentation(exam_id=None):
     passe de 'En attente' → 'En cours' avec assignation à un médecin.
     """
     from .analysis_utils import aggregate_per_eye
-    from .models import AnalysisReport, Exam
+    from .models import AnalysisReport, Exam, ImageQualityAssessment
 
     MAX_RETRIES = 3
     SEG_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
@@ -1735,7 +1735,13 @@ def tache_auto_segmentation(exam_id=None):
         # ==========================================
         # ÉTAPE 6 : Agrégation et écriture des rapports d'analyse
         # ==========================================
-        per_eye = aggregate_per_eye(series_reports)
+        quality_scores = dict(
+            ImageQualityAssessment.objects.filter(exam=exam).values_list(
+                "sop_instance_uid",
+                "score",
+            )
+        )
+        per_eye = aggregate_per_eye(series_reports, quality_scores=quality_scores)
         if per_eye:
             logger.info(
                 f"[Examen {exam.id}] Données d'IA agrégées par oeil. "
@@ -1847,4 +1853,3 @@ def tache_auto_segmentation(exam_id=None):
     cache.delete(lock_key)
     logger.info("[AutoSeg] Libération du verrou. Fin d'exécution de la tâche.")
     return {'processed': processed}
-
