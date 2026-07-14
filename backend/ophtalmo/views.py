@@ -472,6 +472,40 @@ def dmi_exam_status(request, numero_examen):
 ORTHANC_URL = os.environ.get('ORTHANC_URL', 'http://orthanc-container:8042')
 
 
+def _dicom_study_uid(meta, fallback_study_id):
+    """Return the real DICOM StudyInstanceUID, not Orthanc's internal study id."""
+    return (
+        (meta.get('MainDicomTags') or {}).get('StudyInstanceUID')
+        or fallback_study_id
+    )
+
+
+def _find_exam_by_study_ids(dicom_study_uid, orthanc_study_id=None):
+    """Find an exam stored with either the DICOM UID or a legacy Orthanc ID."""
+    candidates = [uid for uid in (dicom_study_uid, orthanc_study_id) if uid]
+    if not candidates:
+        return None
+    return Exam.objects.filter(study_instance_uid__in=candidates).first()
+
+
+def _normalize_exam_study_uid(exam, dicom_study_uid):
+    """Migrate a legacy Orthanc study id to the real DICOM StudyInstanceUID."""
+    if not exam or not dicom_study_uid or exam.study_instance_uid == dicom_study_uid:
+        return False
+    if Exam.objects.filter(study_instance_uid=dicom_study_uid).exclude(pk=exam.pk).exists():
+        return False
+    old_uid = exam.study_instance_uid
+    exam.study_instance_uid = dicom_study_uid
+    exam.save(update_fields=['study_instance_uid', 'updated_at'])
+    AnalysisReport.objects.filter(series_instance_uid=old_uid).update(
+        series_instance_uid=dicom_study_uid
+    )
+    MedicalReport.objects.filter(examination_id=old_uid).update(
+        examination_id=dicom_study_uid
+    )
+    return True
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def sync_orthanc(request):
@@ -487,26 +521,12 @@ def sync_orthanc(request):
 
     force_refresh = request.query_params.get('force_refresh', '').lower() in ('true', '1')
 
-    # Récupérer les UIDs déjà présents en base en une seule requête SQL
-    existing_uids = set(
-        Exam.objects.filter(study_instance_uid__in=study_ids)
-        .values_list('study_instance_uid', flat=True)
-    )
-
     created = 0
     updated = 0
     errors = 0
+    known_orthanc_or_dicom_uids = set(study_ids)
 
     for study_id in study_ids:
-        already_exists = study_id in existing_uids
-
-        # Chemin rapide : l'étude existe et on ne force pas le rafraîchissement
-        if already_exists and not force_refresh:
-            updated += 1
-            continue
-
-        # Appel Orthanc uniquement pour les nouvelles études
-        # (ou toutes si force_refresh=true)
         try:
             detail = requests.get(
                 f'{ORTHANC_URL}/studies/{study_id}',
@@ -516,6 +536,19 @@ def sync_orthanc(request):
             meta = detail.json()
         except requests.RequestException:
             errors += 1
+            continue
+
+        main_dicom = meta.get('MainDicomTags', {})
+        dicom_study_uid = _dicom_study_uid(meta, study_id)
+        known_orthanc_or_dicom_uids.add(dicom_study_uid)
+        existing = _find_exam_by_study_ids(dicom_study_uid, study_id)
+        already_exists = existing is not None
+
+        if already_exists and not force_refresh:
+            if _normalize_exam_study_uid(existing, dicom_study_uid):
+                updated += 1
+            else:
+                updated += 1
             continue
 
         patient = patient_metadata(meta)
@@ -533,15 +566,14 @@ def sync_orthanc(request):
                 pass
 
         # Extraire la région depuis InstitutionName (tag DICOM)
-        main_dicom = meta.get('MainDicomTags', {})
         institution = main_dicom.get('InstitutionName', '')
         region = institution if institution else ''
 
         if already_exists:
             # force_refresh=true : mettre à jour les métadonnées DICOM
             # sans écraser le statut ni l'assignation
-            existing = Exam.objects.filter(study_instance_uid=study_id).first()
             if existing:
+                _normalize_exam_study_uid(existing, dicom_study_uid)
                 changed_fields = []
                 if existing.patient_name != patient['patient_name']:
                     existing.patient_name = patient['patient_name']
@@ -561,7 +593,7 @@ def sync_orthanc(request):
             updated += 1
         else:
             Exam.objects.create(
-                study_instance_uid=study_id,
+                study_instance_uid=dicom_study_uid,
                 **patient,
                 exam_type='Rétinographie',
                 date=study_date,
@@ -589,15 +621,14 @@ def sync_orthanc(request):
             distribuer_examens()
 
     # Nettoyage : supprimer les Exam dont l'étude n'existe plus dans Orthanc
-    orthanc_study_ids = set(study_ids)
     db_study_uids = set(
         Exam.objects.filter(study_instance_uid__isnull=False)
         .exclude(study_instance_uid='')
         .values_list('study_instance_uid', flat=True)
     )
-    stale_uids = db_study_uids - orthanc_study_ids
+    stale_uids = db_study_uids - known_orthanc_or_dicom_uids
     deleted_count = 0
-    if stale_uids:
+    if stale_uids and errors == 0:
         AnalysisReport.objects.filter(series_instance_uid__in=stale_uids).delete()
         deleted_count = Exam.objects.filter(study_instance_uid__in=stale_uids).delete()[0]
 
@@ -625,10 +656,6 @@ def orthanc_webhook(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Vérifier si déjà traité
-    if Exam.objects.filter(study_instance_uid=study_id).exists():
-        return Response({'status': 'already_exists', 'study_id': study_id})
-
     # Récupérer les métadonnées depuis Orthanc
     try:
         detail = requests.get(f'{ORTHANC_URL}/studies/{study_id}', timeout=15)
@@ -654,6 +681,17 @@ def orthanc_webhook(request):
         except ValueError:
             pass
 
+    main_dicom = meta.get('MainDicomTags', {})
+    dicom_study_uid = _dicom_study_uid(meta, study_id)
+    existing = _find_exam_by_study_ids(dicom_study_uid, study_id)
+    if existing:
+        _normalize_exam_study_uid(existing, dicom_study_uid)
+        return Response({
+            'status': 'already_exists',
+            'study_id': dicom_study_uid,
+            'orthanc_study_id': study_id,
+        })
+
     # Vérifier que l'étude contient au moins une série OP (fundus)
     # pour éviter la boucle de rétroaction : SEG poussé → webhook → nouveau Exam → nouvelle seg
     series_ids = meta.get('Series', [])
@@ -670,11 +708,10 @@ def orthanc_webhook(request):
         return Response({'status': 'skipped_no_op', 'study_id': study_id})
 
     # Extraire la région depuis InstitutionName
-    main_dicom = meta.get('MainDicomTags', {})
     institution = main_dicom.get('InstitutionName', '')
 
     exam = Exam.objects.create(
-        study_instance_uid=study_id,
+        study_instance_uid=dicom_study_uid,
         **patient,
         exam_type='Rétinographie',
         date=study_date,
@@ -696,7 +733,8 @@ def orthanc_webhook(request):
         'status': 'created',
         'exam_id': exam.id,
         'patient_name': patient['patient_name'],
-        'study_id': study_id,
+        'study_id': dicom_study_uid,
+        'orthanc_study_id': study_id,
     }, status=status.HTTP_201_CREATED)
 
 
@@ -1254,10 +1292,28 @@ def latest_analysis(request):
     medical_report_data = medical_report.ai_report_data if medical_report else {}
     if not isinstance(medical_report_data, dict):
         medical_report_data = {}
+    report_generation_status = (
+        report_json.get('report_generation_status')
+        or (exam.report_generation_status if exam else None)
+    )
+    use_medical_report_fallback = report_generation_status == 'completed'
     reports_by_eye = (
-        report_json.get('reports_by_eye')
-        or medical_report_data.get('reports_by_eye')
-        or {}
+        report_json.get('reports_by_eye') or {}
+        if 'reports_by_eye' in report_json
+        else (
+            medical_report_data.get('reports_by_eye', {})
+            if use_medical_report_fallback
+            else {}
+        )
+    )
+    summary_report = (
+        report_json.get('summary_report')
+        if 'summary_report' in report_json
+        else (
+            medical_report_data.get('summary_report')
+            if use_medical_report_fallback
+            else None
+        )
     )
     return Response({
         'status': report_json.get('status', 'AI_ANALYZED'),
@@ -1265,10 +1321,8 @@ def latest_analysis(request):
         'stored_study_uid': report.series_instance_uid,
         'analysis': report_json.get('per_eye') or report_json,
         'reports_by_eye': reports_by_eye,
-        'report_generation_status': (
-            report_json.get('report_generation_status')
-            or (exam.report_generation_status if exam else None)
-        ),
+        'summary_report': summary_report,
+        'report_generation_status': report_generation_status,
         'report_generation_error': (
             report_json.get('report_generation_error')
             or (exam.report_generation_error if exam else '')

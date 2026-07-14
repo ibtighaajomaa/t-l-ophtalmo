@@ -1,0 +1,86 @@
+diff --git a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
+index 689101a..b91d907 100644
+--- a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
++++ b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
+@@ -21,6 +21,7 @@ export default class AiAnalysisPanel extends Component {
+       generatingReport: false,
+       reportResult: null,
+       reportResultsByEye: {},
++      summaryReportResult: null,
+       savedMedicalReportHtml: '',
+       reportGenerationStatus: null,
+       reportGenerationError: '',
+@@ -157,6 +158,7 @@ export default class AiAnalysisPanel extends Component {
+       reportsByEye: {},
+       reportResult: null,
+       reportResultsByEye: {},
++      summaryReportResult: null,
+       reportGenerationStatus: null,
+       reportGenerationError: '',
+     });
+@@ -250,20 +252,21 @@ export default class AiAnalysisPanel extends Component {
+       }
+       const data = await response.json();
+       const normalized = this.normalizeAnalysis(data.analysis || data);
+-      let savedMedicalReportHtml = this.normalizeMedicalReportHtml(
+-        this.getMedicalReportContent(data.medical_report)
+-      );
+-      if (!savedMedicalReportHtml) {
++      const reportGenerationStatus = data.report_generation_status || null;
++      let medicalReport = data.medical_report;
++      if (!medicalReport && reportGenerationStatus === 'completed') {
+         const reportLookup = await this.loadMedicalReportForStudy(studyUid, token);
+-        savedMedicalReportHtml = this.normalizeMedicalReportHtml(
+-          this.getMedicalReportContent(reportLookup)
+-        );
++        medicalReport = reportLookup;
+       }
++      const savedMedicalReportHtml = reportGenerationStatus === 'completed'
++        ? this.normalizeMedicalReportHtml(this.getMedicalReportContent(medicalReport))
++        : '';
+       this.setState({
+         ...normalized,
+-        reportResultsByEye: data.reports_by_eye || data.medical_report?.ai_report_data?.reports_by_eye || {},
++        reportResultsByEye: data.reports_by_eye || {},
++        summaryReportResult: data.summary_report || null,
+         savedMedicalReportHtml,
+-        reportGenerationStatus: data.report_generation_status || null,
++        reportGenerationStatus,
+         reportGenerationError: data.report_generation_error || '',
+         pollingSavedAnalysis: false,
+       });
+@@ -627,18 +630,16 @@ export default class AiAnalysisPanel extends Component {
+   };
+ 
+   renderGeneratedReportPreview = side => {
+-    const { savedMedicalReportHtml } = this.state;
+     const generatedReport = this.getGeneratedReportForSide(side);
+-    if (!generatedReport && !savedMedicalReportHtml) {
++    if (!generatedReport) {
+       return (
+         <div className="section generatedReportPreview pending">
+           <div className="sectionTitle">Rapport IA</div>
+           Rapport automatique en attente...
+         </div>
+       );
+     }
+ 
+     const html =
+-      savedMedicalReportHtml ||
+       generatedReport.report_html ||
+       String(generatedReport.report_text || '').replace(/\n/g, '<br />');
+@@ -874,10 +874,10 @@ export default class AiAnalysisPanel extends Component {
+       pollingSavedAnalysis,
+     } = this.state;
+     const activeReport = this.getActiveReport();
+-    const savedMedicalReportHtml = this.state.savedMedicalReportHtml;
+-    const reportResult = savedMedicalReportHtml
+-      ? { report_html: savedMedicalReportHtml, report_text: '' }
+-      : this.getActiveGeneratedReport();
++    const { savedMedicalReportHtml, summaryReportResult } = this.state;
++    const reportResult = summaryReportResult || (savedMedicalReportHtml
++      ? { report_html: savedMedicalReportHtml, report_text: '' }
++      : this.state.reportResult);
+     const hasAnyReport =
+       !!activeReport || !!savedMedicalReportHtml || Object.keys(reportsByEye || {}).length > 0;
+ 

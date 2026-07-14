@@ -116,8 +116,8 @@ export function AIPanel({
     eyeAnalysis
       ? eyeAnalysis[activeEye] ?? null
       : (analysis as AnalysisResult | null);
-  const activeReportText = eyeAnalysis ? reportByEye[activeEye] ?? reportText : reportText;
-  const activeReportHtml = eyeAnalysis ? reportHtmlByEye[activeEye] ?? reportHtml : reportHtml;
+  const activeReportText = eyeAnalysis ? reportByEye[activeEye] ?? null : reportText;
+  const activeReportHtml = eyeAnalysis ? reportHtmlByEye[activeEye] ?? null : reportHtml;
   const drProbabilities = normalizeDRProbabilities(activeAnalysis?.dr_classification.probabilities);
 
   const loadMedicalReport = useCallback(async () => {
@@ -129,15 +129,18 @@ export function AIPanel({
     if (!content) return;
     const html = toReportHtml(content);
     const text = stripHtml(content);
-    const splitText = splitReportByEye(text);
+    const structuredReports = getStructuredEyeReports(report.ai_report_data);
+    const splitText = Object.keys(structuredReports.text).length > 0
+      ? structuredReports.text
+      : splitReportByEye(text);
     setReportText(text);
     setReportHtml(html);
     setReportByEye(splitText);
-    setReportHtmlByEye(
-      Object.fromEntries(
-        Object.entries(splitText).map(([side, value]) => [side, toReportHtml(value)]),
-      ) as Partial<Record<EyeSide, string>>,
-    );
+    setReportHtmlByEye(Object.keys(structuredReports.html).length > 0
+      ? structuredReports.html
+      : Object.fromEntries(
+          Object.entries(splitText).map(([side, value]) => [side, toReportHtml(value)]),
+        ) as Partial<Record<EyeSide, string>>);
   }, [examinationId]);
 
   useEffect(() => {
@@ -779,4 +782,28 @@ function splitReportByEye(content: string): Partial<Record<EyeSide, string>> {
     if (text) result[item.side] = text;
   });
   return result;
+}
+
+function getStructuredEyeReports(value: unknown): {
+  text: Partial<Record<EyeSide, string>>;
+  html: Partial<Record<EyeSide, string>>;
+} {
+  const text: Partial<Record<EyeSide, string>> = {};
+  const html: Partial<Record<EyeSide, string>> = {};
+  if (!value || typeof value !== "object") return { text, html };
+
+  const reports = (value as { reports_by_eye?: unknown }).reports_by_eye;
+  if (!reports || typeof reports !== "object") return { text, html };
+
+  EYE_SIDES.forEach((side) => {
+    const report = (reports as Record<string, unknown>)[side];
+    if (!report || typeof report !== "object") return;
+    const data = report as { report_text?: unknown; report_html?: unknown };
+    const reportText = typeof data.report_text === "string" ? data.report_text : "";
+    const reportHtml = typeof data.report_html === "string" ? data.report_html : "";
+    if (reportText) text[side] = reportText;
+    if (reportHtml || reportText) html[side] = reportHtml || toReportHtml(reportText);
+  });
+
+  return { text, html };
 }

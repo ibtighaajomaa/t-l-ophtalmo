@@ -25,6 +25,13 @@ COPY ohif/extensions/iframe-bridge /sources/Viewers/extensions/iframe-bridge
 COPY MONAILabel/plugins/ohifv3/extensions/monai-label /sources/MONAILabel/plugins/ohifv3/extensions/monai-label
 COPY MONAILabel/plugins/ohifv3/modes/monai-label /sources/MONAILabel/plugins/ohifv3/modes/monai-label
 
+# Keep per-eye reports isolated and reserve the bottom editor for the bilateral summary.
+COPY ohif/patches/per-eye-report-isolation.patch /tmp/per-eye-report-isolation.patch
+RUN cd /sources/MONAILabel && \
+    (git apply --check /tmp/per-eye-report-isolation.patch && \
+     git apply /tmp/per-eye-report-isolation.patch || \
+     git apply --reverse --check /tmp/per-eye-report-isolation.patch)
+
 # Patch pluginConfig.json to register the monai-label extension and mode,
 # and keep only desired modes (MONAI Label, Basic Viewer, Segmentation)
 WORKDIR /sources/Viewers

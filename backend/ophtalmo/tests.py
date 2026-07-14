@@ -1,16 +1,23 @@
 import json
 from datetime import date
+from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from unittest.mock import patch, MagicMock
-from rest_framework.test import APIRequestFactory
-from ophtalmo.models import Exam, ImageQualityAssessment
+from rest_framework.test import APIRequestFactory, force_authenticate
+from ophtalmo.models import AnalysisReport, Exam, ImageQualityAssessment, MedicalReport
 from ophtalmo.tasks import (
     _delete_prior_ai_seg_series,
     _run_eye_laterality,
     tache_auto_quality,
     tache_auto_segmentation,
 )
-from ophtalmo.views import request_composite_segmentation
+from ophtalmo.views import (
+    latest_analysis,
+    orthanc_webhook,
+    request_composite_segmentation,
+    sync_orthanc,
+)
 from ophtalmo.distribution import get_examens_en_attente, distribuer_examens
 
 
@@ -249,6 +256,143 @@ class ManualSegmentationAssociationTest(TestCase):
         )
 
 
+class OrthancStudyUidNormalizationTest(TestCase):
+    def _response(self, data, status_code=200):
+        response = MagicMock(status_code=status_code)
+        response.json.return_value = data
+        response.raise_for_status.return_value = None
+        return response
+
+    def _study_meta(self, dicom_uid='1.2.3.dicom', patient_id='PAT1'):
+        return {
+            'Series': ['orthanc-series-op'],
+            'MainDicomTags': {
+                'StudyInstanceUID': dicom_uid,
+                'StudyDate': '20260709',
+                'InstitutionName': 'Hospital',
+            },
+            'PatientMainDicomTags': {
+                'PatientID': patient_id,
+                'PatientName': 'Patient^Dicom',
+                'PatientBirthDate': '19700101',
+            },
+        }
+
+    @patch('ophtalmo.tasks.tache_auto_quality.delay')
+    @patch('ophtalmo.views.requests.get')
+    def test_sync_stores_real_dicom_study_uid(self, mock_get, _mock_quality_delay):
+        orthanc_id = 'orthanc-study-id'
+        dicom_uid = '1.2.392.study'
+
+        def get_side_effect(url, **kwargs):
+            if url.endswith('/studies'):
+                return self._response([orthanc_id])
+            if url.endswith(f'/studies/{orthanc_id}'):
+                return self._response(self._study_meta(dicom_uid=dicom_uid))
+            return self._response({})
+
+        mock_get.side_effect = get_side_effect
+
+        request = APIRequestFactory().post('/api/exams/sync-orthanc/')
+        response = sync_orthanc(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(Exam.objects.filter(study_instance_uid=dicom_uid).exists())
+        self.assertFalse(Exam.objects.filter(study_instance_uid=orthanc_id).exists())
+
+    @patch('ophtalmo.tasks.tache_auto_quality.delay')
+    @patch('ophtalmo.views.requests.get')
+    def test_webhook_stores_real_dicom_study_uid(self, mock_get, _mock_quality_delay):
+        orthanc_id = 'orthanc-study-id'
+        dicom_uid = '1.2.392.webhook'
+
+        def get_side_effect(url, **kwargs):
+            if url.endswith(f'/studies/{orthanc_id}'):
+                return self._response(self._study_meta(dicom_uid=dicom_uid))
+            if url.endswith('/series/orthanc-series-op'):
+                return self._response({'MainDicomTags': {'Modality': 'OP'}})
+            return self._response({})
+
+        mock_get.side_effect = get_side_effect
+
+        request = APIRequestFactory().post(
+            '/api/exams/orthanc-webhook/',
+            {'ID': orthanc_id},
+            format='json',
+        )
+        response = orthanc_webhook(request)
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(Exam.objects.filter(study_instance_uid=dicom_uid).exists())
+        self.assertFalse(Exam.objects.filter(study_instance_uid=orthanc_id).exists())
+
+
+class LatestAnalysisReportIsolationTest(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='report-test',
+            password='test',
+        )
+        self.exam = Exam.objects.create(
+            study_instance_uid='1.2.392.report-isolation',
+            patient_name='Report Test',
+            patient_id='PAT-REPORT',
+            date=TODAY,
+            report_generation_status='in_progress',
+        )
+        self.analysis = AnalysisReport.objects.create(
+            series_instance_uid=self.exam.study_instance_uid,
+            report_json={
+                'per_eye': {'right': {'side': 'right'}, 'left': {'side': 'left'}},
+                'reports_by_eye': {},
+                'report_generation_status': 'in_progress',
+            },
+        )
+        MedicalReport.objects.create(
+            patient_id=self.exam.patient_id,
+            examination_id=str(self.exam.id),
+            ai_content='Ancien rapport droit',
+            ai_report_data={
+                'reports_by_eye': {
+                    'right': {'report_text': 'Ancien rapport droit'},
+                },
+                'summary_report': {'report_text': 'Ancienne synthese'},
+            },
+        )
+
+    def _request(self):
+        request = APIRequestFactory().get(
+            '/api/exams/analysis/',
+            {'study_instance_uid': self.exam.study_instance_uid},
+        )
+        force_authenticate(request, user=self.user)
+        return latest_analysis(request)
+
+    def test_in_progress_analysis_does_not_reuse_stale_medical_report(self):
+        response = self._request()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['reports_by_eye'], {})
+        self.assertIsNone(response.data['summary_report'])
+
+    def test_completed_analysis_returns_its_own_eye_reports_and_summary(self):
+        current_reports = {
+            'right': {'report_text': 'Rapport droit courant'},
+            'left': {'report_text': 'Rapport gauche courant'},
+        }
+        current_summary = {'report_text': 'Synthese bilaterale courante'}
+        self.analysis.report_json.update({
+            'reports_by_eye': current_reports,
+            'summary_report': current_summary,
+            'report_generation_status': 'completed',
+        })
+        self.analysis.save(update_fields=['report_json'])
+
+        response = self._request()
+
+        self.assertEqual(response.data['reports_by_eye'], current_reports)
+        self.assertEqual(response.data['summary_report'], current_summary)
+
 class DistributionFilterTest(TestCase):
     def setUp(self):
         Exam.objects.create(
@@ -349,8 +493,10 @@ class AutoSegmentationTaskTest(TestCase):
         exam.refresh_from_db()
         self.assertIn(exam.segmentation_status, ['completed', 'failed', 'in_progress'])
 
+    @patch('ophtalmo.tasks._monai_label_ready', return_value=True)
     @patch('ophtalmo.tasks.requests.get')
-    def test_handles_orthanc_unreachable(self, mock_get):
+    def test_handles_orthanc_unreachable(self, mock_get, _mock_monai_ready):
+        cache.delete('ophtalmo:auto_segmentation_running')
         mock_get.side_effect = Exception('Connection refused')
 
         exam = Exam.objects.create(
@@ -364,7 +510,8 @@ class AutoSegmentationTaskTest(TestCase):
 
         tache_auto_segmentation()
         exam.refresh_from_db()
-        self.assertEqual(exam.segmentation_status, 'failed')
+        self.assertEqual(exam.segmentation_status, 'pending')
+        self.assertEqual(exam.segmentation_retries, 1)
         self.assertIn('Connection refused', exam.segmentation_error)
 
     @patch('ophtalmo.tasks.requests.get')
