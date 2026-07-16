@@ -18,6 +18,7 @@ from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 from .dicom_patient import patient_metadata
+from .orthanc_origin import resolve_study_origin
 
 logger = logging.getLogger(__name__)
 
@@ -1178,8 +1179,7 @@ def tache_sync_orthanc_incremental():
 
         main_dicom = meta.get('MainDicomTags', {})
         dicom_study_uid = main_dicom.get('StudyInstanceUID', study_id)
-        institution = main_dicom.get('InstitutionName', '')
-        region = institution if institution else ''
+        origin = resolve_study_origin(ORTHANC_URL, meta)
 
         # Check for duplicates using the real DICOM UID
         if Exam.objects.filter(study_instance_uid=dicom_study_uid).exists():
@@ -1197,8 +1197,8 @@ def tache_sync_orthanc_incremental():
             date=study_date,
             priority='Normal',
             status='En attente',
-            region=region,
-            modality_ip='',
+            region=origin['region'],
+            modality_ip=origin['modality_ip'],
             notes='',
         )
         created += 1

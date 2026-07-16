@@ -19,6 +19,7 @@ from .serializers import (
 )
 from users.authentication import KeycloakAuthentication
 from .dicom_patient import patient_metadata
+from .orthanc_origin import resolve_study_origin
 from .analysis_utils import aggregate_per_eye
 from .dmi_integration import (
     audit_dmi_call,
@@ -538,17 +539,24 @@ def sync_orthanc(request):
             errors += 1
             continue
 
-        main_dicom = meta.get('MainDicomTags', {})
         dicom_study_uid = _dicom_study_uid(meta, study_id)
         known_orthanc_or_dicom_uids.add(dicom_study_uid)
         existing = _find_exam_by_study_ids(dicom_study_uid, study_id)
         already_exists = existing is not None
+        origin = resolve_study_origin(ORTHANC_URL, meta)
 
         if already_exists and not force_refresh:
-            if _normalize_exam_study_uid(existing, dicom_study_uid):
-                updated += 1
-            else:
-                updated += 1
+            _normalize_exam_study_uid(existing, dicom_study_uid)
+            changed_fields = []
+            if existing and existing.region != origin['region']:
+                existing.region = origin['region']
+                changed_fields.append('region')
+            if existing and existing.modality_ip != origin['modality_ip']:
+                existing.modality_ip = origin['modality_ip']
+                changed_fields.append('modality_ip')
+            if changed_fields:
+                existing.save(update_fields=changed_fields + ['updated_at'])
+            updated += 1
             continue
 
         patient = patient_metadata(meta)
@@ -564,10 +572,6 @@ def sync_orthanc(request):
                 )
             except ValueError:
                 pass
-
-        # Extraire la région depuis InstitutionName (tag DICOM)
-        institution = main_dicom.get('InstitutionName', '')
-        region = institution if institution else ''
 
         if already_exists:
             # force_refresh=true : mettre à jour les métadonnées DICOM
@@ -585,11 +589,14 @@ def sync_orthanc(request):
                 if existing.date != study_date:
                     existing.date = study_date
                     changed_fields.append('date')
-                if existing.region != region:
-                    existing.region = region
+                if existing.region != origin['region']:
+                    existing.region = origin['region']
                     changed_fields.append('region')
+                if existing.modality_ip != origin['modality_ip']:
+                    existing.modality_ip = origin['modality_ip']
+                    changed_fields.append('modality_ip')
                 if changed_fields:
-                    existing.save(update_fields=changed_fields)
+                    existing.save(update_fields=changed_fields + ['updated_at'])
             updated += 1
         else:
             Exam.objects.create(
@@ -599,8 +606,8 @@ def sync_orthanc(request):
                 date=study_date,
                 priority='Normal',
                 status='En attente',
-                region=region,
-                modality_ip='',
+                region=origin['region'],
+                modality_ip=origin['modality_ip'],
                 notes='',
             )
             created += 1
@@ -681,11 +688,20 @@ def orthanc_webhook(request):
         except ValueError:
             pass
 
-    main_dicom = meta.get('MainDicomTags', {})
     dicom_study_uid = _dicom_study_uid(meta, study_id)
+    origin = resolve_study_origin(ORTHANC_URL, meta)
     existing = _find_exam_by_study_ids(dicom_study_uid, study_id)
     if existing:
         _normalize_exam_study_uid(existing, dicom_study_uid)
+        changed_fields = []
+        if existing.region != origin['region']:
+            existing.region = origin['region']
+            changed_fields.append('region')
+        if existing.modality_ip != origin['modality_ip']:
+            existing.modality_ip = origin['modality_ip']
+            changed_fields.append('modality_ip')
+        if changed_fields:
+            existing.save(update_fields=changed_fields + ['updated_at'])
         return Response({
             'status': 'already_exists',
             'study_id': dicom_study_uid,
@@ -707,9 +723,6 @@ def orthanc_webhook(request):
     if not has_op:
         return Response({'status': 'skipped_no_op', 'study_id': study_id})
 
-    # Extraire la région depuis InstitutionName
-    institution = main_dicom.get('InstitutionName', '')
-
     exam = Exam.objects.create(
         study_instance_uid=dicom_study_uid,
         **patient,
@@ -717,8 +730,8 @@ def orthanc_webhook(request):
         date=study_date,
         priority='Normal',
         status='En attente',
-        region=institution if institution else '',
-        modality_ip='',
+        region=origin['region'],
+        modality_ip=origin['modality_ip'],
         notes='',
     )
 

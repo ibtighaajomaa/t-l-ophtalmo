@@ -193,14 +193,9 @@ function CompteRenduPage() {
                 </span>
               </div>
 
-              <div className="mt-5 grid gap-3 text-sm text-slate-600 sm:grid-cols-3">
+              <div className="mt-5 grid gap-3 text-sm text-slate-600 sm:grid-cols-2">
                 <InfoItem icon={User} label="ID patient" value={exam?.patientId || "—"} />
                 <InfoItem icon={Calendar} label="Date examen" value={exam?.date || "—"} />
-                <InfoItem
-                  icon={BadgeCheck}
-                  label="Signature"
-                  value={report?.signed_by_name || report?.validated_by_name || "Non renseignée"}
-                />
               </div>
               <div className="mt-2 text-xs text-slate-500">
                 Dernière mise à jour : {formatDateTime(report?.signed_at || report?.updated_at)}

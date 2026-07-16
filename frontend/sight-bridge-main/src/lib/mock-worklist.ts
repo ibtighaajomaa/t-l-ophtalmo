@@ -23,6 +23,7 @@ export interface Exam {
   patientAge: number;
   patientBirthDate?: string;
   patientHistory?: string;
+  clinicalInfo?: Record<string, unknown> | null;
   type: ExamType;
   date: string;
   priority: ExamPriority;
@@ -32,6 +33,7 @@ export interface Exam {
   imageUrl?: string;
   doctorId?: string;
   region: string;
+  institutionName?: string;
   modalityIp: string;
   createdByUserId?: string;
   studyInstanceUid?: string;

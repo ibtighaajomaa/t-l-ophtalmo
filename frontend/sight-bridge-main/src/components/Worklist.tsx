@@ -214,6 +214,196 @@ function QualityModal({ exam, onClose }: { exam: Exam; onClose: () => void }) {
   );
 }
 
+function clinicalValue(info: Record<string, unknown> | null | undefined, keys: string[], fallback = "") {
+  if (!info) return fallback;
+  for (const key of keys) {
+    const value = info[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return String(value);
+    }
+  }
+  return fallback;
+}
+
+function clinicalBoolean(info: Record<string, unknown> | null | undefined, keys: string[]) {
+  const value = clinicalValue(info, keys, "");
+  const normalized = value.toLowerCase();
+  if (["true", "1", "oui", "yes"].includes(normalized)) return "OUI";
+  if (["false", "0", "non", "no"].includes(normalized)) return "NON";
+  return "";
+}
+
+function ClinicalHistoryModal({ exam, onClose }: { exam: Exam; onClose: () => void }) {
+  const info = exam.clinicalInfo;
+  const diabetesType = clinicalValue(info, ["diabetes_type", "type_diabete", "typeDiabete"]);
+  const hta = clinicalBoolean(info, ["hta", "hypertension", "hypertension_arterielle"]);
+  const otherPathology = clinicalValue(info, ["other_pathology", "autre_pathologie", "autrePathologie"]);
+  const notes = clinicalValue(info, ["notes", "motif", "motif_notes", "motifNotes", "clinical_notes"]);
+  const inputClass =
+    "min-h-11 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 shadow-sm";
+  const labelClass = "text-xs font-semibold uppercase tracking-wide text-slate-500";
+
+  function Field({ label, value, className = "" }: { label: string; value: string; className?: string }) {
+    return (
+      <label className={`space-y-1.5 ${className}`}>
+        <span className={labelClass}>{label}</span>
+        <span className={`${inputClass} flex items-center`}>{value}</span>
+      </label>
+    );
+  }
+
+  function Choice({
+    label,
+    selected,
+    tone = "blue",
+  }: {
+    label: string;
+    selected: boolean;
+    tone?: "blue" | "emerald";
+  }) {
+    const activeClass =
+      tone === "emerald"
+        ? "border-emerald-500 bg-emerald-50 text-emerald-700"
+        : "border-blue-500 bg-blue-50 text-blue-700";
+
+    return (
+      <span
+        className={`flex min-h-11 items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold ${
+          selected ? activeClass : "border-slate-200 bg-white text-slate-600"
+        }`}
+      >
+        <span
+          className={`h-3.5 w-3.5 rounded-full border ${
+            selected ? "border-current bg-current shadow-[inset_0_0_0_3px_white]" : "border-slate-300 bg-white"
+          }`}
+        />
+        {label}
+      </span>
+    );
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="patient-history-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 bg-white px-6 py-5">
+          <div className="flex gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+              <ClipboardList className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-blue-600">Dossier clinique</p>
+              <h2 id="patient-history-title" className="mt-1 text-xl font-semibold text-slate-950">
+                Renseignements cliniques et antécédents
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                {exam.patientName}
+                {exam.patientId ? ` · ${exam.patientId}` : ""}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fermer"
+            className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="max-h-[calc(92vh-88px)] overflow-y-auto px-6 py-5">
+          <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold text-slate-950">Diabète</h3>
+                  <p className="mt-0.5 text-sm text-slate-500">Type, durée et derniers bilans biologiques.</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <span className={labelClass}>Type de diabète</span>
+                  <div className="grid gap-2 sm:grid-cols-3">
+              {["TYPE 1", "TYPE 2", "Gestationnel"].map((type) => (
+                      <Choice
+                        key={type}
+                        label={type}
+                        selected={diabetesType.toLowerCase().includes(type.toLowerCase().replace("type ", ""))}
+                      />
+              ))}
+                  </div>
+                </div>
+
+                <Field label="Durée du diabète" value={clinicalValue(info, ["diabetes_duration", "duree_diabete", "dureeDiabete"])} />
+
+                <div className="grid gap-3 sm:grid-cols-[1fr_180px]">
+                  <Field label="Dernière glycémie" value={clinicalValue(info, ["last_glycemia", "derniere_glycemie", "glycemie"])} />
+                  <Field label="Date" value={clinicalValue(info, ["last_glycemia_date", "date_glycemie"])} />
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-[1fr_180px]">
+                  <Field label="Dernière HbA1c" value={clinicalValue(info, ["last_hba1c", "derniere_hba1c", "hba1c"])} />
+                  <Field label="Date" value={clinicalValue(info, ["last_hba1c_date", "date_hba1c"])} />
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="font-semibold text-slate-950">Traitement et facteurs de risque</h3>
+              <p className="mt-0.5 text-sm text-slate-500">Informations utiles avant lecture de l’examen.</p>
+
+              <div className="mt-4 space-y-4">
+                <Field label="Type de traitement" value={clinicalValue(info, ["treatment_type", "type_traitement", "traitement"])} />
+
+                <div className="space-y-1.5">
+                  <span className={labelClass}>Hypertension artérielle (HTA)</span>
+                  <div className="grid grid-cols-2 gap-2">
+              {["OUI", "NON"].map((choice) => (
+                      <Choice key={choice} label={choice} selected={hta === choice} tone="emerald" />
+              ))}
+                  </div>
+                </div>
+
+                <label className="space-y-1.5">
+                  <span className={labelClass}>Autre pathologie</span>
+                  <span className={`${inputClass} block min-h-28 whitespace-pre-line`}>{otherPathology}</span>
+                </label>
+              </div>
+            </section>
+          </div>
+
+          <section className="mt-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-3 flex items-center gap-2">
+              <Calendar className="h-4 w-4 text-blue-600" />
+              <h3 className="font-semibold text-slate-950">Motif et notes</h3>
+            </div>
+            <div className={`${inputClass} block min-h-32 whitespace-pre-line leading-relaxed`}>{notes}</div>
+          </section>
+
+          <div className="mt-5 flex justify-end border-t border-slate-200 pt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const TODAY = "2026-06-12";
 
 interface WorklistProps {
@@ -527,7 +717,14 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                           {exam.priority}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-slate-700">{exam.region || "—"}</td>
+                      <td className="px-4 py-3">
+                        <div
+                          className="max-w-56 truncate font-medium text-slate-800"
+                          title={exam.institutionName || exam.region || "Établissement inconnu"}
+                        >
+                          {exam.institutionName || exam.region || "Établissement inconnu"}
+                        </div>
+                      </td>
                       <td className="px-4 py-3">
                         <QualityBadge exam={exam} onClick={() => setQualityModalExam(exam)} />
                       </td>
@@ -622,39 +819,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
       </div>
       {historyExam &&
         ReactDOM.createPortal(
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="patient-history-title"
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) setHistoryExam(null);
-            }}
-          >
-            <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 id="patient-history-title" className="text-lg font-semibold text-slate-900">
-                    Antécédents du patient
-                  </h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    {historyExam.patientName} · {historyExam.patientId || "ID non renseigné"}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setHistoryExam(null)}
-                  aria-label="Fermer"
-                  className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-              <div className="mt-5 whitespace-pre-line rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
-                {historyExam.patientHistory || "Aucun antécédent renseigné dans Orthanc."}
-              </div>
-            </div>
-          </div>,
+          <ClinicalHistoryModal exam={historyExam} onClose={() => setHistoryExam(null)} />,
           document.body,
         )}
       {qualityModalExam &&

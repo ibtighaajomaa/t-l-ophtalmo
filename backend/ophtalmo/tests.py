@@ -257,19 +257,20 @@ class ManualSegmentationAssociationTest(TestCase):
 
 
 class OrthancStudyUidNormalizationTest(TestCase):
-    def _response(self, data, status_code=200):
+    def _response(self, data, status_code=200, text=''):
         response = MagicMock(status_code=status_code)
         response.json.return_value = data
         response.raise_for_status.return_value = None
+        response.text = text
         return response
 
-    def _study_meta(self, dicom_uid='1.2.3.dicom', patient_id='PAT1'):
+    def _study_meta(self, dicom_uid='1.2.3.dicom', patient_id='PAT1', institution='Hospital'):
         return {
             'Series': ['orthanc-series-op'],
             'MainDicomTags': {
                 'StudyInstanceUID': dicom_uid,
                 'StudyDate': '20260709',
-                'InstitutionName': 'Hospital',
+                'InstitutionName': institution,
             },
             'PatientMainDicomTags': {
                 'PatientID': patient_id,
@@ -325,6 +326,45 @@ class OrthancStudyUidNormalizationTest(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertTrue(Exam.objects.filter(study_instance_uid=dicom_uid).exists())
         self.assertFalse(Exam.objects.filter(study_instance_uid=orthanc_id).exists())
+
+    @patch('ophtalmo.tasks.tache_auto_quality.delay')
+    @patch('ophtalmo.views.requests.get')
+    def test_webhook_falls_back_to_remote_ip_site(self, mock_get, _mock_quality_delay):
+        orthanc_id = 'orthanc-study-id'
+        dicom_uid = '1.2.392.remote-ip'
+        instance_id = 'orthanc-instance-op'
+
+        def get_side_effect(url, **kwargs):
+            if url.endswith(f'/studies/{orthanc_id}'):
+                return self._response(self._study_meta(dicom_uid=dicom_uid, institution=''))
+            if url.endswith('/series/orthanc-series-op'):
+                return self._response({
+                    'MainDicomTags': {'Modality': 'OP'},
+                    'Instances': [instance_id],
+                })
+            if url.endswith(f'/instances/{instance_id}/metadata/RemoteIP'):
+                return self._response({}, text='192.168.167.116')
+            if url.endswith(f'/instances/{instance_id}/metadata/RemoteAET'):
+                return self._response({}, text='Canon RC Capture')
+            if url.endswith(f'/instances/{instance_id}/metadata/CalledAET'):
+                return self._response({}, text='Orthanc')
+            if url.endswith(f'/instances/{instance_id}/metadata/Origin'):
+                return self._response({}, text='DicomProtocol')
+            return self._response({}, status_code=404)
+
+        mock_get.side_effect = get_side_effect
+
+        request = APIRequestFactory().post(
+            '/api/exams/orthanc-webhook/',
+            {'ID': orthanc_id},
+            format='json',
+        )
+        response = orthanc_webhook(request)
+
+        self.assertEqual(response.status_code, 201)
+        exam = Exam.objects.get(study_instance_uid=dicom_uid)
+        self.assertEqual(exam.region, 'kelibia')
+        self.assertEqual(exam.modality_ip, '192.168.167.116')
 
 
 class LatestAnalysisReportIsolationTest(TestCase):

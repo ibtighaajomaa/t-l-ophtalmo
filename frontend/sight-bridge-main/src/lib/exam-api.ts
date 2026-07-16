@@ -8,6 +8,7 @@ interface ApiExam {
   patient_birth_date: string | null;
   patient_age: number | null;
   patient_history: string;
+  clinical_info?: Record<string, unknown> | null;
   exam_type: string;
   date: string;
   priority: string;
@@ -17,6 +18,7 @@ interface ApiExam {
   created_by: number | null;
   created_by_name: string | null;
   region: string;
+  institution_name?: string;
   modality_ip: string;
   notes: string;
   created_at: string;
@@ -94,6 +96,7 @@ function toFrontendExam(api: ApiExam): Exam {
     patientAge,
     patientBirthDate: api.patient_birth_date ?? undefined,
     patientHistory: api.patient_history || undefined,
+    clinicalInfo: api.clinical_info ?? null,
     type: api.exam_type as Exam["type"],
     date: api.date,
     priority: api.priority as Exam["priority"],
@@ -101,6 +104,7 @@ function toFrontendExam(api: ApiExam): Exam {
     assignedTo: api.assigned_to_name,
     notes: api.notes || undefined,
     region: api.region,
+    institutionName: api.institution_name || api.region || undefined,
     modalityIp: api.modality_ip,
     studyInstanceUid: api.study_instance_uid ?? undefined,
     isReassigned24h: api.is_reassigned_24h,

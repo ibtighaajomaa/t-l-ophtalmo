@@ -1,8 +1,30 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect, useMemo } from "react";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
-import { Calendar } from "lucide-react";
-import { useAuth } from "@/lib/auth-context";
+import {
+  Activity,
+  Calendar,
+  CheckCircle2,
+  Clock3,
+  MapPin,
+  Radio,
+  RotateCw,
+  TrendingUp,
+} from "lucide-react";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { fetchExams } from "@/lib/exam-api";
+import type { Exam } from "@/lib/mock-worklist";
 
 export const Route = createFileRoute("/_app/analyse")({
   component: () => (
@@ -23,126 +45,235 @@ export interface RegionData {
   interprete: number;
 }
 
-const REGIONS: RegionData[] = [
-  {
-    id: "ghomrassen",
-    name: "Ghomrassen",
-    governorate: "Tataouine",
-    lat: 33.066,
-    lng: 10.333,
-    en_attente: 10,
-    en_cours: 5,
-    interprete: 65,
-  },
-  {
-    id: "eljem",
-    name: "El Jem",
-    governorate: "Mahdia",
-    lat: 35.29,
-    lng: 10.71,
-    en_attente: 15,
-    en_cours: 10,
-    interprete: 70,
-  },
-  {
-    id: "degache",
-    name: "Degache",
-    governorate: "Tozeur",
-    lat: 33.98,
-    lng: 8.21,
-    en_attente: 12,
-    en_cours: 8,
-    interprete: 60,
-  },
-  {
-    id: "souklahad",
-    name: "Souk Lahad",
-    governorate: "Kebili",
-    lat: 33.76,
-    lng: 8.78,
-    en_attente: 5,
-    en_cours: 2,
-    interprete: 22,
-  },
-  {
-    id: "regueb",
-    name: "Regueb",
-    governorate: "Sidi Bouzid",
-    lat: 34.86,
-    lng: 9.78,
-    en_attente: 8,
-    en_cours: 4,
-    interprete: 44,
-  },
-  {
-    id: "meknassi",
-    name: "Meknassi",
-    governorate: "Sidi Bouzid",
-    lat: 34.61,
-    lng: 9.61,
-    en_attente: 3,
-    en_cours: 1,
-    interprete: 19,
-  },
-  {
-    id: "mateur",
-    name: "Mateur",
-    governorate: "Bizerte",
-    lat: 37.04,
-    lng: 9.66,
-    en_attente: 20,
-    en_cours: 15,
-    interprete: 85,
-  },
-  {
-    id: "gaafour",
-    name: "Gaâfour",
-    governorate: "Siliana",
-    lat: 36.32,
-    lng: 9.32,
-    en_attente: 6,
-    en_cours: 3,
-    interprete: 28,
-  },
-  {
-    id: "kelibia",
-    name: "Kelibia",
+type SiteLocation = {
+  name: string;
+  governorate: string;
+  lat: number;
+  lng: number;
+};
+
+const SITE_LOCATIONS: Record<string, SiteLocation> = {
+  kelibia: { name: "Kélibia", governorate: "Nabeul", lat: 36.84, lng: 11.09 },
+  "hopital circonscrition kelibia": {
+    name: "Kélibia",
     governorate: "Nabeul",
     lat: 36.84,
     lng: 11.09,
-    en_attente: 25,
-    en_cours: 20,
-    interprete: 90,
   },
-  {
-    id: "menzeltemim",
-    name: "Menzel Temim",
+  "hopital circonscription kelibia": {
+    name: "Kélibia",
     governorate: "Nabeul",
-    lat: 36.78,
-    lng: 10.98,
-    en_attente: 18,
-    en_cours: 12,
-    interprete: 55,
+    lat: 36.84,
+    lng: 11.09,
   },
-];
+  mateur: { name: "Mateur", governorate: "Bizerte", lat: 37.04, lng: 9.66 },
+  "manzel temim": { name: "Menzel Temim", governorate: "Nabeul", lat: 36.78, lng: 10.98 },
+  "menzel temim": { name: "Menzel Temim", governorate: "Nabeul", lat: 36.78, lng: 10.98 },
+  kebili: { name: "Kébili", governorate: "Kébili", lat: 33.705, lng: 8.969 },
+  deguech: { name: "Deguech", governorate: "Tozeur", lat: 33.98, lng: 8.21 },
+  siliana: { name: "Siliana", governorate: "Siliana", lat: 36.08, lng: 9.37 },
+  "el fahes": { name: "El Fahes", governorate: "Zaghouan", lat: 36.37, lng: 9.91 },
+  gaafour: { name: "Gaâfour", governorate: "Siliana", lat: 36.32, lng: 9.32 },
+  ghomrassen: { name: "Ghomrassen", governorate: "Tataouine", lat: 33.066, lng: 10.333 },
+  "el jem": { name: "El Jem", governorate: "Mahdia", lat: 35.29, lng: 10.71 },
+  "souk lahad": { name: "Souk Lahad", governorate: "Kébili", lat: 33.76, lng: 8.78 },
+  regueb: { name: "Regueb", governorate: "Sidi Bouzid", lat: 34.86, lng: 9.78 },
+  meknassi: { name: "Meknassi", governorate: "Sidi Bouzid", lat: 34.61, lng: 9.61 },
+  "etablissement inconnu": {
+    name: "Établissement inconnu",
+    governorate: "Non cartographié",
+    lat: 34.0,
+    lng: 9.5,
+  },
+};
+
+const STATUS_COLORS = {
+  attente: "#ff832b",
+  cours: "#0f62fe",
+  interprete: "#24a148",
+};
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat("fr-FR").format(value);
+}
+
+function percentage(value: number, total: number) {
+  if (!total) return 0;
+  return Math.round((value / total) * 100);
+}
+
+function normalizeSiteName(value?: string) {
+  return (value || "Établissement inconnu")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function canonicalSite(exam: Exam) {
+  const rawName = exam.institutionName || exam.region || "Établissement inconnu";
+  const key = normalizeSiteName(rawName);
+  const location = SITE_LOCATIONS[key];
+  if (location) return { id: key, ...location };
+
+  return {
+    id: key || "etablissement-inconnu",
+    name: rawName,
+    governorate: "Site à géolocaliser",
+    lat: 34.0,
+    lng: 9.5,
+  };
+}
+
+function parseLocalDate(value: string) {
+  return new Date(`${value}T00:00:00`);
+}
+
+function dateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isExamInPeriod(exam: Exam, period: "Date" | "Jour" | "Semaine" | "Mois", filterDate: string) {
+  if (!exam.date) return false;
+  const examDate = parseLocalDate(exam.date);
+  const today = new Date();
+
+  if (period === "Date") {
+    return filterDate ? exam.date === filterDate : true;
+  }
+
+  if (period === "Jour") {
+    return exam.date === dateKey(today);
+  }
+
+  if (period === "Semaine") {
+    const start = new Date(today);
+    start.setDate(today.getDate() - 6);
+    start.setHours(0, 0, 0, 0);
+    return examDate >= start && examDate <= today;
+  }
+
+  return examDate.getFullYear() === today.getFullYear() && examDate.getMonth() === today.getMonth();
+}
+
+function aggregateRegions(exams: Exam[]): RegionData[] {
+  const bySite = new Map<string, RegionData>();
+
+  for (const exam of exams) {
+    const site = canonicalSite(exam);
+    const current =
+      bySite.get(site.id) ||
+      ({
+        id: site.id,
+        name: site.name,
+        governorate: site.governorate,
+        lat: site.lat,
+        lng: site.lng,
+        en_attente: 0,
+        en_cours: 0,
+        interprete: 0,
+      } satisfies RegionData);
+
+    if (exam.status === "Interprété") {
+      current.interprete += 1;
+    } else if (exam.status === "En cours") {
+      current.en_cours += 1;
+    } else {
+      current.en_attente += 1;
+    }
+
+    bySite.set(site.id, current);
+  }
+
+  return [...bySite.values()].sort(
+    (a, b) =>
+      b.en_attente +
+      b.en_cours +
+      b.interprete -
+      (a.en_attente + a.en_cours + a.interprete),
+  );
+}
+
+function KpiTile({
+  label,
+  value,
+  detail,
+  icon: Icon,
+  tone,
+}: {
+  label: string;
+  value: number | string;
+  detail: string;
+  icon: typeof Activity;
+  tone: "blue" | "green" | "orange" | "slate";
+}) {
+  const toneClasses = {
+    blue: "text-blue-700 bg-blue-50 ring-blue-100",
+    green: "text-emerald-700 bg-emerald-50 ring-emerald-100",
+    orange: "text-orange-700 bg-orange-50 ring-orange-100",
+    slate: "text-slate-700 bg-slate-50 ring-slate-100",
+  };
+
+  return (
+    <div className="border-r border-slate-200 px-5 py-4 last:border-r-0">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
+          <div className="mt-2 text-2xl font-semibold tabular-nums text-slate-950">{value}</div>
+          <div className="mt-1 text-xs text-slate-500">{detail}</div>
+        </div>
+        <span className={`rounded-md p-2 ring-1 ${toneClasses[tone]}`}>
+          <Icon className="h-4 w-4" />
+        </span>
+      </div>
+    </div>
+  );
+}
 
 function AnalysePage() {
-  const { user } = useAuth();
   const [period, setPeriod] = useState<"Date" | "Jour" | "Semaine" | "Mois">("Date");
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
   const [filterDate, setFilterDate] = useState<string>("");
+  const [exams, setExams] = useState<Exam[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const regionsData = useMemo(() => {
-    if (["Chef", "Medecin", "Resident"].includes(user?.role ?? "")) {
-      return REGIONS.map((r) => ({
-        ...r,
-        en_attente: Math.floor(r.en_attente * 0.3),
-        en_cours: Math.floor(r.en_cours * 0.3),
-        interprete: Math.floor(r.interprete * 0.3),
-      }));
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCurrentExams() {
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await fetchExams({ page_size: 10000 });
+        if (!cancelled) setExams(result.exams);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Impossible de charger les données");
+          setExams([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
-    return REGIONS;
-  }, [user]);
+
+    loadCurrentExams();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const scopedExams = useMemo(
+    () => exams.filter((exam) => isExamInPeriod(exam, period, filterDate)),
+    [exams, period, filterDate],
+  );
+
+  const regionsData = useMemo(() => aggregateRegions(scopedExams), [scopedExams]);
 
   // Lazy load MapView to prevent SSR errors with Leaflet
   const [MapViewComponent, setMapViewComponent] = useState<any>(null);
@@ -157,7 +288,6 @@ function AnalysePage() {
   const totalInterprete = regionsData.reduce((sum, r) => sum + r.interprete, 0);
   const totalAttente = regionsData.reduce((sum, r) => sum + r.en_attente, 0);
   const totalCours = regionsData.reduce((sum, r) => sum + r.en_cours, 0);
-  const averageInterprete = totalInterprete / regionsData.length;
 
   const totalExams = totalAttente + totalCours + totalInterprete;
 
@@ -168,28 +298,75 @@ function AnalysePage() {
   const displayInterprete = selectedRegion ? selectedRegion.interprete : totalInterprete;
   const displayTotal = displayAttente + displayCours + displayInterprete;
 
-  // Progress Bar Widths
-  const attenteWidth = (displayAttente / displayTotal) * 100;
-  const coursWidth = (displayCours / displayTotal) * 100;
-  const interpreteWidth = (displayInterprete / displayTotal) * 100;
+  const completionRate = percentage(totalInterprete, totalExams);
+  const pendingRate = percentage(totalAttente, totalExams);
+  const activeSites = regionsData.length;
+  const belowAverage = regionsData.filter((region) => {
+    const regionTotal = region.en_attente + region.en_cours + region.interprete;
+    const regionAverage = regionTotal / 3;
+    return region.interprete <= regionAverage;
+  }).length;
+
+  const trendData = useMemo(() => {
+    const grouped = new Map<string, { label: string; examens: number; interpretes: number }>();
+    const source = period === "Date" && !filterDate ? exams : scopedExams;
+
+    for (const exam of source) {
+      if (!exam.date) continue;
+      const current = grouped.get(exam.date) || {
+        label: exam.date.slice(5),
+        examens: 0,
+        interpretes: 0,
+      };
+      current.examens += 1;
+      if (exam.status === "Interprété") current.interpretes += 1;
+      grouped.set(exam.date, current);
+    }
+
+    return [...grouped.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-8)
+      .map(([, value]) => value);
+  }, [exams, scopedExams, period, filterDate]);
+
+  const statusBars = [
+    { name: "En attente", value: displayAttente, color: STATUS_COLORS.attente },
+    { name: "En cours", value: displayCours, color: STATUS_COLORS.cours },
+    { name: "Interprété", value: displayInterprete, color: STATUS_COLORS.interprete },
+  ];
+
+  const rankedRegions = useMemo(
+    () => [...regionsData].sort((a, b) => b.interprete - a.interprete),
+    [regionsData],
+  );
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-50 overflow-auto">
-      {/* Header Bar */}
-      <header className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6 py-4 shadow-sm">
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2">
-            <Calendar className="h-5 w-5 text-slate-500" />
-            <span className="text-sm font-semibold text-slate-700">Période :</span>
-            <div className="flex rounded-lg bg-slate-100 p-1">
+    <div className="min-h-screen overflow-auto bg-[#f4f6f8] text-slate-950">
+      <div className="border-b border-slate-200 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-blue-700">
+              <Radio className="h-4 w-4" />
+              Projet national pilote
+            </div>
+            <h1 className="mt-1 text-xl font-semibold text-slate-950">
+              Supervision de la télé-rétinographie
+            </h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Couverture, interprétation et files actives par établissement.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 p-1">
               {["Date", "Jour", "Semaine", "Mois"].map((p) => (
                 <button
                   key={p}
-                  onClick={() => setPeriod(p as any)}
-                  className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
+                  onClick={() => setPeriod(p as typeof period)}
+                  className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
                     period === p
-                      ? "bg-white text-blue-600 shadow-sm"
-                      : "text-slate-600 hover:text-slate-900"
+                      ? "bg-white text-blue-700 shadow-sm ring-1 ring-slate-200"
+                      : "text-slate-600 hover:text-slate-950"
                   }`}
                 >
                   {p}
@@ -197,206 +374,265 @@ function AnalysePage() {
               ))}
             </div>
             {period === "Date" && (
-              <input
-                type="date"
-                value={filterDate}
-                onChange={(e) => setFilterDate(e.target.value)}
-                className="ml-2 rounded-md border border-slate-200 px-3 py-1 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
+              <label className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+                <Calendar className="h-4 w-4 text-slate-500" />
+                <input
+                  type="date"
+                  value={filterDate}
+                  onChange={(event) => setFilterDate(event.target.value)}
+                  className="bg-transparent text-slate-700 outline-none"
+                />
+              </label>
             )}
           </div>
-          <div className="hidden sm:flex items-center gap-4 text-sm">
-            <div className="flex items-center gap-1.5">
-              <span className="h-3 w-3 rounded-full bg-green-500"></span>
-              <span className="text-slate-600">
-                Au-dessus de la moyenne (&gt; {averageInterprete.toFixed(1)})
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="h-3 w-3 rounded-full bg-red-500"></span>
-              <span className="text-slate-600">En dessous de la moyenne</span>
-            </div>
-          </div>
-        </div>
-        
-      </header>
-
-      {/* Main Content — 3 columns at same level */}
-      <div className="flex flex-1 p-6 gap-5 items-stretch overflow-hidden">
-        {/* Col 1: Interactive Map */}
-        <div className="flex-1 rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden relative z-0">
-          {MapViewComponent ? (
-            <MapViewComponent
-              regions={regionsData}
-              selectedRegionId={selectedRegionId}
-              setSelectedRegionId={setSelectedRegionId}
-              averageInterprete={averageInterprete}
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center bg-slate-50 text-slate-500">
-              Chargement de la carte...
-            </div>
-          )}
         </div>
 
-        {/* Col 2: Histogram / Summary Card */}
-        <div className="w-72 shrink-0 rounded-2xl border border-slate-200 bg-white shadow-sm flex flex-col p-6 overflow-y-auto">
-          <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
-            CE {period.toUpperCase()}
-          </div>
-          <div className="flex items-center gap-2 mb-1">
-            <span
-              className={`flex h-6 w-6 items-center justify-center rounded-full ${selectedRegion ? "bg-indigo-100 text-indigo-600" : "bg-blue-100 text-blue-600"}`}
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
+        <div className="grid border-t border-slate-200 bg-white sm:grid-cols-2 xl:grid-cols-4">
+          <KpiTile
+            label="Examens collectés"
+            value={formatNumber(totalExams)}
+            detail={`${activeSites} sites pilotes actifs`}
+            icon={Activity}
+            tone="blue"
+          />
+          <KpiTile
+            label="Taux interprété"
+            value={`${completionRate}%`}
+            detail={`${formatNumber(totalInterprete)} comptes rendus finalisés`}
+            icon={CheckCircle2}
+            tone="green"
+          />
+          <KpiTile
+            label="File d'attente"
+            value={formatNumber(totalAttente)}
+            detail={`${pendingRate}% du flux national`}
+            icon={Clock3}
+            tone="orange"
+          />
+          <KpiTile
+            label="Sites sous moyenne locale"
+            value={belowAverage}
+            detail="Moyenne site = total / 3 statuts"
+            icon={TrendingUp}
+            tone="slate"
+          />
+        </div>
+      </div>
+
+      <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1fr)_400px]">
+        <main className="space-y-5">
+          <section className="flex h-[620px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-base font-semibold text-slate-950">Carte nationale des sites</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Nombre total d’examens selon le filtre ; couleur selon les interprétés comparés à la moyenne du site.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                  Au-dessus moyenne
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
+                  Sous moyenne
+                </span>
+              </div>
+            </div>
+            {(loading || error) && (
+              <div
+                className={`border-b px-5 py-3 text-sm ${
+                  error
+                    ? "border-red-100 bg-red-50 text-red-700"
+                    : "border-blue-100 bg-blue-50 text-blue-700"
+                }`}
+              >
+                {error || "Chargement des données actuelles depuis la worklist..."}
+              </div>
+            )}
+            <div className="min-h-0 flex-1">
+              {MapViewComponent && regionsData.length ? (
+                <MapViewComponent
+                  regions={regionsData}
+                  selectedRegionId={selectedRegionId}
+                  setSelectedRegionId={setSelectedRegionId}
                 />
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                />
-              </svg>
-            </span>
-            <h2 className="text-base font-bold text-slate-900">
-              {selectedRegion ? selectedRegion.name : "Tunisie — Total"}
-            </h2>
-          </div>
-          <p className="text-sm text-slate-400 mb-6">
-            {displayTotal} examens - Ce {period.toLowerCase()}
-          </p>
-
-          <div className="space-y-5 flex-1">
-            {/* En attente */}
-            <div>
-              <div className="flex justify-between text-sm mb-1.5">
-                <span className="flex items-center gap-1.5 text-orange-600 font-medium">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  En attente
-                </span>
-                <span className="font-bold text-slate-900">{displayAttente}</span>
-              </div>
-              <div className="h-3 w-full rounded-full bg-orange-100 overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-orange-400 to-orange-500 rounded-full transition-all duration-500"
-                  style={{ width: `${attenteWidth}%` }}
-                ></div>
-              </div>
-            </div>
-            {/* En cours */}
-            <div>
-              <div className="flex justify-between text-sm mb-1.5">
-                <span className="flex items-center gap-1.5 text-blue-600 font-medium">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                    />
-                  </svg>
-                  En cours
-                </span>
-                <span className="font-bold text-slate-900">{displayCours}</span>
-              </div>
-              <div className="h-3 w-full rounded-full bg-blue-100 overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-blue-400 to-blue-500 rounded-full transition-all duration-500"
-                  style={{ width: `${coursWidth}%` }}
-                ></div>
-              </div>
-            </div>
-            {/* Interprété */}
-            <div>
-              <div className="flex justify-between text-sm mb-1.5">
-                <span className="flex items-center gap-1.5 text-green-600 font-medium">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  Interprété
-                </span>
-                <span className="font-bold text-slate-900">{displayInterprete}</span>
-              </div>
-              <div className="h-3 w-full rounded-full bg-green-100 overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-green-400 to-green-500 rounded-full transition-all duration-500"
-                  style={{ width: `${interpreteWidth}%` }}
-                ></div>
-              </div>
-            </div>
-          </div>
-
-          {selectedRegion && (
-            <button
-              onClick={() => setSelectedRegionId(null)}
-              className="mt-6 w-full py-2 text-sm text-slate-500 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors font-medium border border-slate-200"
-            >
-              Retour au total national
-            </button>
-          )}
-        </div>
-
-        {/* Col 3: Regions Table */}
-        <div className="w-64 shrink-0 rounded-2xl border border-slate-200 bg-white shadow-sm flex flex-col overflow-hidden">
-          <div className="px-5 pt-5 pb-3 border-b border-slate-100">
-            <h3 className="font-semibold text-slate-900 text-sm">
-              Régions <span className="text-slate-400 font-normal">({regionsData.length})</span>
-            </h3>
-          </div>
-          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
-            {regionsData.map((region) => {
-              const isSelected = selectedRegionId === region.id;
-              const isAboveAverage = region.interprete > averageInterprete;
-              return (
-                <div
-                  key={region.id}
-                  onClick={() => setSelectedRegionId(region.id)}
-                  className={`flex items-center justify-between py-2.5 px-3 rounded-xl transition-all cursor-pointer ${
-                    isSelected ? "bg-blue-50 shadow-sm" : "hover:bg-slate-50"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <span
-                      className={`h-2 w-2 rounded-full shrink-0 ${isAboveAverage ? "bg-green-500" : "bg-red-400"}`}
-                    ></span>
-                    <div className="flex flex-col">
-                      <span
-                        className={`text-sm leading-tight ${isSelected ? "font-bold text-blue-700" : "font-medium text-slate-700"}`}
-                      >
-                        {region.name}
-                      </span>
-                      <span className="text-[10px] text-slate-400 leading-tight">
-                        {region.governorate}
-                      </span>
-                    </div>
-                  </div>
-                  <span
-                    className={`text-sm font-bold tabular-nums ${isSelected ? "text-blue-700" : "text-slate-700"}`}
-                  >
-                    {region.interprete}
-                  </span>
+              ) : !loading && !regionsData.length ? (
+                <div className="flex h-full items-center justify-center bg-slate-50 text-sm text-slate-500">
+                  Aucune donnée d’examen disponible pour cette période.
                 </div>
-              );
-            })}
-          </div>
-        </div>
+              ) : (
+                <div className="flex h-full items-center justify-center bg-slate-50 text-sm text-slate-500">
+                  Chargement de la carte...
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <h2 className="text-base font-semibold text-slate-950">Courbe nationale</h2>
+              <p className="mt-1 text-sm text-slate-500">Tendance synthétique du flux pilote.</p>
+            </div>
+            <div className="h-64 px-5 py-4">
+              {trendData.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={trendData} margin={{ top: 8, right: 14, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="examensGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#0f62fe" stopOpacity={0.22} />
+                        <stop offset="95%" stopColor="#0f62fe" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid vertical={false} stroke="#e2e8f0" />
+                    <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: "#64748b" }} />
+                    <YAxis hide />
+                    <Tooltip contentStyle={{ borderRadius: 8, borderColor: "#cbd5e1" }} />
+                    <Area
+                      type="monotone"
+                      dataKey="examens"
+                      stroke="#0f62fe"
+                      strokeWidth={2}
+                      fill="url(#examensGradient)"
+                      name="Examens"
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="interpretes"
+                      stroke="#24a148"
+                      strokeWidth={2}
+                      fill="transparent"
+                      name="Interprétés"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                  Pas assez de données datées pour tracer une courbe.
+                </div>
+              )}
+            </div>
+          </section>
+        </main>
+
+        <aside className="space-y-5">
+          <section className="flex h-[620px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <h2 className="text-base font-semibold text-slate-950">Établissements pilotes</h2>
+              <span className="text-xs text-slate-500">{regionsData.length} sites</span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {rankedRegions.map((region, index) => {
+                const isSelected = selectedRegionId === region.id;
+                const regionTotal = region.en_attente + region.en_cours + region.interprete;
+                const regionAverage = regionTotal / 3;
+                const isAboveAverage = region.interprete > regionAverage;
+                return (
+                  <button
+                    key={region.id}
+                    onClick={() => setSelectedRegionId(region.id)}
+                    className={`grid w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 border-b border-slate-100 px-5 py-3 text-left transition last:border-b-0 ${
+                      isSelected ? "bg-blue-50" : "hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="text-xs font-semibold tabular-nums text-slate-400">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-2">
+                        <span
+                          className={`h-2 w-2 rounded-full ${isAboveAverage ? "bg-emerald-500" : "bg-red-500"}`}
+                        />
+                        <span className="truncate text-sm font-semibold text-slate-800">{region.name}</span>
+                      </span>
+                      <span className="mt-0.5 block text-xs text-slate-500">
+                        {region.governorate} · {formatNumber(regionTotal)} examens
+                      </span>
+                    </span>
+                    <span className="text-right">
+                      <span className="block text-sm font-semibold tabular-nums text-slate-950">
+                        {formatNumber(regionTotal)}
+                      </span>
+                      <span className="block text-[11px] text-slate-500">
+                        {formatNumber(region.interprete)} interpr.
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {selectedRegion ? selectedRegion.governorate : "National"}
+                </div>
+                <h2 className="mt-1 flex items-center gap-2 text-base font-semibold text-slate-950">
+                  <MapPin className="h-4 w-4 text-blue-700" />
+                  {selectedRegion ? selectedRegion.name : "Tunisie — consolidation"}
+                </h2>
+              </div>
+              {selectedRegion && (
+                <button
+                  onClick={() => setSelectedRegionId(null)}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+                >
+                  <RotateCw className="h-3.5 w-3.5" />
+                  National
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-3 divide-x divide-slate-200 border-b border-slate-200">
+              {statusBars.map((item) => (
+                <div key={item.name} className="px-4 py-3">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                    {item.name}
+                  </div>
+                  <div className="mt-1 text-lg font-semibold tabular-nums text-slate-950">
+                    {formatNumber(item.value)}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="px-5 py-4">
+              <div className="mb-3 flex items-center justify-between text-sm">
+                <span className="font-medium text-slate-700">Répartition du flux</span>
+                <span className="tabular-nums text-slate-500">{formatNumber(displayTotal)} examens</span>
+              </div>
+              <div className="h-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={statusBars} layout="vertical" margin={{ top: 4, right: 12, left: 4, bottom: 4 }}>
+                    <CartesianGrid horizontal={false} stroke="#e2e8f0" />
+                    <XAxis type="number" hide domain={[0, "dataMax"]} />
+                    <YAxis
+                      type="category"
+                      dataKey="name"
+                      width={76}
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fontSize: 12, fill: "#475569" }}
+                    />
+                    <Tooltip
+                      cursor={{ fill: "#f8fafc" }}
+                      contentStyle={{ borderRadius: 8, borderColor: "#cbd5e1" }}
+                    />
+                    <Bar dataKey="value" radius={[0, 6, 6, 0]} barSize={18}>
+                      {statusBars.map((entry) => (
+                        <Cell key={entry.name} fill={entry.color} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </section>
+
+        </aside>
       </div>
     </div>
   );

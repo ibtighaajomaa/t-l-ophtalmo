@@ -1,5 +1,11 @@
 from django.contrib import admin
-from .models import Exam, AnalysisReport, MedicalReport, MedicalReportVersion
+from .models import (
+    AnalysisReport,
+    DicomModalitySite,
+    Exam,
+    MedicalReport,
+    MedicalReportVersion,
+)
 
 
 @admin.register(Exam)
@@ -14,6 +20,13 @@ class AnalysisReportAdmin(admin.ModelAdmin):
     list_display = ['series_instance_uid', 'user', 'analysis_date']
     list_filter = ['analysis_date', 'user']
     search_fields = ['series_instance_uid']
+
+
+@admin.register(DicomModalitySite)
+class DicomModalitySiteAdmin(admin.ModelAdmin):
+    list_display = ['institution_name', 'remote_ip', 'remote_aet', 'is_active']
+    list_filter = ['is_active', 'institution_name']
+    search_fields = ['institution_name', 'remote_ip', 'remote_aet']
 
 
 @admin.register(MedicalReport)

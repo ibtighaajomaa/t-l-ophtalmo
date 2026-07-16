@@ -3,6 +3,7 @@ from .models import (
     Exam, ImageQualityAssessment, AnalysisReport, MedicalReport,
     MedicalReportVersion, DoctorNote,
 )
+from .orthanc_origin import lookup_site_name
 
 
 class ImageQualityAssessmentSerializer(serializers.ModelSerializer):
@@ -21,6 +22,7 @@ class ExamSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
     reassigned_from_name = serializers.SerializerMethodField()
+    institution_name = serializers.SerializerMethodField()
     image_quality_results = ImageQualityAssessmentSerializer(many=True, read_only=True)
 
     class Meta:
@@ -35,7 +37,7 @@ class ExamSerializer(serializers.ModelSerializer):
             'exam_type', 'date', 'priority', 'status',
             'assigned_to', 'assigned_to_name',
             'created_by', 'created_by_name',
-            'region', 'modality_ip', 'notes',
+            'region', 'institution_name', 'modality_ip', 'notes',
             'is_reassigned_24h', 'reassigned_from', 'reassigned_from_name',
             'created_at', 'updated_at',
             'quality_status', 'quality_score', 'quality_category',
@@ -59,6 +61,9 @@ class ExamSerializer(serializers.ModelSerializer):
         if obj.created_by:
             return f"{obj.created_by.first_name} {obj.created_by.last_name}"
         return None
+
+    def get_institution_name(self, obj):
+        return lookup_site_name(obj.modality_ip) or obj.region or ""
 
 
 class AnalysisReportSerializer(serializers.ModelSerializer):

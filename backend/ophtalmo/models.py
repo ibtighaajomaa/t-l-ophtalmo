@@ -144,6 +144,31 @@ class DMIAuditLog(models.Model):
         return f"{self.method} {self.endpoint} {self.numero_examen or '-'} ({self.status_code})"
 
 
+class DicomModalitySite(models.Model):
+    remote_ip = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    remote_aet = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    institution_name = models.CharField(max_length=255)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["institution_name", "remote_ip", "remote_aet"]
+        indexes = [
+            models.Index(fields=["remote_ip", "remote_aet", "is_active"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["remote_ip", "remote_aet"],
+                name="uniq_dicom_modality_site_source",
+            ),
+        ]
+
+    def __str__(self):
+        source = " / ".join(value for value in (self.remote_ip, self.remote_aet) if value)
+        return f"{self.institution_name} ({source or 'source inconnue'})"
+
+
 class ImageQualityAssessment(models.Model):
     class Category(models.TextChoices):
         GOOD = "good", "Bonne qualité"
