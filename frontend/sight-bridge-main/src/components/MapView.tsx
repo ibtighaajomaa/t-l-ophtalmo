@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup, GeoJSON, useMapEvents } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
@@ -39,42 +38,6 @@ export default function MapView({
   selectedRegionId: string | null;
   setSelectedRegionId: (id: string | null) => void;
 }) {
-  const [geoData, setGeoData] = useState<any>(null);
-
-  useEffect(() => {
-    fetch("https://raw.githubusercontent.com/johan/world.geo.json/master/countries/TUN.geo.json")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.features && data.features.length > 0) {
-          const tunisiaCoords = data.features[0].geometry.coordinates;
-          const invertedGeoJSON = {
-            type: "FeatureCollection",
-            features: [
-              {
-                type: "Feature",
-                properties: {},
-                geometry: {
-                  type: "Polygon",
-                  coordinates: [
-                    [
-                      [-180, 90],
-                      [-180, -90],
-                      [180, -90],
-                      [180, 90],
-                      [-180, 90],
-                    ],
-                    ...tunisiaCoords,
-                  ],
-                },
-              },
-            ],
-          };
-          setGeoData(invertedGeoJSON);
-        }
-      })
-      .catch((err) => console.error("Error loading GeoJSON", err));
-  }, []);
-
   // Custom Div Icon Creator
   const createCustomIcon = (totalExams: number, interprete: number, name: string, isSelected: boolean) => {
     const siteAverage = totalExams / 3;
@@ -103,16 +66,19 @@ export default function MapView({
 
   return (
     <MapContainer
-      center={[34.25, 9.65]}
-      zoom={7}
-      minZoom={6.5}
+      bounds={[
+        [30.15, 7.45],
+        [37.55, 11.65],
+      ]}
+      boundsOptions={{ padding: [24, 24] }}
+      minZoom={6}
       maxZoom={18}
       zoomSnap={0.5}
       zoomControl={true}
       attributionControl={false}
       maxBounds={[
-        [30.0, 7.0], // Limite Sud-Ouest
-        [37.8, 12.2], // Limite Nord-Est
+        [29.6, 6.4], // Limite Sud-Ouest
+        [38.1, 12.6], // Limite Nord-Est
       ]}
       maxBoundsViscosity={1.0}
       scrollWheelZoom={true}

@@ -9,11 +9,12 @@ import {
   CheckCircle2,
   ShieldCheck,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useAuth, type Role } from "@/lib/auth-context";
 
 type CreatableRole = Extract<Role, "Admin" | "Chef" | "Medecin" | "Resident">;
 
-const ROLE_OPTIONS: { value: CreatableRole; label: string; icon: any }[] = [
+const ROLE_OPTIONS: { value: CreatableRole; label: string; icon: LucideIcon }[] = [
   { value: "Admin", label: "Administrateur", icon: ShieldCheck },
   { value: "Chef", label: "Chef de Service", icon: Briefcase },
   { value: "Medecin", label: "Ophtalmologue", icon: Stethoscope },
@@ -59,8 +60,8 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-      <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl">
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/50 p-4">
+      <div className="relative z-[10000] w-full max-w-lg rounded-2xl bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
           <div className="flex items-center gap-2">
             <UserPlus className="h-5 w-5 text-blue-600" />
@@ -89,10 +90,11 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
                     type="button"
                     key={opt.value}
                     onClick={() => setRole(opt.value)}
-                    className={`flex flex-col items-center gap-1.5 rounded-lg border px-2 py-3 text-xs font-medium transition ${active
+                    className={`flex flex-col items-center gap-1.5 rounded-lg border px-2 py-3 text-xs font-medium transition ${
+                      active
                         ? "border-blue-600 bg-blue-50 text-blue-700"
                         : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                      }`}
+                    }`}
                   >
                     <Icon className="h-5 w-5" />
                     {opt.label}
@@ -134,10 +136,11 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
 
           {feedback && (
             <div
-              className={`flex items-start gap-2 rounded-lg px-3 py-2 text-sm ${feedback.ok
+              className={`flex items-start gap-2 rounded-lg px-3 py-2 text-sm ${
+                feedback.ok
                   ? "bg-green-50 text-green-700 ring-1 ring-green-200"
                   : "bg-red-50 text-red-700 ring-1 ring-red-200"
-                }`}
+              }`}
             >
               {feedback.ok && <CheckCircle2 className="h-4 w-4 mt-0.5" />}
               <span>{feedback.msg}</span>

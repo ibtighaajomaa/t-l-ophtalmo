@@ -56,6 +56,35 @@ interface ExamStats {
   Urgent: number;
 }
 
+type ApiUser = {
+  id?: number | string;
+  firstName?: string;
+  lastName?: string;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  email?: string;
+  role?: string;
+  is_active?: boolean;
+  isActive?: boolean;
+};
+
+export type PlatformDoctor = {
+  id: string;
+  name: string;
+  role: string;
+};
+
+type FetchExamsParams = {
+  status?: string;
+  q?: string;
+  region?: string;
+  doctor?: string;
+  date?: string;
+  page?: number;
+  page_size?: number;
+};
+
 const BASE = "/api/exams";
 
 function getHeaders(): Record<string, string> {
@@ -126,15 +155,7 @@ function toFrontendExam(api: ApiExam): Exam {
   };
 }
 
-export async function fetchExams(params?: {
-  status?: string;
-  q?: string;
-  region?: string;
-  doctor?: string;
-  date?: string;
-  page?: number;
-  page_size?: number;
-}): Promise<{ exams: Exam[]; total: number }> {
+export async function fetchExams(params?: FetchExamsParams): Promise<{ exams: Exam[]; total: number }> {
   const searchParams = new URLSearchParams();
   if (params?.status) searchParams.set("status", params.status);
   if (params?.q) searchParams.set("q", params.q);
@@ -153,6 +174,54 @@ export async function fetchExams(params?: {
     exams: data.results.map(toFrontendExam),
     total: data.count,
   };
+}
+
+export async function fetchAllExams(params?: Omit<FetchExamsParams, "page" | "page_size">): Promise<{
+  exams: Exam[];
+  total: number;
+}> {
+  const pageSize = 200;
+  const firstPage = await fetchExams({ ...params, page: 1, page_size: pageSize });
+  const exams = [...firstPage.exams];
+  const totalPages = Math.ceil(firstPage.total / pageSize);
+
+  for (let page = 2; page <= totalPages; page += 1) {
+    const result = await fetchExams({ ...params, page, page_size: pageSize });
+    exams.push(...result.exams);
+  }
+
+  return { exams, total: firstPage.total };
+}
+
+export async function fetchPlatformDoctors(): Promise<PlatformDoctor[]> {
+  const res = await fetch("/api/users/paginated/?page=1&size=200", {
+    headers: getHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to fetch doctors");
+
+  const data = await res.json();
+  const users: ApiUser[] = data.users || data.results || [];
+  const doctors = new Map<string, PlatformDoctor>();
+
+  for (const user of users) {
+    const role = user.role || "";
+    const isCareDoctor = role === "Medecin" || role === "Resident" || role === "Chef";
+    const isActive = user.is_active !== false && user.isActive !== false;
+    if (!isCareDoctor || !isActive) continue;
+
+    const first = user.firstName ?? user.first_name ?? "";
+    const last = user.lastName ?? user.last_name ?? "";
+    const fallback = user.username || user.email || "";
+    const title = role === "Chef" ? "Pr." : "Dr.";
+    const fullName = `${title} ${first} ${last}`.trim().replace(/\s+/g, " ");
+    const name = fullName === title ? fallback : fullName;
+    if (!name) continue;
+
+    const id = String(user.id ?? name);
+    doctors.set(name, { id, name, role });
+  }
+
+  return [...doctors.values()].sort((a, b) => a.name.localeCompare(b.name, "fr"));
 }
 
 export async function createExam(data: Partial<Exam>): Promise<Exam> {
