@@ -81,7 +81,7 @@ def exam_list(request):
             except Exception as e:
                 logger.error(f"Error during auto-cleanup redistribution: {e}")
 
-        exams = Exam.objects.all().order_by('-date', '-id')
+        exams = Exam.objects.all().prefetch_related('status_history').order_by('-date', '-id')
 
         status_param = request.query_params.get('status')
         if status_param and status_param != 'Tous':

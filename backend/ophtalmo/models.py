@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 
 
 class Exam(models.Model):
@@ -340,3 +341,19 @@ class CalendarSession(models.Model):
 
     def __str__(self):
         return f"Session {self.doctor} le {self.date} de {self.start_hour}h à {self.end_hour}h"
+
+
+class ExamStatusHistory(models.Model):
+    exam = models.ForeignKey(
+        Exam,
+        on_delete=models.CASCADE,
+        related_name="status_history",
+    )
+    status = models.CharField(max_length=20, choices=Exam.Status.choices)
+    changed_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ["changed_at", "id"]
+
+    def __str__(self):
+        return f"Examen {self.exam_id} : {self.status} ({self.changed_at:%Y-%m-%d %H:%M})"

@@ -145,6 +145,26 @@ function isAssignedToDoctor(exam: Exam, doctorName: string) {
   return normalizeDoctorName(exam.assignedTo) === normalizeDoctorName(doctorName);
 }
 
+function statusAtDate(exam: Exam, referenceDate: string): Exam["status"] | null {
+  const events = [...(exam.statusHistory || [])]
+    .filter((event) => tunisDateKey(event.changedAt) <= referenceDate)
+    .sort((a, b) => a.changedAt.localeCompare(b.changedAt));
+  if (exam.statusHistory?.length) return events.at(-1)?.status || null;
+  return exam.date <= referenceDate ? exam.status : null;
+}
+
+function tunisDateKey(value: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Tunis",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
 function isRemovedFromDoctor(exam: Exam, doctorName?: string) {
   if (!exam.isReassigned24h || !exam.reassignedFromName) return false;
   if (!doctorName) return true;
@@ -178,102 +198,11 @@ function waitingBreakdownKind(exam: Exam, referenceDate: string, doctorName?: st
   return "nonAssigneAccumule";
 }
 
-function parseLocalDate(value: string) {
-  return new Date(`${value}T00:00:00`);
-}
-
 function dateKey(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-}
-
-type AnalysePeriod = "Date" | "Jour" | "Semaine" | "Mois" | "Année";
-
-function isExamInPeriod(exam: Exam, period: AnalysePeriod, filterDate: string) {
-  if (!exam.date) return false;
-  const examDate = parseLocalDate(exam.date);
-  const today = new Date();
-
-  if (period === "Date") {
-    return examDate <= parseLocalDate(filterDate || dateKey(today));
-  }
-
-  if (period === "Jour") {
-    return exam.date === dateKey(today);
-  }
-
-  if (period === "Semaine") {
-    const start = new Date(today);
-    start.setDate(today.getDate() - 6);
-    start.setHours(0, 0, 0, 0);
-    return examDate >= start && examDate <= today;
-  }
-
-  if (period === "Mois") {
-    return (
-      examDate.getFullYear() === today.getFullYear() && examDate.getMonth() === today.getMonth()
-    );
-  }
-
-  return examDate.getFullYear() === today.getFullYear();
-}
-
-function monthLabel(value: string) {
-  return new Intl.DateTimeFormat("fr-FR", { month: "short" }).format(parseLocalDate(`${value}-01`));
-}
-
-function buildTrendBucket(examDate: string, period: AnalysePeriod) {
-  if (period === "Année") {
-    const key = examDate.slice(0, 7);
-    return { key, label: monthLabel(key) };
-  }
-
-  return { key: examDate, label: examDate.slice(5) };
-}
-
-function buildTrendBuckets(period: AnalysePeriod, filterDate: string) {
-  const today = new Date();
-
-  if (period === "Année") {
-    return Array.from({ length: today.getMonth() + 1 }, (_, index) => {
-      const month = String(index + 1).padStart(2, "0");
-      const key = `${today.getFullYear()}-${month}`;
-      return { key, label: monthLabel(key) };
-    });
-  }
-
-  if (period === "Mois") {
-    const days = today.getDate();
-    return Array.from({ length: days }, (_, index) => {
-      const date = new Date(today.getFullYear(), today.getMonth(), index + 1);
-      const key = dateKey(date);
-      return { key, label: key.slice(5) };
-    });
-  }
-
-  if (period === "Semaine") {
-    return Array.from({ length: 7 }, (_, index) => {
-      const date = new Date(today);
-      date.setDate(today.getDate() - (6 - index));
-      const key = dateKey(date);
-      return { key, label: key.slice(5) };
-    });
-  }
-
-  const key = period === "Date" ? filterDate || dateKey(today) : dateKey(today);
-  return [{ key, label: key.slice(5) }];
-}
-
-function trendBucketForExam(examDate: string, period: AnalysePeriod, filterDate: string) {
-  if (period === "Date" || period === "Jour") {
-    const todayKey = dateKey(new Date());
-    const key = period === "Date" ? filterDate || todayKey : todayKey;
-    return { key, label: key.slice(5) };
-  }
-
-  return buildTrendBucket(examDate, period);
 }
 
 function aggregateRegions(exams: Exam[]): RegionData[] {
@@ -348,9 +277,7 @@ function KpiTile({
 }
 
 function AnalysePage() {
-  const period: AnalysePeriod = "Semaine";
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
-  const filterDate = "";
   const [dateRangeStart, setDateRangeStart] = useState<string>("");
   const [dateRangeEnd, setDateRangeEnd] = useState<string>("");
   const [regionFilter, setRegionFilter] = useState<string>("");
@@ -418,27 +345,35 @@ function AnalysePage() {
     [dateRangeEnd, dateRangeStart, doctorFilter, exams, regionFilter],
   );
 
-  const currentScopedExams = useMemo(() => {
-    return filteredExams;
-  }, [filteredExams]);
-
   const scopedExams = useMemo(() => {
     return filteredExams;
   }, [filteredExams]);
 
   const waitingBreakdownReferenceDate = dateRangeEnd || dateKey(new Date());
 
-  const waitingBreakdownExams = useMemo(
+  const stockExams = useMemo(
     () =>
-      exams.filter((exam) => {
-        if (exam.date > waitingBreakdownReferenceDate) return false;
-        if (regionFilter && canonicalSite(exam).id !== regionFilter) return false;
-        return isWaitingVisibleInBreakdown(exam, doctorFilter || undefined);
+      exams.flatMap((exam) => {
+        if (regionFilter && canonicalSite(exam).id !== regionFilter) return [];
+        if (
+          doctorFilter &&
+          !isAssignedToDoctor(exam, doctorFilter) &&
+          !isRemovedFromDoctor(exam, doctorFilter)
+        ) {
+          return [];
+        }
+        const status = statusAtDate(exam, waitingBreakdownReferenceDate);
+        return status ? [{ ...exam, status }] : [];
       }),
     [doctorFilter, exams, regionFilter, waitingBreakdownReferenceDate],
   );
 
-  const regionsData = useMemo(() => aggregateRegions(currentScopedExams), [currentScopedExams]);
+  const waitingBreakdownExams = useMemo(
+    () => stockExams.filter((exam) => isWaitingVisibleInBreakdown(exam, doctorFilter || undefined)),
+    [doctorFilter, stockExams],
+  );
+
+  const regionsData = useMemo(() => aggregateRegions(stockExams), [stockExams]);
 
   // Lazy load MapView to prevent SSR errors with Leaflet
   const [MapViewComponent, setMapViewComponent] = useState<ComponentType<MapViewProps> | null>(
@@ -465,12 +400,10 @@ function AnalysePage() {
   const pendingRate = percentage(totalAttente, totalExams);
   const activeSites = regionsData.length;
 
-  const chartScopedExams = useMemo(() => {
-    if (!selectedRegionId) return scopedExams;
-    return scopedExams.filter((exam) => canonicalSite(exam).id === selectedRegionId);
-  }, [scopedExams, selectedRegionId]);
-
-  const chartRegionsData = useMemo(() => aggregateRegions(chartScopedExams), [chartScopedExams]);
+  const chartRegionsData = useMemo(() => {
+    if (!selectedRegionId) return regionsData;
+    return regionsData.filter((region) => region.id === selectedRegionId);
+  }, [regionsData, selectedRegionId]);
   const chartSelectedRegion = selectedRegionId
     ? chartRegionsData.find((r) => r.id === selectedRegionId)
     : undefined;
@@ -489,38 +422,55 @@ function AnalysePage() {
   const chartTotalAttente = chartWaitingBreakdownExams.length;
 
   const trendData = useMemo(() => {
-    const grouped = new Map<
-      string,
-      { label: string; attente: number; cours: number; interprete: number }
-    >(
-      buildTrendBuckets(period, filterDate).map((bucket) => [
-        bucket.key,
-        { label: bucket.label, attente: 0, cours: 0, interprete: 0 },
-      ]),
-    );
-
-    for (const exam of chartScopedExams) {
-      if (!exam.date) continue;
-      const bucket = trendBucketForExam(exam.date, period, filterDate);
-      const current = grouped.get(bucket.key) || {
-        label: bucket.label,
-        attente: 0,
-        cours: 0,
-        interprete: 0,
-      };
-
-      if (exam.status === "Interprété") {
-        current.interprete += 1;
-      } else if (exam.status === "En cours") {
-        current.cours += 1;
-      } else {
-        current.attente += 1;
+    const trendExams = exams.filter((exam) => {
+      const siteId = canonicalSite(exam).id;
+      if (regionFilter && siteId !== regionFilter) return false;
+      if (selectedRegionId && siteId !== selectedRegionId) return false;
+      if (
+        doctorFilter &&
+        !isAssignedToDoctor(exam, doctorFilter) &&
+        !isRemovedFromDoctor(exam, doctorFilter)
+      ) {
+        return false;
       }
-      grouped.set(bucket.key, current);
+      return true;
+    });
+
+    const dates = new Set<string>([waitingBreakdownReferenceDate]);
+    if (dateRangeStart) dates.add(dateRangeStart);
+    for (const exam of trendExams) {
+      if (exam.statusHistory?.length) {
+        for (const event of exam.statusHistory) {
+          const eventDate = tunisDateKey(event.changedAt);
+          if (eventDate > waitingBreakdownReferenceDate) continue;
+          if (dateRangeStart && eventDate < dateRangeStart) continue;
+          dates.add(eventDate);
+        }
+      } else if (exam.date <= waitingBreakdownReferenceDate) {
+        if (!dateRangeStart || exam.date >= dateRangeStart) dates.add(exam.date);
+      }
     }
 
-    return [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value);
-  }, [chartScopedExams, period, filterDate]);
+    return [...dates]
+      .sort((a, b) => a.localeCompare(b))
+      .map((date) => {
+        const totals = { label: date.slice(5), attente: 0, cours: 0, interprete: 0 };
+        for (const exam of trendExams) {
+          const status = statusAtDate(exam, date);
+          if (status === "En attente") totals.attente += 1;
+          if (status === "En cours") totals.cours += 1;
+          if (status === "Interprété") totals.interprete += 1;
+        }
+        return totals;
+      });
+  }, [
+    dateRangeStart,
+    doctorFilter,
+    exams,
+    regionFilter,
+    selectedRegionId,
+    waitingBreakdownReferenceDate,
+  ]);
 
   const waitingBreakdownData = useMemo(() => {
     const totals = chartWaitingBreakdownExams.reduce(
@@ -1180,7 +1130,7 @@ function AnalysePage() {
                 Évolution quotidienne des statuts
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Volumes quotidiens selon la période et les filtres sélectionnés.
+                Stock global à la fin de chaque journée selon les filtres sélectionnés.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600">

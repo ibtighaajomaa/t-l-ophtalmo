@@ -39,6 +39,7 @@ export interface Exam {
   studyInstanceUid?: string;
   isReassigned24h?: boolean;
   reassignedFromName?: string | null;
+  statusHistory?: Array<{ status: ExamStatus; changedAt: string }>;
   qualityStatus?: QualityStatus;
   qualityScore?: number | null;
   qualityCategory?: QualityCategory;

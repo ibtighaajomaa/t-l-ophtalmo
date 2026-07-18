@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import (
     Exam, ImageQualityAssessment, AnalysisReport, MedicalReport,
-    MedicalReportVersion, DoctorNote,
+    MedicalReportVersion, DoctorNote, ExamStatusHistory,
 )
 from .orthanc_origin import lookup_site_name
 
@@ -18,12 +18,19 @@ class ImageQualityAssessmentSerializer(serializers.ModelSerializer):
         ]
 
 
+class ExamStatusHistorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExamStatusHistory
+        fields = ["status", "changed_at"]
+
+
 class ExamSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
     reassigned_from_name = serializers.SerializerMethodField()
     institution_name = serializers.SerializerMethodField()
     image_quality_results = ImageQualityAssessmentSerializer(many=True, read_only=True)
+    status_history = ExamStatusHistorySerializer(many=True, read_only=True)
 
     class Meta:
         model = Exam
@@ -40,6 +47,7 @@ class ExamSerializer(serializers.ModelSerializer):
             'region', 'institution_name', 'modality_ip', 'notes',
             'is_reassigned_24h', 'reassigned_from', 'reassigned_from_name',
             'created_at', 'updated_at',
+            'status_history',
             'quality_status', 'quality_score', 'quality_category',
             'quality_error', 'image_quality_results',
             'report_generation_status', 'report_generation_error',

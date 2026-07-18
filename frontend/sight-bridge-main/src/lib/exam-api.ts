@@ -25,6 +25,7 @@ interface ApiExam {
   updated_at: string;
   is_reassigned_24h?: boolean;
   reassigned_from_name?: string | null;
+  status_history?: Array<{ status: ExamStatus; changed_at: string }>;
   quality_status?: "pending" | "in_progress" | "completed" | "failed";
   quality_score?: number | null;
   quality_category?: "good" | "acceptable" | "bad" | "";
@@ -138,6 +139,10 @@ function toFrontendExam(api: ApiExam): Exam {
     studyInstanceUid: api.study_instance_uid ?? undefined,
     isReassigned24h: api.is_reassigned_24h,
     reassignedFromName: api.reassigned_from_name,
+    statusHistory: api.status_history?.map((event) => ({
+      status: event.status,
+      changedAt: event.changed_at,
+    })),
     qualityStatus: api.quality_status,
     qualityScore: api.quality_score,
     qualityCategory: api.quality_category || undefined,
