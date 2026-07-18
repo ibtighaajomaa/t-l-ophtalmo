@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect, useMemo } from "react";
 import type { ComponentType } from "react";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { useAuth } from "@/lib/auth-context";
 import { Activity, CheckCircle2, Clock3, MapPin, Radio, RotateCw } from "lucide-react";
 import {
   Bar,
@@ -277,6 +278,8 @@ function KpiTile({
 }
 
 function AnalysePage() {
+  const { user } = useAuth();
+  const isDoctorView = user.role === "Medecin" || user.role === "Resident";
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
   const [dateRangeStart, setDateRangeStart] = useState<string>("");
   const [dateRangeEnd, setDateRangeEnd] = useState<string>("");
@@ -313,6 +316,7 @@ function AnalysePage() {
   }, []);
 
   useEffect(() => {
+    if (isDoctorView) return;
     let cancelled = false;
 
     async function loadDoctors() {
@@ -329,7 +333,7 @@ function AnalysePage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isDoctorView]);
 
   const availableRegions = useMemo(() => aggregateRegions(exams), [exams]);
 
@@ -596,7 +600,9 @@ function AnalysePage() {
           </div>
         </div>
 
-        <div className="grid border-t border-slate-200 bg-white sm:grid-cols-3">
+        <div
+          className={`grid border-t border-slate-200 bg-white ${isDoctorView ? "sm:grid-cols-2" : "sm:grid-cols-3"}`}
+        >
           <KpiTile
             label="Examens collectés"
             value={formatNumber(totalExams)}
@@ -611,13 +617,15 @@ function AnalysePage() {
             icon={CheckCircle2}
             tone="green"
           />
-          <KpiTile
-            label="File d'attente"
-            value={formatNumber(totalAttente)}
-            detail={`${pendingRate}% du flux national`}
-            icon={Clock3}
-            tone="orange"
-          />
+          {!isDoctorView && (
+            <KpiTile
+              label="File d'attente"
+              value={formatNumber(totalAttente)}
+              detail={`${pendingRate}% du flux national`}
+              icon={Clock3}
+              tone="orange"
+            />
+          )}
         </div>
       </div>
 
@@ -678,26 +686,28 @@ function AnalysePage() {
               </select>
             </label>
 
-            <label className="block">
-              <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">
-                Médecin
-              </span>
-              <select
-                value={doctorFilter}
-                onChange={(event) => {
-                  setDoctorFilter(event.target.value);
-                  setSelectedRegionId(null);
-                }}
-                className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-              >
-                <option value="">Tous les médecins</option>
-                {doctors.map((doctor) => (
-                  <option key={doctor.id} value={doctor.name}>
-                    {doctor.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {!isDoctorView && (
+              <label className="block">
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                  Médecin
+                </span>
+                <select
+                  value={doctorFilter}
+                  onChange={(event) => {
+                    setDoctorFilter(event.target.value);
+                    setSelectedRegionId(null);
+                  }}
+                  className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                >
+                  <option value="">Tous les médecins</option>
+                  {doctors.map((doctor) => (
+                    <option key={doctor.id} value={doctor.name}>
+                      {doctor.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
 
             {(dateRangeStart || dateRangeEnd || regionFilter || doctorFilter) && (
               <button
@@ -1025,109 +1035,111 @@ function AnalysePage() {
             </div>
           </section>
 
-          <section className="flex h-[520px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
-            <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
-              <div>
-                <h2 className="text-base font-semibold text-slate-950">
-                  {selectedRegion ? `En attente - ${selectedRegion.name}` : "En attente"}
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  Répartition selon la période, le médecin et l’établissement sélectionnés.
-                </p>
+          {!isDoctorView && (
+            <section className="flex h-[520px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+              <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                <div>
+                  <h2 className="text-base font-semibold text-slate-950">
+                    {selectedRegion ? `En attente - ${selectedRegion.name}` : "En attente"}
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Répartition selon la période, le médecin et l’établissement sélectionnés.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: STATUS_COLORS.attenteAujourdhui }}
+                    />
+                    Aujourd’hui
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: STATUS_COLORS.retraitAccumule }}
+                    />
+                    Après retrait
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: STATUS_COLORS.nonAssigneAccumule }}
+                    />
+                    Accumulé
+                  </span>
+                </div>
               </div>
-              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
-                <span className="inline-flex items-center gap-1.5">
-                  <span
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: STATUS_COLORS.attenteAujourdhui }}
-                  />
-                  Aujourd’hui
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: STATUS_COLORS.retraitAccumule }}
-                  />
-                  Après retrait
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: STATUS_COLORS.nonAssigneAccumule }}
-                  />
-                  Accumulé
-                </span>
-              </div>
-            </div>
-            <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-3 px-5 py-4">
-              {waitingBreakdownTotal ? (
-                <div className="min-h-0">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Tooltip
-                        contentStyle={{ borderRadius: 8, borderColor: "#cbd5e1" }}
-                        formatter={(value: number, name: string) => [
-                          `${formatNumber(Number(value))} (${percentage(Number(value), waitingBreakdownTotal)}%)`,
-                          name,
-                        ]}
-                      />
-                      <Pie
-                        data={waitingBreakdownData}
-                        dataKey="value"
-                        nameKey="name"
-                        cx="50%"
-                        cy="50%"
-                        outerRadius="82%"
-                        paddingAngle={0}
-                        stroke="#ffffff"
-                        strokeWidth={2}
-                      >
-                        {waitingBreakdownData.map((entry) => (
-                          <Cell key={entry.name} fill={entry.color} />
-                        ))}
-                      </Pie>
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-              ) : (
-                <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                  Aucun examen en attente à répartir.
-                </div>
-              )}
-              <div className="grid grid-cols-4 gap-2 border-t border-slate-200 pt-3">
-                <div className="rounded-md bg-slate-950 px-3 py-2.5 text-white">
-                  <div className="truncate text-[10px] font-medium uppercase tracking-wide text-slate-300">
-                    Total
+              <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-3 px-5 py-4">
+                {waitingBreakdownTotal ? (
+                  <div className="min-h-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Tooltip
+                          contentStyle={{ borderRadius: 8, borderColor: "#cbd5e1" }}
+                          formatter={(value: number, name: string) => [
+                            `${formatNumber(Number(value))} (${percentage(Number(value), waitingBreakdownTotal)}%)`,
+                            name,
+                          ]}
+                        />
+                        <Pie
+                          data={waitingBreakdownData}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          outerRadius="82%"
+                          paddingAngle={0}
+                          stroke="#ffffff"
+                          strokeWidth={2}
+                        >
+                          {waitingBreakdownData.map((entry) => (
+                            <Cell key={entry.name} fill={entry.color} />
+                          ))}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
                   </div>
-                  <div className="mt-1 text-xl font-semibold tabular-nums">
-                    {formatNumber(waitingBreakdownTotal)}
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                    Aucun examen en attente à répartir.
                   </div>
-                </div>
-                {waitingBreakdownData.map((item) => (
-                  <div
-                    key={item.name}
-                    className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5"
-                  >
-                    <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: item.color }}
-                      />
-                      <span className="truncate">{item.name}</span>
+                )}
+                <div className="grid grid-cols-4 gap-2 border-t border-slate-200 pt-3">
+                  <div className="rounded-md bg-slate-950 px-3 py-2.5 text-white">
+                    <div className="truncate text-[10px] font-medium uppercase tracking-wide text-slate-300">
+                      Total
                     </div>
-                    <div className="mt-1 flex items-end justify-between gap-2">
-                      <span className="text-xl font-semibold tabular-nums text-slate-950">
-                        {formatNumber(item.value)}
-                      </span>
-                      <span className="pb-0.5 text-xs tabular-nums text-slate-500">
-                        {percentage(item.value, waitingBreakdownTotal)}%
-                      </span>
+                    <div className="mt-1 text-xl font-semibold tabular-nums">
+                      {formatNumber(waitingBreakdownTotal)}
                     </div>
                   </div>
-                ))}
+                  {waitingBreakdownData.map((item) => (
+                    <div
+                      key={item.name}
+                      className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5"
+                    >
+                      <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                        <span
+                          className="h-2 w-2 shrink-0 rounded-full"
+                          style={{ backgroundColor: item.color }}
+                        />
+                        <span className="truncate">{item.name}</span>
+                      </div>
+                      <div className="mt-1 flex items-end justify-between gap-2">
+                        <span className="text-xl font-semibold tabular-nums text-slate-950">
+                          {formatNumber(item.value)}
+                        </span>
+                        <span className="pb-0.5 text-xs tabular-nums text-slate-500">
+                          {percentage(item.value, waitingBreakdownTotal)}%
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          </section>
+            </section>
+          )}
         </div>
 
         <section className="flex h-[460px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white xl:col-span-3">
@@ -1137,12 +1149,14 @@ function AnalysePage() {
                 Évolution quotidienne des statuts
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Attente et cours en stock global ; interprétés réalisés pendant chaque journée.
+                {isDoctorView
+                  ? "Examens en cours et interprétés réalisés pendant chaque journée."
+                  : "Attente et cours en stock global ; interprétés réalisés pendant chaque journée."}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600">
               {[
-                ["En attente", STATUS_COLORS.attente],
+                ...(!isDoctorView ? [["En attente", STATUS_COLORS.attente]] : []),
                 ["En cours", STATUS_COLORS.cours],
                 ["Interprété", STATUS_COLORS.interprete],
               ].map(([label, color]) => (
@@ -1175,15 +1189,17 @@ function AnalysePage() {
                     contentStyle={{ borderRadius: 8, borderColor: "#cbd5e1" }}
                     formatter={(value: number, name: string) => [formatNumber(Number(value)), name]}
                   />
-                  <Line
-                    type="monotone"
-                    dataKey="attente"
-                    name="En attente"
-                    stroke={STATUS_COLORS.attente}
-                    strokeWidth={2.5}
-                    dot={{ r: 2.5, strokeWidth: 2, fill: "#ffffff" }}
-                    activeDot={{ r: 5 }}
-                  />
+                  {!isDoctorView && (
+                    <Line
+                      type="monotone"
+                      dataKey="attente"
+                      name="En attente"
+                      stroke={STATUS_COLORS.attente}
+                      strokeWidth={2.5}
+                      dot={{ r: 2.5, strokeWidth: 2, fill: "#ffffff" }}
+                      activeDot={{ r: 5 }}
+                    />
+                  )}
                   <Line
                     type="monotone"
                     dataKey="cours"
@@ -1244,12 +1260,14 @@ function AnalysePage() {
                     tick={{ fontSize: 11, fill: "#64748b" }}
                   />
                   <Tooltip contentStyle={{ borderRadius: 8, borderColor: "#cbd5e1" }} />
-                  <Bar
-                    dataKey="en_attente"
-                    name="En attente"
-                    fill={STATUS_COLORS.attente}
-                    radius={[3, 3, 0, 0]}
-                  />
+                  {!isDoctorView && (
+                    <Bar
+                      dataKey="en_attente"
+                      name="En attente"
+                      fill={STATUS_COLORS.attente}
+                      radius={[3, 3, 0, 0]}
+                    />
+                  )}
                   <Bar
                     dataKey="en_cours"
                     name="En cours"

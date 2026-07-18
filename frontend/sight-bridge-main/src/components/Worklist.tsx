@@ -413,6 +413,7 @@ interface WorklistProps {
 
 export function Worklist({ todayOnly = false, showStats = false }: WorklistProps) {
   const { user } = useAuth();
+  const isDoctorView = user.role === "Medecin" || user.role === "Resident";
   const [exams, setExams] = useState<Exam[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -557,8 +558,12 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
       )}
 
       {showStats && !loading && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <StatPill label="En attente" value={stats.attente} icon={Clock} color="orange" />
+        <div
+          className={`grid grid-cols-1 gap-3 ${isDoctorView ? "sm:grid-cols-2" : "sm:grid-cols-3"}`}
+        >
+          {!isDoctorView && (
+            <StatPill label="En attente" value={stats.attente} icon={Clock} color="orange" />
+          )}
           <StatPill label="En cours" value={stats.cours} icon={Loader2} color="blue" />
           <StatPill label="Interprété" value={stats.interprete} icon={CheckCircle2} color="green" />
         </div>
