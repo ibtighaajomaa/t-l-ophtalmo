@@ -1228,7 +1228,9 @@ function AnalysePage() {
           </div>
         </section>
 
-        <section className="flex h-[460px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white xl:col-span-2">
+        <section
+          className={`flex h-[460px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white ${isDoctorView ? "xl:col-span-3" : "xl:col-span-2"}`}
+        >
           <div className="border-b border-slate-200 px-5 py-4">
             <h2 className="text-base font-semibold text-slate-950">Examens par établissement</h2>
             <p className="mt-1 text-sm text-slate-500">
@@ -1290,55 +1292,59 @@ function AnalysePage() {
           </div>
         </section>
 
-        <section className="flex h-[460px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
-          <div className="border-b border-slate-200 px-5 py-4">
-            <h2 className="text-base font-semibold text-slate-950">Classement des médecins</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Classement par nombre d’examens interprétés sur la période.
-            </p>
-          </div>
-          <div className="min-h-0 flex-1 overflow-auto">
-            <table className="w-full min-w-[520px] text-left text-sm">
-              <thead className="sticky top-0 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-4 py-3 font-medium">Rang</th>
-                  <th className="px-4 py-3 font-medium">Médecin</th>
-                  <th className="px-3 py-3 text-right font-medium">Assignés</th>
-                  <th className="px-3 py-3 text-right font-medium">Interprétés</th>
-                  <th className="px-3 py-3 text-right font-medium">Taux</th>
-                  <th className="px-4 py-3 text-right font-medium">En cours</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {doctorRanking.map((doctor, index) => (
-                  <tr key={normalizeDoctorName(doctor.name)} className="hover:bg-slate-50">
-                    <td className="px-4 py-3 font-semibold tabular-nums text-slate-400">
-                      {String(index + 1).padStart(2, "0")}
-                    </td>
-                    <td className="px-4 py-3 font-semibold text-slate-800">{doctor.name}</td>
-                    <td className="px-3 py-3 text-right tabular-nums">
-                      {formatNumber(doctor.assigned)}
-                    </td>
-                    <td className="px-3 py-3 text-right font-semibold tabular-nums text-emerald-700">
-                      {formatNumber(doctor.interpreted)}
-                    </td>
-                    <td className="px-3 py-3 text-right tabular-nums">{doctor.completionRate}%</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-blue-700">
-                      {formatNumber(doctor.inProgress)}
-                    </td>
-                  </tr>
-                ))}
-                {!doctorRanking.length && (
+        {!isDoctorView && (
+          <section className="flex h-[460px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <h2 className="text-base font-semibold text-slate-950">Classement des médecins</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Classement par nombre d’examens interprétés sur la période.
+              </p>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto">
+              <table className="w-full min-w-[520px] text-left text-sm">
+                <thead className="sticky top-0 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
                   <tr>
-                    <td colSpan={6} className="px-5 py-12 text-center text-slate-500">
-                      Aucun examen assigné sur la période sélectionnée.
-                    </td>
+                    <th className="px-4 py-3 font-medium">Rang</th>
+                    <th className="px-4 py-3 font-medium">Médecin</th>
+                    <th className="px-3 py-3 text-right font-medium">Assignés</th>
+                    <th className="px-3 py-3 text-right font-medium">Interprétés</th>
+                    <th className="px-3 py-3 text-right font-medium">Taux</th>
+                    <th className="px-4 py-3 text-right font-medium">En cours</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {doctorRanking.map((doctor, index) => (
+                    <tr key={normalizeDoctorName(doctor.name)} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 font-semibold tabular-nums text-slate-400">
+                        {String(index + 1).padStart(2, "0")}
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-slate-800">{doctor.name}</td>
+                      <td className="px-3 py-3 text-right tabular-nums">
+                        {formatNumber(doctor.assigned)}
+                      </td>
+                      <td className="px-3 py-3 text-right font-semibold tabular-nums text-emerald-700">
+                        {formatNumber(doctor.interpreted)}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums">
+                        {doctor.completionRate}%
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums text-blue-700">
+                        {formatNumber(doctor.inProgress)}
+                      </td>
+                    </tr>
+                  ))}
+                  {!doctorRanking.length && (
+                    <tr>
+                      <td colSpan={6} className="px-5 py-12 text-center text-slate-500">
+                        Aucun examen assigné sur la période sélectionnée.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );
