@@ -459,7 +459,14 @@ function AnalysePage() {
           const status = statusAtDate(exam, date);
           if (status === "En attente") totals.attente += 1;
           if (status === "En cours") totals.cours += 1;
-          if (status === "Interprété") totals.interprete += 1;
+          if (
+            exam.statusHistory?.some(
+              (event) => event.status === "Interprété" && tunisDateKey(event.changedAt) === date,
+            ) ||
+            (!exam.statusHistory?.length && exam.status === "Interprété" && exam.date === date)
+          ) {
+            totals.interprete += 1;
+          }
         }
         return totals;
       });
@@ -1130,7 +1137,7 @@ function AnalysePage() {
                 Évolution quotidienne des statuts
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Stock global à la fin de chaque journée selon les filtres sélectionnés.
+                Attente et cours en stock global ; interprétés réalisés pendant chaque journée.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600">
