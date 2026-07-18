@@ -253,6 +253,51 @@ def recalculer_charges():
 
 
 @transaction.atomic
+def remettre_en_attente_sans_session_du_jour():
+    """Retire à minuit les examens des médecins absents du calendrier du jour."""
+    from ophtalmo.models import CalendarSession
+
+    today = timezone.localdate()
+    doctor_ids_today = CalendarSession.objects.filter(date=today).values_list(
+        'doctor_id', flat=True
+    )
+    examens = Exam.objects.filter(
+        status='En cours',
+        assigned_to__isnull=False,
+    ).exclude(assigned_to_id__in=doctor_ids_today).select_related('assigned_to__profil')
+
+    remis_en_attente = 0
+    for examen in examens:
+        ancien_medecin = examen.assigned_to
+        examen.status = 'En attente'
+        examen.reassigned_from = ancien_medecin
+        examen.is_reassigned_24h = True
+        examen.assigned_to = None
+        examen.date_assignation = None
+        examen.save(update_fields=[
+            'status',
+            'assigned_to',
+            'date_assignation',
+            'reassigned_from',
+            'is_reassigned_24h',
+        ])
+
+        if hasattr(ancien_medecin, 'profil'):
+            profil = ancien_medecin.profil
+            profil.charge_actuelle = max(0, profil.charge_actuelle - 1)
+            profil.save(update_fields=['charge_actuelle'])
+
+        remis_en_attente += 1
+
+    logger.info(
+        "Fin des sessions précédentes : %s examens remis en attente pour le %s.",
+        remis_en_attente,
+        today,
+    )
+    return {'remis_en_attente': remis_en_attente}
+
+
+@transaction.atomic
 def assigner_examens_nouveau_medecin(profil, max_examens=None):
     """
     Assigne immédiatement jusqu'à MAX_CHARGE_PAR_MEDECIN examens 

@@ -2,17 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect, useMemo } from "react";
 import type { ComponentType } from "react";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
-import {
-  Activity,
-  Calendar,
-  CheckCircle2,
-  Clock3,
-  MapPin,
-  Radio,
-  RotateCw,
-  Stethoscope,
-  TrendingUp,
-} from "lucide-react";
+import { Activity, CheckCircle2, Clock3, MapPin, Radio, RotateCw } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -358,9 +348,12 @@ function KpiTile({
 }
 
 function AnalysePage() {
-  const [period, setPeriod] = useState<AnalysePeriod>("Semaine");
+  const period: AnalysePeriod = "Semaine";
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
-  const [filterDate, setFilterDate] = useState<string>("");
+  const filterDate = "";
+  const [dateRangeStart, setDateRangeStart] = useState<string>("");
+  const [dateRangeEnd, setDateRangeEnd] = useState<string>("");
+  const [regionFilter, setRegionFilter] = useState<string>("");
   const [doctorFilter, setDoctorFilter] = useState<string>("");
   const [doctors, setDoctors] = useState<PlatformDoctor[]>([]);
   const [exams, setExams] = useState<Exam[]>([]);
@@ -411,28 +404,38 @@ function AnalysePage() {
     };
   }, []);
 
-  const periodExams = useMemo(
-    () => exams.filter((exam) => isExamInPeriod(exam, period, filterDate)),
-    [exams, period, filterDate],
+  const availableRegions = useMemo(() => aggregateRegions(exams), [exams]);
+
+  const filteredExams = useMemo(
+    () =>
+      exams.filter((exam) => {
+        if (dateRangeStart && exam.date < dateRangeStart) return false;
+        if (dateRangeEnd && exam.date > dateRangeEnd) return false;
+        if (regionFilter && canonicalSite(exam).id !== regionFilter) return false;
+        if (doctorFilter && !isAssignedToDoctor(exam, doctorFilter)) return false;
+        return true;
+      }),
+    [dateRangeEnd, dateRangeStart, doctorFilter, exams, regionFilter],
   );
 
   const currentScopedExams = useMemo(() => {
-    if (!doctorFilter) return exams;
-    return exams.filter((exam) => isAssignedToDoctor(exam, doctorFilter));
-  }, [exams, doctorFilter]);
+    return filteredExams;
+  }, [filteredExams]);
 
   const scopedExams = useMemo(() => {
-    if (!doctorFilter) return periodExams;
-    return periodExams.filter((exam) => isAssignedToDoctor(exam, doctorFilter));
-  }, [periodExams, doctorFilter]);
+    return filteredExams;
+  }, [filteredExams]);
 
-  const waitingBreakdownReferenceDate =
-    period === "Date" && filterDate ? filterDate : dateKey(new Date());
+  const waitingBreakdownReferenceDate = dateRangeEnd || dateKey(new Date());
 
   const waitingBreakdownExams = useMemo(
     () =>
-      scopedExams.filter((exam) => isWaitingVisibleInBreakdown(exam, doctorFilter || undefined)),
-    [scopedExams, doctorFilter],
+      exams.filter((exam) => {
+        if (exam.date > waitingBreakdownReferenceDate) return false;
+        if (regionFilter && canonicalSite(exam).id !== regionFilter) return false;
+        return isWaitingVisibleInBreakdown(exam, doctorFilter || undefined);
+      }),
+    [doctorFilter, exams, regionFilter, waitingBreakdownReferenceDate],
   );
 
   const regionsData = useMemo(() => aggregateRegions(currentScopedExams), [currentScopedExams]);
@@ -450,7 +453,7 @@ function AnalysePage() {
 
   // Compute totals
   const totalInterprete = regionsData.reduce((sum, r) => sum + r.interprete, 0);
-  const totalAttente = regionsData.reduce((sum, r) => sum + r.en_attente, 0);
+  const totalAttente = waitingBreakdownExams.length;
   const totalCours = regionsData.reduce((sum, r) => sum + r.en_cours, 0);
 
   const totalExams = totalAttente + totalCours + totalInterprete;
@@ -471,9 +474,6 @@ function AnalysePage() {
   const chartSelectedRegion = selectedRegionId
     ? chartRegionsData.find((r) => r.id === selectedRegionId)
     : undefined;
-  const chartTotalAttente = chartSelectedRegion
-    ? chartSelectedRegion.en_attente
-    : chartRegionsData.reduce((sum, r) => sum + r.en_attente, 0);
   const chartTotalCours = chartSelectedRegion
     ? chartSelectedRegion.en_cours
     : chartRegionsData.reduce((sum, r) => sum + r.en_cours, 0);
@@ -485,6 +485,8 @@ function AnalysePage() {
     if (!selectedRegionId) return waitingBreakdownExams;
     return waitingBreakdownExams.filter((exam) => canonicalSite(exam).id === selectedRegionId);
   }, [waitingBreakdownExams, selectedRegionId]);
+
+  const chartTotalAttente = chartWaitingBreakdownExams.length;
 
   const trendData = useMemo(() => {
     const grouped = new Map<
@@ -573,6 +575,52 @@ function AnalysePage() {
     [regionsData],
   );
 
+  const regionComparisonData = useMemo(
+    () =>
+      [...chartRegionsData]
+        .sort(
+          (a, b) =>
+            b.en_attente + b.en_cours + b.interprete - (a.en_attente + a.en_cours + a.interprete),
+        )
+        .slice(0, 10),
+    [chartRegionsData],
+  );
+
+  const doctorRanking = useMemo(() => {
+    const byDoctor = new Map<
+      string,
+      { name: string; assigned: number; interpreted: number; inProgress: number }
+    >();
+
+    for (const exam of scopedExams) {
+      if (!exam.assignedTo) continue;
+      const key = normalizeDoctorName(exam.assignedTo);
+      const current = byDoctor.get(key) || {
+        name: exam.assignedTo,
+        assigned: 0,
+        interpreted: 0,
+        inProgress: 0,
+      };
+      current.assigned += 1;
+      if (exam.status === "Interprété") current.interpreted += 1;
+      if (exam.status === "En cours") current.inProgress += 1;
+      byDoctor.set(key, current);
+    }
+
+    return [...byDoctor.values()]
+      .map((doctor) => ({
+        ...doctor,
+        completionRate: percentage(doctor.interpreted, doctor.assigned),
+      }))
+      .sort(
+        (a, b) =>
+          b.interpreted - a.interpreted ||
+          b.completionRate - a.completionRate ||
+          b.assigned - a.assigned,
+      )
+      .slice(0, 10);
+  }, [scopedExams]);
+
   return (
     <div className="min-h-screen overflow-auto bg-[#f4f6f8] text-slate-950">
       <div className="border-b border-slate-200 bg-white">
@@ -589,56 +637,9 @@ function AnalysePage() {
               Couverture, interprétation et files actives par établissement.
             </p>
           </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 p-1">
-              {["Date", "Jour", "Semaine", "Mois", "Année"].map((p) => (
-                <button
-                  key={p}
-                  onClick={() => setPeriod(p as AnalysePeriod)}
-                  className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
-                    period === p
-                      ? "bg-white text-blue-700 shadow-sm ring-1 ring-slate-200"
-                      : "text-slate-600 hover:text-slate-950"
-                  }`}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-            {period === "Date" && (
-              <label className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
-                <Calendar className="h-4 w-4 text-slate-500" />
-                <input
-                  type="date"
-                  value={filterDate}
-                  onChange={(event) => setFilterDate(event.target.value)}
-                  className="bg-transparent text-slate-700 outline-none"
-                />
-              </label>
-            )}
-            <label className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
-              <Stethoscope className="h-4 w-4 text-slate-500" />
-              <select
-                value={doctorFilter}
-                onChange={(event) => {
-                  setDoctorFilter(event.target.value);
-                  setSelectedRegionId(null);
-                }}
-                className="min-w-[210px] bg-transparent text-slate-700 outline-none"
-              >
-                <option value="">Tous les médecins</option>
-                {doctors.map((doctor) => (
-                  <option key={doctor.id} value={doctor.name}>
-                    {doctor.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
         </div>
 
-        <div className="grid border-t border-slate-200 bg-white sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid border-t border-slate-200 bg-white sm:grid-cols-3">
           <KpiTile
             label="Examens collectés"
             value={formatNumber(totalExams)}
@@ -660,24 +661,106 @@ function AnalysePage() {
             icon={Clock3}
             tone="orange"
           />
-          <KpiTile
-            label="Sites sous moyenne locale"
-            value={
-              regionsData.filter(
-                (region) =>
-                  region.interprete <=
-                  (region.en_attente + region.en_cours + region.interprete) / 3,
-              ).length
-            }
-            detail="Moyenne site = total / 3 statuts"
-            icon={TrendingUp}
-            tone="slate"
-          />
         </div>
       </div>
 
       <div className="grid gap-5 p-5 xl:grid-cols-3">
-        <main className="space-y-5">
+        <aside className="rounded-lg border border-slate-200 bg-white p-5 xl:col-start-3 xl:row-start-1">
+          <div className="mb-5">
+            <h2 className="text-base font-semibold text-slate-950">Filtres d’analyse</h2>
+            <p className="mt-1 text-sm text-slate-500">Affinez toutes les données du tableau.</p>
+          </div>
+
+          <div className="space-y-5">
+            <fieldset>
+              <legend className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                Plage de dates
+              </legend>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                <label className="space-y-1 text-xs text-slate-500">
+                  <span>Du</span>
+                  <input
+                    type="date"
+                    value={dateRangeStart}
+                    max={dateRangeEnd || undefined}
+                    onChange={(event) => setDateRangeStart(event.target.value)}
+                    className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  />
+                </label>
+                <label className="space-y-1 text-xs text-slate-500">
+                  <span>Au</span>
+                  <input
+                    type="date"
+                    value={dateRangeEnd}
+                    min={dateRangeStart || undefined}
+                    onChange={(event) => setDateRangeEnd(event.target.value)}
+                    className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  />
+                </label>
+              </div>
+            </fieldset>
+
+            <label className="block">
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                Établissement / région
+              </span>
+              <select
+                value={regionFilter}
+                onChange={(event) => {
+                  setRegionFilter(event.target.value);
+                  setSelectedRegionId(null);
+                }}
+                className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              >
+                <option value="">Toutes les régions</option>
+                {availableRegions.map((region) => (
+                  <option key={region.id} value={region.id}>
+                    {region.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block">
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                Médecin
+              </span>
+              <select
+                value={doctorFilter}
+                onChange={(event) => {
+                  setDoctorFilter(event.target.value);
+                  setSelectedRegionId(null);
+                }}
+                className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              >
+                <option value="">Tous les médecins</option>
+                {doctors.map((doctor) => (
+                  <option key={doctor.id} value={doctor.name}>
+                    {doctor.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {(dateRangeStart || dateRangeEnd || regionFilter || doctorFilter) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDateRangeStart("");
+                  setDateRangeEnd("");
+                  setRegionFilter("");
+                  setDoctorFilter("");
+                  setSelectedRegionId(null);
+                }}
+                className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+              >
+                Réinitialiser les filtres
+              </button>
+            )}
+          </div>
+        </aside>
+
+        <main className="space-y-5 xl:col-span-2 xl:col-start-1 xl:row-start-1">
           <section className="flex h-[620px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
               <div>
@@ -731,192 +814,386 @@ function AnalysePage() {
           </section>
         </main>
 
-        <aside>
-          <section className="flex h-[620px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
-            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  {selectedRegion ? selectedRegion.governorate : "National"}
-                </div>
-                <h2 className="mt-1 flex items-center gap-2 text-base font-semibold text-slate-950">
-                  <MapPin className="h-4 w-4 text-blue-700" />
-                  {selectedRegion ? selectedRegion.name : "Tunisie — consolidation"}
-                </h2>
-              </div>
-              {selectedRegion && (
-                <button
-                  onClick={() => setSelectedRegionId(null)}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
-                >
-                  <RotateCw className="h-3.5 w-3.5" />
-                  National
-                </button>
-              )}
-            </div>
-
-            <div className="grid grid-cols-3 divide-x divide-slate-200 border-b border-slate-200">
-              {statusBars.map((item) => (
-                <div key={item.name} className="px-4 py-3">
-                  <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                    {item.name}
+        <div className="hidden">
+          <aside>
+            <section className="flex h-[620px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+              <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    {selectedRegion ? selectedRegion.governorate : "National"}
                   </div>
-                  <div className="mt-1 text-lg font-semibold tabular-nums text-slate-950">
-                    {formatNumber(item.value)}
-                  </div>
+                  <h2 className="mt-1 flex items-center gap-2 text-base font-semibold text-slate-950">
+                    <MapPin className="h-4 w-4 text-blue-700" />
+                    {selectedRegion ? selectedRegion.name : "Tunisie — consolidation"}
+                  </h2>
                 </div>
-              ))}
-            </div>
-
-            <div className="flex min-h-0 flex-1 flex-col px-5 py-4">
-              <div className="mb-3 flex items-center justify-between text-sm">
-                <span className="font-medium text-slate-700">Répartition du flux</span>
-                <span className="tabular-nums text-slate-500">
-                  {formatNumber(statusBarsTotal)} examens
-                </span>
-              </div>
-              <div className="min-h-[360px] flex-1">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={statusBars} margin={{ top: 8, right: 12, left: -18, bottom: 8 }}>
-                    <CartesianGrid vertical={false} stroke="#e2e8f0" />
-                    <XAxis
-                      dataKey="name"
-                      tickLine={false}
-                      axisLine={false}
-                      tick={{ fontSize: 12, fill: "#475569" }}
-                      interval={0}
-                    />
-                    <YAxis
-                      type="number"
-                      tickLine={false}
-                      axisLine={false}
-                      tick={{ fontSize: 12, fill: "#475569" }}
-                      allowDecimals={false}
-                    />
-                    <Tooltip
-                      cursor={{ fill: "#f8fafc" }}
-                      contentStyle={{ borderRadius: 8, borderColor: "#cbd5e1" }}
-                    />
-                    <Bar dataKey="value" radius={[6, 6, 0, 0]} barSize={34}>
-                      {statusBars.map((entry) => (
-                        <Cell key={entry.name} fill={entry.color} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </section>
-        </aside>
-
-        <aside>
-          <section className="flex h-[620px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-              <h2 className="text-base font-semibold text-slate-950">Établissements pilotes</h2>
-              <span className="text-xs text-slate-500">{regionsData.length} sites</span>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              {rankedRegions.map((region, index) => {
-                const isSelected = selectedRegionId === region.id;
-                const regionTotal = region.en_attente + region.en_cours + region.interprete;
-                const regionAverage = regionTotal / 3;
-                const isAboveAverage = region.interprete > regionAverage;
-                return (
+                {selectedRegion && (
                   <button
-                    key={region.id}
-                    onClick={() => setSelectedRegionId(region.id)}
-                    className={`grid w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 border-b border-slate-100 px-5 py-3 text-left transition last:border-b-0 ${
-                      isSelected ? "bg-blue-50" : "hover:bg-slate-50"
-                    }`}
+                    onClick={() => setSelectedRegionId(null)}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
                   >
-                    <span className="text-xs font-semibold tabular-nums text-slate-400">
-                      {String(index + 1).padStart(2, "0")}
-                    </span>
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-2">
-                        <span
-                          className={`h-2 w-2 rounded-full ${isAboveAverage ? "bg-emerald-500" : "bg-red-500"}`}
-                        />
-                        <span className="truncate text-sm font-semibold text-slate-800">
-                          {region.name}
+                    <RotateCw className="h-3.5 w-3.5" />
+                    National
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-3 divide-x divide-slate-200 border-b border-slate-200">
+                {statusBars.map((item) => (
+                  <div key={item.name} className="px-4 py-3">
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                      {item.name}
+                    </div>
+                    <div className="mt-1 text-lg font-semibold tabular-nums text-slate-950">
+                      {formatNumber(item.value)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex min-h-0 flex-1 flex-col px-5 py-4">
+                <div className="mb-3 flex items-center justify-between text-sm">
+                  <span className="font-medium text-slate-700">Répartition du flux</span>
+                  <span className="tabular-nums text-slate-500">
+                    {formatNumber(statusBarsTotal)} examens
+                  </span>
+                </div>
+                <div className="min-h-[360px] flex-1">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={statusBars}
+                      margin={{ top: 8, right: 12, left: -18, bottom: 8 }}
+                    >
+                      <CartesianGrid vertical={false} stroke="#e2e8f0" />
+                      <XAxis
+                        dataKey="name"
+                        tickLine={false}
+                        axisLine={false}
+                        tick={{ fontSize: 12, fill: "#475569" }}
+                        interval={0}
+                      />
+                      <YAxis
+                        type="number"
+                        tickLine={false}
+                        axisLine={false}
+                        tick={{ fontSize: 12, fill: "#475569" }}
+                        allowDecimals={false}
+                      />
+                      <Tooltip
+                        cursor={{ fill: "#f8fafc" }}
+                        contentStyle={{ borderRadius: 8, borderColor: "#cbd5e1" }}
+                      />
+                      <Bar dataKey="value" radius={[6, 6, 0, 0]} barSize={34}>
+                        {statusBars.map((entry) => (
+                          <Cell key={entry.name} fill={entry.color} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </section>
+          </aside>
+
+          <aside>
+            <section className="flex h-[620px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+              <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+                <h2 className="text-base font-semibold text-slate-950">Établissements pilotes</h2>
+                <span className="text-xs text-slate-500">{regionsData.length} sites</span>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                {rankedRegions.map((region, index) => {
+                  const isSelected = selectedRegionId === region.id;
+                  const regionTotal = region.en_attente + region.en_cours + region.interprete;
+                  const regionAverage = regionTotal / 3;
+                  const isAboveAverage = region.interprete > regionAverage;
+                  return (
+                    <button
+                      key={region.id}
+                      onClick={() => setSelectedRegionId(region.id)}
+                      className={`grid w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 border-b border-slate-100 px-5 py-3 text-left transition last:border-b-0 ${
+                        isSelected ? "bg-blue-50" : "hover:bg-slate-50"
+                      }`}
+                    >
+                      <span className="text-xs font-semibold tabular-nums text-slate-400">
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="flex items-center gap-2">
+                          <span
+                            className={`h-2 w-2 rounded-full ${isAboveAverage ? "bg-emerald-500" : "bg-red-500"}`}
+                          />
+                          <span className="truncate text-sm font-semibold text-slate-800">
+                            {region.name}
+                          </span>
+                        </span>
+                        <span className="mt-0.5 block text-xs text-slate-500">
+                          {region.governorate} · {formatNumber(regionTotal)} examens
                         </span>
                       </span>
-                      <span className="mt-0.5 block text-xs text-slate-500">
-                        {region.governorate} · {formatNumber(regionTotal)} examens
+                      <span className="text-right">
+                        <span className="block text-sm font-semibold tabular-nums text-slate-950">
+                          {formatNumber(regionTotal)}
+                        </span>
+                        <span className="block text-[11px] text-slate-500">
+                          {formatNumber(region.interprete)} interpr.
+                        </span>
                       </span>
-                    </span>
-                    <span className="text-right">
-                      <span className="block text-sm font-semibold tabular-nums text-slate-950">
-                        {formatNumber(regionTotal)}
-                      </span>
-                      <span className="block text-[11px] text-slate-500">
-                        {formatNumber(region.interprete)} interpr.
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          </aside>
+
+          <section className="flex h-[520px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white xl:col-span-2">
+            <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-base font-semibold text-slate-950">
+                  {selectedRegion ? `Courbe - ${selectedRegion.name}` : "Courbe nationale"}
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Volumes réels par statut, par jour ou par mois selon le filtre actif.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: STATUS_COLORS.attente }}
+                  />
+                  En attente
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: STATUS_COLORS.cours }}
+                  />
+                  En cours
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: STATUS_COLORS.interprete }}
+                  />
+                  Interprété
+                </span>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 divide-x divide-slate-200 border-b border-slate-200 bg-slate-50/60">
+              <div className="px-5 py-3">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                  En attente
+                </div>
+                <div className="mt-1 text-lg font-semibold tabular-nums text-orange-600">
+                  {formatNumber(chartTotalAttente)}
+                </div>
+              </div>
+              <div className="px-5 py-3">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                  En cours
+                </div>
+                <div className="mt-1 text-lg font-semibold tabular-nums text-blue-600">
+                  {formatNumber(chartTotalCours)}
+                </div>
+              </div>
+              <div className="px-5 py-3">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                  Interprété
+                </div>
+                <div className="mt-1 text-lg font-semibold tabular-nums text-emerald-600">
+                  {formatNumber(chartTotalInterprete)}
+                </div>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 px-5 py-5">
+              {trendData.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={trendData} margin={{ top: 8, right: 18, left: -8, bottom: 0 }}>
+                    <CartesianGrid vertical={false} stroke="#e2e8f0" />
+                    <XAxis
+                      dataKey="label"
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fontSize: 11, fill: "#64748b" }}
+                    />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      allowDecimals={false}
+                      tick={{ fontSize: 11, fill: "#64748b" }}
+                    />
+                    <Tooltip
+                      cursor={{ stroke: "#cbd5e1", strokeDasharray: "4 4" }}
+                      contentStyle={{ borderRadius: 8, borderColor: "#cbd5e1" }}
+                      formatter={(value: number, name: string) => [
+                        formatNumber(Number(value)),
+                        name,
+                      ]}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="attente"
+                      stroke={STATUS_COLORS.attente}
+                      strokeWidth={2}
+                      dot={{ r: 3, strokeWidth: 2, fill: "#ffffff" }}
+                      activeDot={{ r: 5 }}
+                      name="En attente"
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="cours"
+                      stroke={STATUS_COLORS.cours}
+                      strokeWidth={2}
+                      dot={{ r: 3, strokeWidth: 2, fill: "#ffffff" }}
+                      activeDot={{ r: 5 }}
+                      name="En cours"
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="interprete"
+                      stroke={STATUS_COLORS.interprete}
+                      strokeWidth={2}
+                      dot={{ r: 3, strokeWidth: 2, fill: "#ffffff" }}
+                      activeDot={{ r: 5 }}
+                      name="Interprété"
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                  Pas assez de données datées pour tracer une courbe.
+                </div>
+              )}
             </div>
           </section>
-        </aside>
 
-        <section className="flex h-[520px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white xl:col-span-2">
+          <section className="flex h-[520px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-base font-semibold text-slate-950">
+                  {selectedRegion ? `En attente - ${selectedRegion.name}` : "En attente"}
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Répartition selon la période, le médecin et l’établissement sélectionnés.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: STATUS_COLORS.attenteAujourdhui }}
+                  />
+                  Aujourd’hui
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: STATUS_COLORS.retraitAccumule }}
+                  />
+                  Après retrait
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: STATUS_COLORS.nonAssigneAccumule }}
+                  />
+                  Accumulé
+                </span>
+              </div>
+            </div>
+            <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-3 px-5 py-4">
+              {waitingBreakdownTotal ? (
+                <div className="min-h-0">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Tooltip
+                        contentStyle={{ borderRadius: 8, borderColor: "#cbd5e1" }}
+                        formatter={(value: number, name: string) => [
+                          `${formatNumber(Number(value))} (${percentage(Number(value), waitingBreakdownTotal)}%)`,
+                          name,
+                        ]}
+                      />
+                      <Pie
+                        data={waitingBreakdownData}
+                        dataKey="value"
+                        nameKey="name"
+                        cx="50%"
+                        cy="50%"
+                        outerRadius="82%"
+                        paddingAngle={0}
+                        stroke="#ffffff"
+                        strokeWidth={2}
+                      >
+                        {waitingBreakdownData.map((entry) => (
+                          <Cell key={entry.name} fill={entry.color} />
+                        ))}
+                      </Pie>
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                  Aucun examen en attente à répartir.
+                </div>
+              )}
+              <div className="grid grid-cols-4 gap-2 border-t border-slate-200 pt-3">
+                <div className="rounded-md bg-slate-950 px-3 py-2.5 text-white">
+                  <div className="truncate text-[10px] font-medium uppercase tracking-wide text-slate-300">
+                    Total
+                  </div>
+                  <div className="mt-1 text-xl font-semibold tabular-nums">
+                    {formatNumber(waitingBreakdownTotal)}
+                  </div>
+                </div>
+                {waitingBreakdownData.map((item) => (
+                  <div
+                    key={item.name}
+                    className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5"
+                  >
+                    <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: item.color }}
+                      />
+                      <span className="truncate">{item.name}</span>
+                    </div>
+                    <div className="mt-1 flex items-end justify-between gap-2">
+                      <span className="text-xl font-semibold tabular-nums text-slate-950">
+                        {formatNumber(item.value)}
+                      </span>
+                      <span className="pb-0.5 text-xs tabular-nums text-slate-500">
+                        {percentage(item.value, waitingBreakdownTotal)}%
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <section className="flex h-[460px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white xl:col-span-3">
           <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
             <div>
               <h2 className="text-base font-semibold text-slate-950">
-                {selectedRegion ? `Courbe - ${selectedRegion.name}` : "Courbe nationale"}
+                Évolution quotidienne des statuts
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Volumes réels par statut, par jour ou par mois selon le filtre actif.
+                Volumes quotidiens selon la période et les filtres sélectionnés.
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  className="h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: STATUS_COLORS.attente }}
-                />
-                En attente
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  className="h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: STATUS_COLORS.cours }}
-                />
-                En cours
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  className="h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: STATUS_COLORS.interprete }}
-                />
-                Interprété
-              </span>
-            </div>
-          </div>
-          <div className="grid grid-cols-3 divide-x divide-slate-200 border-b border-slate-200 bg-slate-50/60">
-            <div className="px-5 py-3">
-              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                En attente
-              </div>
-              <div className="mt-1 text-lg font-semibold tabular-nums text-orange-600">
-                {formatNumber(chartTotalAttente)}
-              </div>
-            </div>
-            <div className="px-5 py-3">
-              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                En cours
-              </div>
-              <div className="mt-1 text-lg font-semibold tabular-nums text-blue-600">
-                {formatNumber(chartTotalCours)}
-              </div>
-            </div>
-            <div className="px-5 py-3">
-              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                Interprété
-              </div>
-              <div className="mt-1 text-lg font-semibold tabular-nums text-emerald-600">
-                {formatNumber(chartTotalInterprete)}
-              </div>
+            <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600">
+              {[
+                ["En attente", STATUS_COLORS.attente],
+                ["En cours", STATUS_COLORS.cours],
+                ["Interprété", STATUS_COLORS.interprete],
+              ].map(([label, color]) => (
+                <span key={label} className="inline-flex items-center gap-1.5">
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+                  {label}
+                </span>
+              ))}
             </div>
           </div>
           <div className="min-h-0 flex-1 px-5 py-5">
@@ -944,141 +1221,147 @@ function AnalysePage() {
                   <Line
                     type="monotone"
                     dataKey="attente"
-                    stroke={STATUS_COLORS.attente}
-                    strokeWidth={2}
-                    dot={{ r: 3, strokeWidth: 2, fill: "#ffffff" }}
-                    activeDot={{ r: 5 }}
                     name="En attente"
+                    stroke={STATUS_COLORS.attente}
+                    strokeWidth={2.5}
+                    dot={{ r: 2.5, strokeWidth: 2, fill: "#ffffff" }}
+                    activeDot={{ r: 5 }}
                   />
                   <Line
                     type="monotone"
                     dataKey="cours"
-                    stroke={STATUS_COLORS.cours}
-                    strokeWidth={2}
-                    dot={{ r: 3, strokeWidth: 2, fill: "#ffffff" }}
-                    activeDot={{ r: 5 }}
                     name="En cours"
+                    stroke={STATUS_COLORS.cours}
+                    strokeWidth={2.5}
+                    dot={{ r: 2.5, strokeWidth: 2, fill: "#ffffff" }}
+                    activeDot={{ r: 5 }}
                   />
                   <Line
                     type="monotone"
                     dataKey="interprete"
-                    stroke={STATUS_COLORS.interprete}
-                    strokeWidth={2}
-                    dot={{ r: 3, strokeWidth: 2, fill: "#ffffff" }}
-                    activeDot={{ r: 5 }}
                     name="Interprété"
+                    stroke={STATUS_COLORS.interprete}
+                    strokeWidth={2.5}
+                    dot={{ r: 2.5, strokeWidth: 2, fill: "#ffffff" }}
+                    activeDot={{ r: 5 }}
                   />
                 </LineChart>
               </ResponsiveContainer>
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                Pas assez de données datées pour tracer une courbe.
+                Aucune donnée quotidienne pour les filtres sélectionnés.
               </div>
             )}
           </div>
         </section>
 
-        <section className="flex h-[520px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
-          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
-            <div>
-              <h2 className="text-base font-semibold text-slate-950">
-                {selectedRegion ? `En attente - ${selectedRegion.name}` : "En attente"}
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Répartition selon la période, le médecin et l’établissement sélectionnés.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  className="h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: STATUS_COLORS.attenteAujourdhui }}
-                />
-                Aujourd’hui
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  className="h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: STATUS_COLORS.retraitAccumule }}
-                />
-                Après retrait
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  className="h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: STATUS_COLORS.nonAssigneAccumule }}
-                />
-                Accumulé
-              </span>
-            </div>
+        <section className="flex h-[460px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white xl:col-span-2">
+          <div className="border-b border-slate-200 px-5 py-4">
+            <h2 className="text-base font-semibold text-slate-950">Examens par établissement</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Comparaison des statuts pour les dix sites les plus actifs selon le filtre courant.
+            </p>
           </div>
-          <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-3 px-5 py-4">
-            {waitingBreakdownTotal ? (
-              <div className="min-h-0">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Tooltip
-                      contentStyle={{ borderRadius: 8, borderColor: "#cbd5e1" }}
-                      formatter={(value: number, name: string) => [
-                        `${formatNumber(Number(value))} (${percentage(Number(value), waitingBreakdownTotal)}%)`,
-                        name,
-                      ]}
-                    />
-                    <Pie
-                      data={waitingBreakdownData}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      outerRadius="82%"
-                      paddingAngle={0}
-                      stroke="#ffffff"
-                      strokeWidth={2}
-                    >
-                      {waitingBreakdownData.map((entry) => (
-                        <Cell key={entry.name} fill={entry.color} />
-                      ))}
-                    </Pie>
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
+          <div className="min-h-0 flex-1 px-5 py-5">
+            {regionComparisonData.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={regionComparisonData}
+                  margin={{ top: 8, right: 12, left: -12, bottom: 36 }}
+                >
+                  <CartesianGrid vertical={false} stroke="#e2e8f0" />
+                  <XAxis
+                    dataKey="name"
+                    tickLine={false}
+                    axisLine={false}
+                    interval={0}
+                    angle={-22}
+                    textAnchor="end"
+                    height={64}
+                    tick={{ fontSize: 11, fill: "#64748b" }}
+                  />
+                  <YAxis
+                    tickLine={false}
+                    axisLine={false}
+                    allowDecimals={false}
+                    tick={{ fontSize: 11, fill: "#64748b" }}
+                  />
+                  <Tooltip contentStyle={{ borderRadius: 8, borderColor: "#cbd5e1" }} />
+                  <Bar
+                    dataKey="en_attente"
+                    name="En attente"
+                    fill={STATUS_COLORS.attente}
+                    radius={[3, 3, 0, 0]}
+                  />
+                  <Bar
+                    dataKey="en_cours"
+                    name="En cours"
+                    fill={STATUS_COLORS.cours}
+                    radius={[3, 3, 0, 0]}
+                  />
+                  <Bar
+                    dataKey="interprete"
+                    name="Interprété"
+                    fill={STATUS_COLORS.interprete}
+                    radius={[3, 3, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                Aucun examen en attente à répartir.
+                Aucun examen pour la période sélectionnée.
               </div>
             )}
-            <div className="grid grid-cols-4 gap-2 border-t border-slate-200 pt-3">
-              <div className="rounded-md bg-slate-950 px-3 py-2.5 text-white">
-                <div className="truncate text-[10px] font-medium uppercase tracking-wide text-slate-300">
-                  Total
-                </div>
-                <div className="mt-1 text-xl font-semibold tabular-nums">
-                  {formatNumber(waitingBreakdownTotal)}
-                </div>
-              </div>
-              {waitingBreakdownData.map((item) => (
-                <div
-                  key={item.name}
-                  className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5"
-                >
-                  <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
-                    <span
-                      className="h-2 w-2 shrink-0 rounded-full"
-                      style={{ backgroundColor: item.color }}
-                    />
-                    <span className="truncate">{item.name}</span>
-                  </div>
-                  <div className="mt-1 flex items-end justify-between gap-2">
-                    <span className="text-xl font-semibold tabular-nums text-slate-950">
-                      {formatNumber(item.value)}
-                    </span>
-                    <span className="pb-0.5 text-xs tabular-nums text-slate-500">
-                      {percentage(item.value, waitingBreakdownTotal)}%
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
+          </div>
+        </section>
+
+        <section className="flex h-[460px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 px-5 py-4">
+            <h2 className="text-base font-semibold text-slate-950">Classement des médecins</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Classement par nombre d’examens interprétés sur la période.
+            </p>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto">
+            <table className="w-full min-w-[520px] text-left text-sm">
+              <thead className="sticky top-0 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-4 py-3 font-medium">Rang</th>
+                  <th className="px-4 py-3 font-medium">Médecin</th>
+                  <th className="px-3 py-3 text-right font-medium">Assignés</th>
+                  <th className="px-3 py-3 text-right font-medium">Interprétés</th>
+                  <th className="px-3 py-3 text-right font-medium">Taux</th>
+                  <th className="px-4 py-3 text-right font-medium">En cours</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {doctorRanking.map((doctor, index) => (
+                  <tr key={normalizeDoctorName(doctor.name)} className="hover:bg-slate-50">
+                    <td className="px-4 py-3 font-semibold tabular-nums text-slate-400">
+                      {String(index + 1).padStart(2, "0")}
+                    </td>
+                    <td className="px-4 py-3 font-semibold text-slate-800">{doctor.name}</td>
+                    <td className="px-3 py-3 text-right tabular-nums">
+                      {formatNumber(doctor.assigned)}
+                    </td>
+                    <td className="px-3 py-3 text-right font-semibold tabular-nums text-emerald-700">
+                      {formatNumber(doctor.interpreted)}
+                    </td>
+                    <td className="px-3 py-3 text-right tabular-nums">{doctor.completionRate}%</td>
+                    <td className="px-4 py-3 text-right tabular-nums text-blue-700">
+                      {formatNumber(doctor.inProgress)}
+                    </td>
+                  </tr>
+                ))}
+                {!doctorRanking.length && (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-12 text-center text-slate-500">
+                      Aucun examen assigné sur la période sélectionnée.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </section>
       </div>

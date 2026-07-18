@@ -1045,7 +1045,12 @@ def tache_verification_24h():
     3. Envoie des rappels sinon
     4. Lance une nouvelle distribution
     """
-    from .distribution import reassigner_examens_en_retard, distribuer_examens, recalculer_charges
+    from .distribution import (
+        distribuer_examens,
+        recalculer_charges,
+        reassigner_examens_en_retard,
+        remettre_en_attente_sans_session_du_jour,
+    )
 
     logger.info("=== Vérification quotidienne des examens ===")
 
@@ -1053,16 +1058,21 @@ def tache_verification_24h():
     recalcul = recalculer_charges()
     logger.info(f"Recalcul charges : {recalcul}")
 
-    # 2. Réassigner les examens en retard
+    # 2. Retirer les examens des médecins sans session aujourd'hui
+    fin_sessions = remettre_en_attente_sans_session_du_jour()
+    logger.info(f"Fin des sessions : {fin_sessions}")
+
+    # 3. Réassigner les examens en retard
     reassign = reassigner_examens_en_retard()
     logger.info(f"Réassignation : {reassign}")
 
-    # 3. Nouvelle distribution
+    # 4. Nouvelle distribution aux médecins inscrits au calendrier du jour
     distrib = distribuer_examens()
     logger.info(f"Distribution : {distrib}")
 
     return {
         'recalcul': recalcul,
+        'fin_sessions': fin_sessions,
         'reassignation': reassign,
         'distribution': distrib,
     }

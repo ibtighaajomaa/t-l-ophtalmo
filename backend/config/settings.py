@@ -239,13 +239,13 @@ CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://redis:6
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'UTC'
+CELERY_TIMEZONE = 'Africa/Tunis'
 
 # Celery Beat — Tâches planifiées
 CELERY_BEAT_SCHEDULE = {
     'verification-quotidienne-24h': {
         'task': 'ophtalmo.tasks.tache_verification_24h',
-        'schedule': crontab(hour=0, minute=1),
+        'schedule': crontab(hour=0, minute=0),
     },
     'sync-orthanc-incremental': {
         'task': 'ophtalmo.tasks.tache_sync_orthanc_incremental',
