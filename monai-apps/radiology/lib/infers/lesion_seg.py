@@ -75,10 +75,10 @@ class LesionSeg(BasicInferTask):
         data[self.output_label_key] = outputs
         data[self.output_json_key] = {
             "label_info": [
-                {"name": "microaneurysms", "color": [255, 50, 50]},
-                {"name": "hemorrhages", "color": [50, 50, 255]},
-                {"name": "hard_exudates", "color": [255, 255, 50]},
-                {"name": "soft_exudates", "color": [255, 165, 0]},
+                {"name": "microaneurysms", "color": [168, 85, 247]},
+                {"name": "hemorrhages", "color": [255, 70, 70]},
+                {"name": "hard_exudates", "color": [255, 217, 61]},
+                {"name": "soft_exudates", "color": [255, 217, 61]},
             ]
         }
         return data

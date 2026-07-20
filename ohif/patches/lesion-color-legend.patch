@@ -1,0 +1,74 @@
+diff --git a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
+--- a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
++++ b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
+@@ -770,6 +770,20 @@
+         {lesions.microaneurysms !== undefined && (
+           <div className="section">
+             <div className="sectionTitle">Lesions</div>
++            <div className="lesionColorLegend" aria-label="Légende des couleurs des lésions">
++              <div className="lesionLegendItem">
++                <span className="lesionLegendSwatch hemorrhage" aria-hidden="true" />
++                <span>Rouge : hémorragies rétiniennes</span>
++              </div>
++              <div className="lesionLegendItem">
++                <span className="lesionLegendSwatch exudate" aria-hidden="true" />
++                <span>Jaune : exsudats</span>
++              </div>
++              <div className="lesionLegendItem">
++                <span className="lesionLegendSwatch microaneurysm" aria-hidden="true" />
++                <span>Violet : microanévrismes</span>
++              </div>
++            </div>
+             <div className="row">
+               <span className="label">Microaneurysms</span>
+               <span className="value">{lesions.microaneurysms}</span>
+diff --git a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.css b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.css
+--- a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.css
++++ b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.css
+@@ -127,6 +127,46 @@
+   border-bottom: 1px solid #3a3f4a;
+ }
+ 
++.aiAnalysisPanel .lesionColorLegend {
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++  margin: 8px 0 10px;
++  padding: 8px;
++  color: #e5e7eb;
++  background: #202530;
++  border: 1px solid #3a3f4a;
++  border-radius: 5px;
++}
++
++.aiAnalysisPanel .lesionLegendItem {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  line-height: 1.25;
++}
++
++.aiAnalysisPanel .lesionLegendSwatch {
++  width: 12px;
++  height: 12px;
++  flex: 0 0 12px;
++  border: 1px solid rgba(255, 255, 255, 0.75);
++  border-radius: 3px;
++  box-shadow: 0 0 4px rgba(255, 255, 255, 0.18);
++}
++
++.aiAnalysisPanel .lesionLegendSwatch.hemorrhage {
++  background: rgb(255, 70, 70);
++}
++
++.aiAnalysisPanel .lesionLegendSwatch.exudate {
++  background: rgb(255, 217, 61);
++}
++
++.aiAnalysisPanel .lesionLegendSwatch.microaneurysm {
++  background: rgb(168, 85, 247);
++}
++
+ .aiAnalysisPanel .row {
+   display: flex;
+   justify-content: space-between;

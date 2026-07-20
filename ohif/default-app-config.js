@@ -29,7 +29,8 @@ window.config = {
 
   modes: ['@ohif/mode-monai-label', '@ohif/mode-longitudinal', '@ohif/mode-segmentation'],
 
-  customizationService: {
+  customizationService: [
+    {
     // ❌ DO NOT use MONAI_Label here (OHIF ignores it)
     // ✔ MONAI is handled via extension + server config
     studyBrowser: {
@@ -37,8 +38,25 @@ window.config = {
         { id: 'thumbnails', iconName: 'thumbnails', selected: false },
         { id: 'list', iconName: 'list', selected: true },
       ],
+      },
     },
-  },
+    {
+      'viewportOverlay.topLeft': {
+        $push: [
+          {
+            id: 'RetinalLesionColorLegend',
+            inheritsFrom: 'ohif.overlayItem',
+            label: '',
+            title: 'Légende des lésions rétiniennes',
+            condition: ({ referenceInstance }) =>
+              referenceInstance?.Modality === 'OP',
+            contentF: () =>
+              '🟥 Hémorragies  ·  🟨 Exsudats  ·  🟪 Microanévrismes  ·  🟩 Disque optique  ·  🟥 Cupule optique',
+          },
+        ],
+      },
+    },
+  ],
 
   showStudyList: true,
 

@@ -23,10 +23,10 @@ from transformers import SegformerForSemanticSegmentation, AutoImageProcessor
 logger = logging.getLogger(__name__)
 
 LESION_COLORS = {
-    1: (255, 50, 50),
-    2: (50, 50, 255),
-    3: (255, 255, 50),
-    4: (255, 165, 0),
+    1: (168, 85, 247),
+    2: (255, 70, 70),
+    3: (255, 217, 61),
+    4: (255, 217, 61),
 }
 
 LESION_NAMES = {
