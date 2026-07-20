@@ -16,12 +16,69 @@ from ophtalmo.views import (
     latest_analysis,
     orthanc_webhook,
     request_composite_segmentation,
+    run_analysis,
     sync_orthanc,
 )
 from ophtalmo.distribution import get_examens_en_attente, distribuer_examens
 
 
 TODAY = date.today()
+
+
+class PoorQualityAnalysisGuardTest(TestCase):
+    def setUp(self):
+        self.factory = APIRequestFactory()
+
+    @patch('ophtalmo.tasks._collect_op_series')
+    @patch('ophtalmo.tasks._resolve_orthanc_id', return_value='orthanc-study')
+    @patch('ophtalmo.views.requests.post')
+    def test_manual_analysis_is_rejected_when_every_image_requires_retake(
+        self,
+        requests_post,
+        resolve_orthanc_id,
+        collect_op_series,
+    ):
+        exam = Exam.objects.create(
+            study_instance_uid='1.2.3.poor',
+            patient_name='Patient qualité insuffisante',
+            date=TODAY,
+            quality_status='completed',
+            quality_score=25,
+            quality_category='bad',
+        )
+        ImageQualityAssessment.objects.create(
+            exam=exam,
+            orthanc_instance_id='instance-bad',
+            study_instance_uid=exam.study_instance_uid,
+            series_instance_uid='series-1',
+            sop_instance_uid='sop-bad',
+            score=25,
+            category='bad',
+        )
+        collect_op_series.return_value = (
+            {'MainDicomTags': {'StudyInstanceUID': exam.study_instance_uid}},
+            [{
+                'orthanc_series_id': 'series-id',
+                'series_instance_uid': 'series-1',
+                'instances': [{
+                    'orthanc_instance_id': 'instance-bad',
+                    'sop_instance_uid': 'sop-bad',
+                }],
+            }],
+        )
+
+        request = self.factory.post(
+            '/api/exams/run-analysis/',
+            {'study_instance_uid': '1.2.3.poor'},
+            format='json',
+        )
+        response = run_analysis(request)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['code'], 'all_images_require_retake')
+        self.assertEqual(response.data['rejected_images'][0]['status'], 'retake_required')
+        resolve_orthanc_id.assert_called_once_with(exam.study_instance_uid)
+        requests_post.assert_not_called()
 
 
 class SegmentationModelTest(TestCase):

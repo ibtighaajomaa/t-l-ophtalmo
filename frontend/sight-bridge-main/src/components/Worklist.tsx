@@ -185,7 +185,9 @@ function QualityModal({ exam, onClose }: { exam: Exam; onClose: () => void }) {
                     <span
                       className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${styles[result.category]}`}
                     >
-                      {labels[result.category]}
+                      {result.category === "bad" || result.score < 40
+                        ? "À refaire"
+                        : labels[result.category]}
                     </span>
                   </li>
                 );

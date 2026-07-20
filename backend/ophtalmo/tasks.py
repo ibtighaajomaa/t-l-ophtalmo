@@ -562,7 +562,13 @@ def _series_dicom_laterality(orthanc_url, orthanc_series_id, series=None):
     return ''
 
 
-def _prepare_monai_series_cache(orthanc_url, orthanc_series_id, series_instance_uid, study_id):
+def _prepare_monai_series_cache(
+    orthanc_url,
+    orthanc_series_id,
+    series_instance_uid,
+    study_id,
+    allowed_instance_ids=None,
+):
     """Populate MONAI's DICOM cache with the exact Orthanc source series."""
     import shutil
 
@@ -583,6 +589,11 @@ def _prepare_monai_series_cache(orthanc_url, orthanc_series_id, series_instance_
     )
     series_detail.raise_for_status()
     instances = series_detail.json().get('Instances', [])
+    if allowed_instance_ids is not None:
+        allowed_instance_ids = set(allowed_instance_ids)
+        instances = [instance_id for instance_id in instances if instance_id in allowed_instance_ids]
+    if not instances:
+        raise ValueError('Aucune image de qualité suffisante dans cette série')
     for instance_id in instances:
         instance_resp = requests.get(
             f'{orthanc_url}/instances/{instance_id}/file',
@@ -1319,6 +1330,9 @@ def tache_auto_quality(exam_id=None):
             # Persist only after every result has passed the identity checks,
             # so a partially analyzed exam can never display another study.
             with transaction.atomic():
+                ImageQualityAssessment.objects.filter(exam=exam).exclude(
+                    orthanc_instance_id__in=instance_ids,
+                ).delete()
                 for instance_id, result in results:
                     ImageQualityAssessment.objects.update_or_create(
                         sop_instance_uid=result['sop_instance_uid'],
@@ -1437,6 +1451,7 @@ def tache_auto_segmentation(exam_id=None):
         # ==========================================
         for exam in exams:
             study_id = exam.study_instance_uid
+
             orthanc_study_id = _resolve_orthanc_id(study_id)
 
             logger.info(
@@ -1485,6 +1500,10 @@ def tache_auto_segmentation(exam_id=None):
             models_status = {}
             series_reports = {}
             all_ok = True
+            quality_by_sop = {
+                assessment.sop_instance_uid: assessment
+                for assessment in ImageQualityAssessment.objects.filter(exam=exam)
+            }
 
             # ==========================================
             # ÉTAPE 5 : Analyse série par série (oeil par oeil)
@@ -1493,6 +1512,37 @@ def tache_auto_segmentation(exam_id=None):
                 op_series_uid = op_series_item['series_instance_uid']
                 op_orthanc_series_id = op_series_item['orthanc_series_id']
                 series_status = {}
+                source_instances = op_series_item.get('instances') or []
+                rejected_instances = []
+                accepted_instances = []
+                for source_instance in source_instances:
+                    assessment = quality_by_sop.get(source_instance.get('sop_instance_uid'))
+                    is_rejected = assessment and (
+                        assessment.category == 'bad' or assessment.score < 40
+                    )
+                    if is_rejected:
+                        rejected_instances.append({
+                            'sop_instance_uid': source_instance.get('sop_instance_uid'),
+                            'orthanc_instance_id': source_instance.get('orthanc_instance_id'),
+                            'score': assessment.score,
+                            'category': assessment.category,
+                            'status': 'retake_required',
+                        })
+                    else:
+                        accepted_instances.append(source_instance)
+
+                series_status['rejected_instances'] = rejected_instances
+                if rejected_instances:
+                    logger.info(
+                        "[AutoSeg] [Examen %s] %s image(s) rejetée(s) dans la série %s; reprise requise.",
+                        exam.id,
+                        len(rejected_instances),
+                        op_series_uid,
+                    )
+                if source_instances and not accepted_instances:
+                    series_status['skipped'] = 'all images require retake'
+                    models_status[op_series_uid] = series_status
+                    continue
 
                 logger.info(
                     f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Début du traitement oeil - "
@@ -1507,6 +1557,9 @@ def tache_auto_segmentation(exam_id=None):
                         op_orthanc_series_id,
                         op_series_uid,
                         study_id,
+                        allowed_instance_ids={
+                            item.get('orthanc_instance_id') for item in accepted_instances
+                        } if source_instances else None,
                     )
                     logger.debug(f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] Cache synchronisé avec succès.")
                 except Exception as e:
@@ -1559,7 +1612,7 @@ def tache_auto_segmentation(exam_id=None):
                 # Étape D : Passage des modèles de segmentation d'IA sur chaque instance source.
                 # MONAI reçoit toujours le SeriesInstanceUID comme image id, mais le cache
                 # local est remplacé par une seule instance DICOM avant chaque inférence.
-                source_instances = op_series_item.get('instances') or []
+                source_instances = accepted_instances
                 if source_instances:
                     series_status['source_instances'] = [
                         {

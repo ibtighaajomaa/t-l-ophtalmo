@@ -9,7 +9,14 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from django.http import FileResponse
-from .models import Exam, AnalysisReport, MedicalReport, MedicalReportVersion, DoctorNote
+from .models import (
+    AnalysisReport,
+    DoctorNote,
+    Exam,
+    ImageQualityAssessment,
+    MedicalReport,
+    MedicalReportVersion,
+)
 from .serializers import (
     ExamSerializer,
     AnalysisReportSerializer,
@@ -702,6 +709,51 @@ def orthanc_webhook(request):
             changed_fields.append('modality_ip')
         if changed_fields:
             existing.save(update_fields=changed_fields + ['updated_at'])
+
+        current_op_instance_ids = set()
+        for series_id in meta.get('Series', []):
+            try:
+                series_response = requests.get(f'{ORTHANC_URL}/series/{series_id}', timeout=5)
+                if series_response.status_code != 200:
+                    continue
+                series = series_response.json()
+                modality = str(series.get('MainDicomTags', {}).get('Modality', '')).upper()
+                if modality == 'OP':
+                    current_op_instance_ids.update(series.get('Instances', []))
+            except requests.RequestException:
+                continue
+
+        assessed_instance_ids = set(
+            ImageQualityAssessment.objects.filter(exam=existing).values_list(
+                'orthanc_instance_id',
+                flat=True,
+            )
+        )
+        new_instance_ids = current_op_instance_ids - assessed_instance_ids
+        if new_instance_ids and existing.quality_status not in ('pending', 'in_progress'):
+            existing.quality_status = 'pending'
+            existing.quality_error = ''
+            existing.segmentation_status = 'pending'
+            existing.segmentation_error = ''
+            existing.save(update_fields=[
+                'quality_status', 'quality_error',
+                'segmentation_status', 'segmentation_error', 'updated_at',
+            ])
+            try:
+                from .tasks import tache_auto_quality
+                tache_auto_quality.delay(existing.id)
+            except Exception:
+                logger.exception(
+                    "Impossible de mettre en file le contrôle qualité de la reprise pour l'examen %s",
+                    existing.id,
+                )
+            return Response({
+                'status': 'retake_received',
+                'exam_id': existing.id,
+                'new_op_images': len(new_instance_ids),
+                'study_id': dicom_study_uid,
+                'orthanc_study_id': study_id,
+            })
         return Response({
             'status': 'already_exists',
             'study_id': dicom_study_uid,
@@ -948,6 +1000,8 @@ def run_analysis(request):
     if not study_uid:
         return Response({'error': 'study_instance_uid is required'}, status=status.HTTP_400_BAD_REQUEST)
 
+    exam = Exam.objects.filter(study_instance_uid=study_uid).first()
+
     # Find every OP (fundus) series within the study. Right/left eyes can be
     # separate OP series, so do not stop at the first one.
     logger.info(f"Looking up OP series for study: {study_uid}")
@@ -983,6 +1037,37 @@ def run_analysis(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    quality_by_sop = {
+        assessment.sop_instance_uid: assessment
+        for assessment in exam.image_quality_results.all()
+    } if exam else {}
+    rejected_images = []
+    for op_series_item in op_series:
+        accepted_instances = []
+        for source_instance in op_series_item.get('instances') or []:
+            assessment = quality_by_sop.get(source_instance.get('sop_instance_uid'))
+            if assessment and (assessment.category == 'bad' or assessment.score < 40):
+                rejected_images.append({
+                    'sop_instance_uid': source_instance.get('sop_instance_uid'),
+                    'score': assessment.score,
+                    'category': assessment.category,
+                    'status': 'retake_required',
+                })
+            else:
+                accepted_instances.append(source_instance)
+        op_series_item['accepted_instances'] = accepted_instances
+
+    total_instances = sum(len(item.get('instances') or []) for item in op_series)
+    if total_instances and len(rejected_images) == total_instances:
+        return Response(
+            {
+                'error': "Analyse IA refusée : toutes les images doivent être refaites.",
+                'code': 'all_images_require_retake',
+                'rejected_images': rejected_images,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     monai_url = "http://monai-label:8000/infer/analyze"
     results = {}
     errors = {}
@@ -990,6 +1075,10 @@ def run_analysis(request):
     for op_series_item in op_series:
         op_series_uid = op_series_item['series_instance_uid']
         op_orthanc_series_id = op_series_item['orthanc_series_id']
+        accepted_instances = op_series_item.get('accepted_instances') or []
+        if op_series_item.get('instances') and not accepted_instances:
+            errors[op_series_uid] = 'All images in this series require retake'
+            continue
         _delete_prior_ai_seg_series(
             ORTHANC_URL,
             orthanc_study_id,
@@ -1001,6 +1090,9 @@ def run_analysis(request):
                 op_orthanc_series_id,
                 op_series_uid,
                 study_uid,
+                allowed_instance_ids={
+                    item.get('orthanc_instance_id') for item in accepted_instances
+                } if op_series_item.get('instances') else None,
             )
         except Exception as e:
             logger.error("Failed to pre-populate MONAI Label cache for %s: %s", op_series_uid, e)
@@ -1092,6 +1184,7 @@ def run_analysis(request):
         "study_instance_uid": study_uid,
         "series_results": results,
         "series_errors": errors,
+        "rejected_images": rejected_images,
         # Backward-compatible fields for callers that expect a single result.
         "series_instance_uid": next(iter(results.keys())),
         "analysis": per_eye or next(iter(results.values())),

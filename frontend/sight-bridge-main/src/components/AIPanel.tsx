@@ -30,6 +30,13 @@ interface AIPanelProps {
   patientId?: string;
   patientAge?: number;
   examinationId?: string;
+  autoRun?: boolean;
+  qualityCategory?: "good" | "acceptable" | "bad";
+  qualityScore?: number | null;
+  imageQualityResults?: Array<{
+    score: number;
+    category: "good" | "acceptable" | "bad";
+  }>;
 }
 
 const EYE_SIDES = ["right", "left"] as const;
@@ -92,7 +99,24 @@ export function AIPanel({
   patientId,
   patientAge,
   examinationId,
+  autoRun = false,
+  qualityCategory,
+  qualityScore,
+  imageQualityResults = [],
 }: AIPanelProps) {
+  const rejectedImageCount = imageQualityResults.filter(
+    (result) => result.category === "bad" || result.score < 40,
+  ).length;
+  const acceptedImageCount = imageQualityResults.length - rejectedImageCount;
+  const hasDetailedQuality = imageQualityResults.length > 0;
+  const isPoorQuality = hasDetailedQuality
+    ? acceptedImageCount === 0
+    : qualityCategory === "bad" || (qualityScore != null && qualityScore < 40);
+  const qualityBlockMessage = isPoorQuality
+    ? "L’analyse IA est désactivée : toutes les images doivent être refaites."
+    : rejectedImageCount > 0
+      ? `${acceptedImageCount} image(s) envoyée(s) à l’IA. ${rejectedImageCount} image(s) à refaire par le technicien.`
+      : null;
   const [analysis, setAnalysis] = useState<AnalysisResult | PerEyeAnalysis | null>(null);
   const [activeEye, setActiveEye] = useState<EyeSide>("right");
   const [loading, setLoading] = useState(false);
@@ -223,14 +247,14 @@ export function AIPanel({
 
   const autoRunRef = useRef(false);
   useEffect(() => {
-    if (autoRun && studyInstanceUid && !autoRunRef.current) {
+    if (autoRun && studyInstanceUid && !isPoorQuality && !autoRunRef.current) {
       autoRunRef.current = true;
       handleRunAnalysis();
     }
-  }, [autoRun, studyInstanceUid]);
+  }, [autoRun, studyInstanceUid, isPoorQuality]);
 
   async function handleRunAnalysis() {
-    if (!studyInstanceUid) return;
+    if (!studyInstanceUid || isPoorQuality) return;
     setLoading(true);
     setError(null);
     setReportText(null);
@@ -327,6 +351,13 @@ export function AIPanel({
           <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 border border-amber-500/30 p-3 text-xs text-amber-300">
             <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
             <span>No DICOM study available for AI analysis.</span>
+          </div>
+        )}
+
+        {isPoorQuality && qualityBlockMessage && (
+          <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 border border-amber-500/30 p-3 text-xs text-amber-300">
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+            <span>{qualityBlockMessage}</span>
           </div>
         )}
 
@@ -716,15 +747,16 @@ export function AIPanel({
           <div className="flex items-center gap-2 pt-3 border-t border-slate-700">
             <button
               onClick={handleRunAnalysis}
-              disabled={loading || generatingReport}
+              disabled={loading || generatingReport || isPoorQuality}
               className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition"
+              title={isPoorQuality ? "Analyse IA indisponible pour cette image" : undefined}
             >
               {loading ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <Play className="h-3.5 w-3.5" />
               )}
-              {loading ? "Running…" : hasAnalysis ? "Run Analysis Again" : "Run AI Analysis"}
+              {loading ? "Running…" : isPoorQuality ? "IA indisponible" : hasAnalysis ? "Run Analysis Again" : "Run AI Analysis"}
             </button>
             {hasAnalysis && (
               <button
