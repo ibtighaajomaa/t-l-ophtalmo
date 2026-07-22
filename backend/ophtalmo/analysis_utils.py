@@ -85,6 +85,7 @@ def _blank_eye(side):
             "coverage_pct": 0.0,
             "pixel_count": 0,
         },
+        "fovea": None,
         "gradcam_image": None,
         "clahe_image": None,
         "visual_source": None,
@@ -97,6 +98,7 @@ def _copy_report_fields(target, report, include_visuals=True):
     target["optic_disc_cup"] = report.get("optic_disc_cup") or target["optic_disc_cup"]
     target["glaucoma"] = report.get("glaucoma") or target["glaucoma"]
     target["vessels"] = report.get("vessels") or target["vessels"]
+    target["fovea"] = report.get("fovea") or target.get("fovea")
     if include_visuals:
         target["gradcam_image"] = report.get("gradcam_image")
         target["clahe_image"] = report.get("clahe_image")
@@ -160,6 +162,7 @@ def aggregate_per_eye(per_series, quality_scores=None):
             "sop_instance_uid": _report_sop_uid(visual_uid, visual_report),
             "quality_score": _quality_score(visual_uid, visual_report, quality_scores),
         }
+        eye["fovea"] = visual_report.get("fovea")
 
         _, worst_glaucoma = max(items, key=lambda item: _glaucoma_score(item[1]))
         eye["glaucoma"] = worst_glaucoma.get("glaucoma") or eye["glaucoma"]

@@ -1397,6 +1397,7 @@ def tache_auto_segmentation(exam_id=None):
 
     MAX_RETRIES = 3
     SEG_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
+    FOVEA_MODEL = "fovea_detection"
     MONAI_LABEL = "http://monai-label:8000"
 
     logger.info("[AutoSeg] === Démarrage de la tâche de segmentation automatique ===")
@@ -1626,6 +1627,7 @@ def tache_auto_segmentation(exam_id=None):
                     source_instances = [{'orthanc_instance_id': None, 'sop_instance_uid': None, 'instance_number': None}]
 
                 model_results = {model: [] for model in SEG_MODELS}
+                fovea_results = []
                 segmented_instances = []
 
                 for instance_index, source_instance in enumerate(source_instances, start=1):
@@ -1704,11 +1706,53 @@ def tache_auto_segmentation(exam_id=None):
                                 f"{model} sur instance {instance_index}: {str(e)}",
                                 exc_info=True,
                             )
+
+                    # Fovea is a point-localization peer, not a DICOM-SEG model.
+                    # Its failure is reported without failing the segmentations.
+                    try:
+                        logger.info(
+                            f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] "
+                            f"Localisation de la fovéa sur instance {instance_index}/{len(source_instances)}"
+                        )
+                        fovea_resp = requests.post(
+                            f"{MONAI_LABEL}/infer/{FOVEA_MODEL}",
+                            params={"image": op_series_uid},
+                            data={
+                                "params": json.dumps({
+                                    **base_params,
+                                    "source_sop_instance_uid": sop_uid,
+                                })
+                            },
+                            timeout=300,
+                        )
+                        if fovea_resp.status_code == 200:
+                            fovea_payload = fovea_resp.json()
+                            fovea_params = fovea_payload.get('params') or fovea_payload
+                            instance_status['models'][FOVEA_MODEL] = 'ok'
+                            instance_status['fovea'] = fovea_params.get('fovea')
+                            fovea_results.append('ok' if instance_status['fovea'] else 'failed (no coordinates)')
+                        else:
+                            fovea_status = f'failed (HTTP {fovea_resp.status_code})'
+                            instance_status['models'][FOVEA_MODEL] = fovea_status
+                            fovea_results.append(fovea_status)
+                    except Exception as e:
+                        fovea_status = f'failed ({str(e)[:100]})'
+                        instance_status['models'][FOVEA_MODEL] = fovea_status
+                        fovea_results.append(fovea_status)
+                        logger.warning(
+                            f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] "
+                            f"La localisation de la fovéa a échoué : {str(e)}",
+                            exc_info=True,
+                        )
                     segmented_instances.append(instance_status)
 
                 series_status['segmented_instances'] = segmented_instances
                 for model, results in model_results.items():
                     series_status[model] = 'ok' if results and all(result == 'ok' for result in results) else results
+                series_status[FOVEA_MODEL] = (
+                    'ok' if fovea_results and all(result == 'ok' for result in fovea_results)
+                    else fovea_results
+                )
 
                 # Étape E : Analyse globale et classification DR sur chaque instance source.
                 # /infer/analyze uses the same one-instance cache contract as the

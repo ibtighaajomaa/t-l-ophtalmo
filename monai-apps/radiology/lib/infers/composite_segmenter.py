@@ -19,6 +19,7 @@ from monai.transforms import (
 from monailabel.interfaces.tasks.infer_v2 import InferTask, InferType
 from monailabel.utils.others.generic import device_list
 from transformers import SegformerForSemanticSegmentation, AutoImageProcessor
+from .fovea_detection import detect_fovea_rgb, loaded_image_to_rgb
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class CompositeSegmenter(InferTask):
         lesion_labels: Dict[Any, Any],
         vessel_labels: Dict[Any, Any],
         odoc_labels: Dict[Any, Any],
+        fovea_model_path: str = None,
         preload: bool = False,
     ):
         super().__init__(
@@ -71,6 +73,7 @@ class CompositeSegmenter(InferTask):
         self.lesion_labels = lesion_labels
         self.vessel_labels = vessel_labels
         self.odoc_labels = odoc_labels
+        self.fovea_model_path = fovea_model_path
 
         self._odoc_model = None
         self._odoc_processor = None
@@ -218,7 +221,7 @@ class CompositeSegmenter(InferTask):
                 )
                 overlay[y_edges[valid], x_edges[valid]] = color
 
-    def _create_overlay(self, image_rgb: np.ndarray, odoc_pred, lesion_pred, vessel_mask):
+    def _create_overlay(self, image_rgb: np.ndarray, odoc_pred, lesion_pred, vessel_mask, fovea=None):
         h, w = image_rgb.shape[:2]
         overlay = image_rgb.copy()
 
@@ -249,6 +252,18 @@ class CompositeSegmenter(InferTask):
                     overlay[vessel_resized].astype(np.float32) * 0.7 +
                     np.array(VESSEL_COLOR, dtype=np.float32) * 0.3
                 ).astype(np.uint8)
+
+        # Fovea point — yellow X in original-image coordinates.
+        if fovea:
+            x = int(round(float(fovea["x_px"])))
+            y = int(round(float(fovea["y_px"])))
+            arm = max(8, min(h, w) // 80)
+            thickness = max(2, min(h, w) // 400)
+            for offset in range(-thickness, thickness + 1):
+                for delta in range(-arm, arm + 1):
+                    for yy, xx in ((y + delta, x + delta + offset), (y + delta, x - delta + offset)):
+                        if 0 <= yy < h and 0 <= xx < w:
+                            overlay[yy, xx] = (255, 230, 0)
 
         return overlay
 
@@ -304,9 +319,17 @@ class CompositeSegmenter(InferTask):
         vessel_density = float(vessel_mask.sum()) / vessel_mask.size * 100 if vessel_mask.size > 0 else 0.0
 
         # Create the overlay as RGB image (3-channel)
-        img_rgb = (np.transpose(image_np, (1, 2, 0)) * 255).astype(np.uint8)
+        img_rgb = loaded_image_to_rgb(image_np)
+        fovea = None
+        fovea_error = None
+        if self.fovea_model_path:
+            try:
+                fovea = detect_fovea_rgb(img_rgb, self.fovea_model_path, device)
+            except Exception as exc:
+                fovea_error = str(exc)
+                logger.warning("Composite fovea localization failed: %s", exc)
         overlay_rgb = self._create_overlay(
-            img_rgb, odoc_pred, lesion_pred, vessel_mask
+            img_rgb, odoc_pred, lesion_pred, vessel_mask, fovea=fovea
         )
 
         # Encode overlay to base64 PNG
@@ -329,10 +352,12 @@ class CompositeSegmenter(InferTask):
             "vessels": {
                 "vessel_density": round(vessel_density, 4),
             },
+            "fovea": fovea,
             "model_status": {
                 "odoc": "loaded",
                 "lesion": "loaded" if lesion_model is not None else "not_found",
                 "vessel": "loaded" if vessel_model is not None else "not_found",
+                "fovea": "loaded" if fovea is not None else f"failed: {fovea_error}",
             },
         }
 

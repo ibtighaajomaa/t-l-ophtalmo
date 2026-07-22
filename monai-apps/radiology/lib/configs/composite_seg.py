@@ -37,6 +37,10 @@ class CompositeSeg(TaskConfig):
         self.vessel_path = [
             os.path.join(self.model_dir, "vessel_seg.pt"),
         ]
+        self.fovea_path = os.environ.get(
+            "VASCX_FOVEA_MODEL_PATH",
+            "/opt/monai/models/vascx/fovea/fovea_may26.pt",
+        )
 
         self.lesion_network = smp.DeepLabV3Plus(
             encoder_name="efficientnet-b3",
@@ -65,6 +69,7 @@ class CompositeSeg(TaskConfig):
             },
             vessel_labels={"vessel": 1},
             odoc_labels={"optic_disc": 1, "optic_cup": 2},
+            fovea_model_path=self.fovea_path,
             preload=strtobool(self.conf.get("preload", "false")),
         )
         return task

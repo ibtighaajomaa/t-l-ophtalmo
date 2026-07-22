@@ -20,9 +20,33 @@ from ophtalmo.views import (
     sync_orthanc,
 )
 from ophtalmo.distribution import get_examens_en_attente, distribuer_examens
+from ophtalmo.analysis_utils import aggregate_per_eye
 
 
 TODAY = date.today()
+
+
+class FoveaAggregationTest(TestCase):
+    def test_uses_fovea_from_best_quality_visual_source(self):
+        reports = {
+            'series:sop-low': {
+                'eye_laterality': {'laterality': 'R'},
+                'source': {'source_sop_instance_uid': 'sop-low'},
+                'fovea': {'x_px': 10.0, 'y_px': 20.0},
+            },
+            'series:sop-high': {
+                'eye_laterality': {'laterality': 'R'},
+                'source': {'source_sop_instance_uid': 'sop-high'},
+                'fovea': {'x_px': 30.0, 'y_px': 40.0},
+            },
+        }
+
+        result = aggregate_per_eye(
+            reports,
+            quality_scores={'sop-low': 50.0, 'sop-high': 90.0},
+        )
+
+        self.assertEqual(result['right']['fovea'], {'x_px': 30.0, 'y_px': 40.0})
 
 
 class PoorQualityAnalysisGuardTest(TestCase):

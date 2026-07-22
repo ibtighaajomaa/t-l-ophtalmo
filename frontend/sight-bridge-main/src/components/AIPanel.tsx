@@ -571,6 +571,23 @@ export function AIPanel({
               </div>
             </section>
 
+            {activeAnalysis.fovea && (
+              <section className="space-y-2">
+                <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                  <Target className="h-3.5 w-3.5 text-yellow-300" />
+                  Fovea
+                </h3>
+                <div className="rounded-lg bg-[#121936] border border-slate-700 p-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-400">Position</span>
+                    <span className="font-mono text-yellow-200">
+                      ({activeAnalysis.fovea.x_px.toFixed(1)}, {activeAnalysis.fovea.y_px.toFixed(1)}) px
+                    </span>
+                  </div>
+                </div>
+              </section>
+            )}
+
             {/* Grad-CAM */}
             {activeAnalysis.gradcam_image && (
               <section className="space-y-2">

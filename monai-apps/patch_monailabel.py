@@ -969,6 +969,16 @@ async def analyze(request: dict):
     except Exception as e:
         logger.error("Analyze DR classification failed: %s", e)
 
+    fovea = None
+    try:
+        fovea_result = _run_model("fovea_detection", {"result_extension": ".json"})
+        fovea_params = fovea_result.get("params") or fovea_result
+        fovea = fovea_params.get("fovea")
+        if not fovea:
+            logger.warning("Analyze fovea detection returned no coordinates")
+    except Exception as e:
+        logger.error("Analyze fovea detection failed: %s", e)
+
     optic_data = vessel_data = lesion_data = None
     try:
         optic_data = _read_label(labels["optic_disc_cup"]) if "optic_disc_cup" in labels else None
@@ -1132,6 +1142,7 @@ async def analyze(request: dict):
         "glaucoma": glaucoma,
         "vessels": vessels,
         "lesions": lesions,
+        "fovea": fovea,
         "severity_score": _severity(dr, glaucoma),
         "gradcam_image": gradcam_image,
         "clahe_image": clahe_image,
@@ -1148,6 +1159,7 @@ async def analyze(request: dict):
         "optic_disc_cup": optic,
         "glaucoma": glaucoma,
         "vessels": vessels,
+        "fovea": fovea,
         "gradcam_image": gradcam_image,
         "clahe_image": clahe_image,
         "per_instance": [slice_result],

@@ -329,6 +329,15 @@ export interface PerEyeGlaucoma {
 
 export type DRProbability = { label: string; score: number };
 export type DRProbabilities = DRProbability[] | Record<string, number>;
+export interface FoveaLocation {
+  x_px: number;
+  y_px: number;
+  x_normalized: number;
+  y_normalized: number;
+  source_width: number;
+  source_height: number;
+  model: string;
+}
 
 export interface PerInstanceResult {
   index: number;
@@ -340,9 +349,10 @@ export interface PerInstanceResult {
   dr_classification?: { grade: string; confidence: number; probabilities: DRProbabilities };
   gradcam_image?: string | null;
   clahe_image?: string | null;
+  fovea?: FoveaLocation | null;
 }
 
-export interface PerEyeAnalysis {
+export interface CriticalEyeAnalysis {
   index: number;
   severity_score: number;
   dr_classification: { grade: string; confidence: number; probabilities: DRProbabilities };
@@ -352,6 +362,7 @@ export interface PerEyeAnalysis {
   vessels: { coverage_pct: number; pixel_count: number };
   gradcam_image: string | null;
   clahe_image: string | null;
+  fovea?: FoveaLocation | null;
 }
 
 export interface AnalysisResult {
@@ -381,12 +392,13 @@ export interface AnalysisResult {
     coverage_pct: number;
     pixel_count: number;
   };
+  fovea?: FoveaLocation | null;
   gradcam_image: string | null;
   clahe_image: string | null;
   per_instance?: PerInstanceResult[];
   critical?: {
-    od: PerEyeAnalysis | null;
-    os: PerEyeAnalysis | null;
+    od: CriticalEyeAnalysis | null;
+    os: CriticalEyeAnalysis | null;
   };
 }
 
