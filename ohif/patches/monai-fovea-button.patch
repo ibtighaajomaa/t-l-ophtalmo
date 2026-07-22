@@ -1,0 +1,28 @@
+diff --git a/plugins/ohifv3/modes/monai-label/src/index.tsx b/plugins/ohifv3/modes/monai-label/src/index.tsx
+--- a/plugins/ohifv3/modes/monai-label/src/index.tsx
++++ b/plugins/ohifv3/modes/monai-label/src/index.tsx
+@@ -72,5 +72,6 @@ function modeFactory({ modeConfiguration }: withAppTypes): Mode {
+         'Layout',
+         'Crosshairs',
++        'Fovea',
+         'AiAnalysis',
+         'AiEyeRight',
+         'AiEyeLeft',
+diff --git a/plugins/ohifv3/modes/monai-label/src/toolbarButtons.ts b/plugins/ohifv3/modes/monai-label/src/toolbarButtons.ts
+--- a/plugins/ohifv3/modes/monai-label/src/toolbarButtons.ts
++++ b/plugins/ohifv3/modes/monai-label/src/toolbarButtons.ts
+@@ -180,3 +180,14 @@ const toolbarButtons = [
++  {
++    id: 'Fovea',
++    uiType: 'ohif.toolButton',
++    props: {
++      icon: 'tool-crosshair',
++      label: 'Fovéa',
++      tooltip: 'Afficher/masquer la localisation de la fovéa',
++      commands: 'toggleFoveaMarker',
++      evaluate: 'evaluate.action',
++    },
++  },
+   {
+     id: 'AiAnalysis',
+     uiType: 'ohif.toolButton',

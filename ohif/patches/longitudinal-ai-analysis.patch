@@ -19,11 +19,12 @@ diff --git a/modes/longitudinal/src/index.ts b/modes/longitudinal/src/index.ts
  };
  
  function modeFactory({ modeConfiguration }) {
-@@ -97,6 +102,7 @@ function modeFactory({ modeConfiguration }) {
+@@ -97,6 +102,8 @@ function modeFactory({ modeConfiguration }) {
          'Pan',
          'TrackballRotate',
          'WindowLevel',
 +        'CLAHE',
++        'Fovea',
          'Capture',
          'Layout',
          'Crosshairs',
@@ -43,7 +44,7 @@ diff --git a/modes/longitudinal/src/index.ts b/modes/longitudinal/src/index.ts
 diff --git a/modes/longitudinal/src/toolbarButtons.ts b/modes/longitudinal/src/toolbarButtons.ts
 --- a/modes/longitudinal/src/toolbarButtons.ts
 +++ b/modes/longitudinal/src/toolbarButtons.ts
-@@ -610,6 +610,17 @@ const toolbarButtons = [
+@@ -610,6 +610,28 @@ const toolbarButtons = [
        },
      },
    },
@@ -55,6 +56,17 @@ diff --git a/modes/longitudinal/src/toolbarButtons.ts b/modes/longitudinal/src/t
 +      label: 'CLAHE',
 +      tooltip: 'Activer/désactiver le filtre CLAHE',
 +      commands: 'toggleClaheFilter',
++      evaluate: 'evaluate.action',
++    },
++  },
++  {
++    id: 'Fovea',
++    uiType: 'ohif.toolButton',
++    props: {
++      icon: 'tool-crosshair',
++      label: 'Fovéa',
++      tooltip: 'Afficher/masquer la localisation de la fovéa',
++      commands: 'toggleFoveaMarker',
 +      evaluate: 'evaluate.action',
 +    },
 +  },

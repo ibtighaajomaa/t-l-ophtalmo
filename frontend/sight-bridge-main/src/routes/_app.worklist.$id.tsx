@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import { AIPanel } from "@/components/AIPanel";
-import { getExam, updateExam } from "@/lib/exam-api";
+import { fetchAnalysis, getExam, updateExam } from "@/lib/exam-api";
 import { createOhifBridge } from "@/lib/ohif-bridge";
 import type { Exam } from "@/lib/mock-worklist";
 import type { OhifBridge } from "@/lib/ohif-bridge";
@@ -254,7 +254,12 @@ function ExamDetail() {
 
     bridgeRef.current = createOhifBridge({
       iframeRef,
-      onReady: () => setBridgeReady(true),
+      onReady: () => {
+        setBridgeReady(true);
+        fetchAnalysis(exam.studyInstanceUid)
+          .then(result => bridgeRef.current?.setFoveaMarkers(result.fovea_markers ?? []))
+          .catch(() => bridgeRef.current?.setFoveaMarkers([]));
+      },
       onStudyOpened: (studyInstanceUid) => {
         setBridgeReady(true);
         if (exam && exam.status === "En attente" && exam.assignedTo) {

@@ -32,6 +32,10 @@ RUN cd /sources/MONAILabel && \
      git apply /tmp/per-eye-report-isolation.patch || \
      git apply --reverse --check /tmp/per-eye-report-isolation.patch)
 
+# Add the fovea visibility control to the MONAI Label mode toolbar.
+COPY ohif/patches/monai-fovea-button.patch /tmp/monai-fovea-button.patch
+RUN cd /sources/MONAILabel && git apply /tmp/monai-fovea-button.patch
+
 # Patch pluginConfig.json to register the monai-label extension and mode,
 # and keep only desired modes (MONAI Label, Basic Viewer, Segmentation)
 WORKDIR /sources/Viewers

@@ -426,7 +426,15 @@ export async function runAIAnalysis(
 
 export async function fetchAnalysis(
   studyInstanceUid: string,
-): Promise<{ status: string; analysis: PerEyeAnalysis }> {
+): Promise<{ status: string; analysis: PerEyeAnalysis; fovea_markers?: Array<{
+  study_instance_uid?: string;
+  series_instance_uid?: string;
+  sop_instance_uid: string;
+  x_px: number;
+  y_px: number;
+  source_width: number;
+  source_height: number;
+}> }> {
   const res = await fetch(
     `${BASE}/analysis/?study_instance_uid=${encodeURIComponent(studyInstanceUid)}`,
     { headers: getHeaders() },

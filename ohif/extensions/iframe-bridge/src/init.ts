@@ -17,6 +17,29 @@ export default function preRegistration({
     }
   }
 
+  async function loadStandaloneFoveaMarkers() {
+    const query = new URLSearchParams(window.location.search);
+    const studyInstanceUid = query.get('StudyInstanceUIDs') || query.get('studyInstanceUids');
+    if (!studyInstanceUid) return;
+
+    const token = window.localStorage.getItem('teleoph.token')
+      || window.sessionStorage.getItem('teleoph.token');
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    try {
+      const response = await fetch(
+        `/api/exams/analysis/?study_instance_uid=${encodeURIComponent(studyInstanceUid)}`,
+        { headers }
+      );
+      if (!response.ok) return;
+      const result = await response.json();
+      commandsManager.runCommand('setFoveaMarkers', {
+        markers: Array.isArray(result.fovea_markers) ? result.fovea_markers : [],
+      });
+    } catch (_) {
+      // The toolbar remains usable; it will report that no localization exists.
+    }
+  }
+
   window.addEventListener('message', async event => {
     const { type, ...data } = event.data || {};
     if (!type || !type.startsWith('ohif-bridge:')) return;
@@ -75,6 +98,12 @@ export default function preRegistration({
         }
         break;
       }
+      case 'set-fovea-markers': {
+        commandsManager.runCommand('setFoveaMarkers', {
+          markers: Array.isArray(data.markers) ? data.markers : [],
+        });
+        break;
+      }
       default:
         sendToParent('error', { message: `Unknown command: ${command}` });
     }
@@ -83,4 +112,8 @@ export default function preRegistration({
   sendToParent('ready', {
     version: '3.0.0',
   });
+
+  // Also support OHIF opened directly, without the worklist iframe bridge.
+  // Defer until command modules have completed registration.
+  window.setTimeout(loadStandaloneFoveaMarkers, 0);
 }

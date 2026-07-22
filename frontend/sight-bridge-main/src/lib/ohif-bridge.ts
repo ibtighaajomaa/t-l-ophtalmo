@@ -22,6 +22,16 @@ interface BridgeOptions {
   onError?: (message: string) => void;
 }
 
+export interface FoveaMarker {
+  study_instance_uid?: string;
+  series_instance_uid?: string;
+  sop_instance_uid: string;
+  x_px: number;
+  y_px: number;
+  source_width: number;
+  source_height: number;
+}
+
 export class OhifBridge {
   private iframeRef: BridgeOptions["iframeRef"];
   private handlers: Map<BridgeEventType, Set<(...args: unknown[]) => void>> = new Map();
@@ -94,6 +104,10 @@ export class OhifBridge {
       segmentationId,
       visible,
     });
+  }
+
+  setFoveaMarkers(markers: FoveaMarker[]) {
+    this.postMessage("set-fovea-markers", { markers });
   }
 
   isReady() {

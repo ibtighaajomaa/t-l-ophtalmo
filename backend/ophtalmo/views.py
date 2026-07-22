@@ -1421,11 +1421,43 @@ def latest_analysis(request):
             else None
         )
     )
+    # Expose image-scoped point localizations to the embedded OHIF viewer.
+    # Keeping the SOP UID with each point prevents a marker from being drawn on
+    # a different photograph in a multi-instance retinal study.
+    fovea_markers = []
+    series_reports = report_json.get('series_reports') or {}
+    report_items = series_reports.values() if isinstance(series_reports, dict) else series_reports
+    if not isinstance(report_items, (list, tuple)) and not isinstance(series_reports, dict):
+        report_items = []
+    for item in report_items:
+        if not isinstance(item, dict):
+            continue
+        fovea = item.get('fovea')
+        source = item.get('source') or {}
+        sop_uid = source.get('source_sop_instance_uid') or item.get('sop_instance_uid')
+        if not isinstance(fovea, dict) or not sop_uid:
+            continue
+        try:
+            marker = {
+                'study_instance_uid': source.get('study_instance_uid') or study_uid,
+                'series_instance_uid': source.get('series_instance_uid'),
+                'sop_instance_uid': str(sop_uid),
+                'x_px': float(fovea['x_px']),
+                'y_px': float(fovea['y_px']),
+                'source_width': int(fovea['source_width']),
+                'source_height': int(fovea['source_height']),
+            }
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (0 <= marker['x_px'] < marker['source_width'] and
+                0 <= marker['y_px'] < marker['source_height']):
+            fovea_markers.append(marker)
     return Response({
         'status': report_json.get('status', 'AI_ANALYZED'),
         'study_instance_uid': study_uid,
         'stored_study_uid': report.series_instance_uid,
         'analysis': report_json.get('per_eye') or report_json,
+        'fovea_markers': fovea_markers,
         'reports_by_eye': reports_by_eye,
         'summary_report': summary_report,
         'report_generation_status': report_generation_status,
