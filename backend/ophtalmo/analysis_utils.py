@@ -67,7 +67,15 @@ def _blank_eye(side):
         "lesions": {
             "microaneurysms": 0,
             "hemorrhages": 0,
+            "hard_exudates": 0,
+            "cotton_wool_spots": 0,
             "exudates": 0,
+            "pixel_counts": {
+                "microaneurysms": 0,
+                "hemorrhages": 0,
+                "hard_exudates": 0,
+                "cotton_wool_spots": 0,
+            },
             "coverage_pct": 0.0,
         },
         "optic_disc_cup": {
@@ -255,11 +263,24 @@ def aggregate_per_eye(per_series, quality_scores=None):
         eye["vessels"] = worst_vessels.get("vessels") or eye["vessels"]
 
         lesions = eye["lesions"].copy()
+        lesions["pixel_counts"] = lesions["pixel_counts"].copy()
         for _, report in items:
             src = report.get("lesions") or {}
             lesions["microaneurysms"] += int(src.get("microaneurysms") or 0)
             lesions["hemorrhages"] += int(src.get("hemorrhages") or 0)
-            lesions["exudates"] += int(src.get("exudates") or 0)
+            hard_exudates = int(src.get("hard_exudates") or 0)
+            cotton_wool_spots = int(src.get("cotton_wool_spots") or 0)
+            lesions["hard_exudates"] += hard_exudates
+            lesions["cotton_wool_spots"] += cotton_wool_spots
+            # Old reports only contain the aggregate `exudates` field.
+            lesions["exudates"] += (
+                hard_exudates + cotton_wool_spots
+                if "hard_exudates" in src or "cotton_wool_spots" in src
+                else int(src.get("exudates") or 0)
+            )
+            src_pixels = src.get("pixel_counts") or {}
+            for lesion_name in lesions["pixel_counts"]:
+                lesions["pixel_counts"][lesion_name] += int(src_pixels.get(lesion_name) or 0)
             lesions["coverage_pct"] = max(
                 float(lesions.get("coverage_pct") or 0),
                 float(src.get("coverage_pct") or 0),

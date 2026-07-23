@@ -86,28 +86,56 @@ def quantify_vessels(label_path):
 
 
 def quantify_lesions(label_path):
-    """Count lesions from lesion segmentation NRRD and compute coverage."""
+    """Count connected lesion regions and retain their segmented pixel areas."""
     try:
+        import cv2
         import nrrd
         data, header = nrrd.read(label_path)
         if data.ndim == 3:
             data = data[0] if data.shape[0] == 1 else data.squeeze()
         total = int(data.size)
 
-        ma = int(np.sum(data == 1))
-        he = int(np.sum(data == 2))
-        ex = int(np.sum(data == 3))
+        def region_count(class_id):
+            mask = np.ascontiguousarray(data == class_id, dtype=np.uint8)
+            components, _ = cv2.connectedComponents(mask, connectivity=8)
+            return max(0, int(components) - 1)
+
+        pixel_counts = {
+            "microaneurysms": int(np.sum(data == 1)),
+            "hemorrhages": int(np.sum(data == 2)),
+            "hard_exudates": int(np.sum(data == 3)),
+            "cotton_wool_spots": int(np.sum(data == 4)),
+        }
+        hard_exudates = region_count(3)
+        cotton_wool_spots = region_count(4)
         any_lesion = int(np.sum(data > 0))
         coverage = (any_lesion / total * 100) if total > 0 else 0.0
         return {
-            "microaneurysms": ma,
-            "hemorrhages": he,
-            "exudates": ex,
+            "microaneurysms": region_count(1),
+            "hemorrhages": region_count(2),
+            "hard_exudates": hard_exudates,
+            "cotton_wool_spots": cotton_wool_spots,
+            # Backward-compatible aggregate used by older clients.
+            "exudates": hard_exudates + cotton_wool_spots,
+            "pixel_counts": pixel_counts,
             "coverage_pct": round(coverage, 2),
         }
     except Exception as e:
         logger.error(f"quantify_lesions failed: {e}")
-        return {"microaneurysms": 0, "hemorrhages": 0, "exudates": 0, "coverage_pct": 0.0}
+        return {
+            "microaneurysms": 0,
+            "hemorrhages": 0,
+            "hard_exudates": 0,
+            "cotton_wool_spots": 0,
+            "exudates": 0,
+            "pixel_counts": {
+                "microaneurysms": 0,
+                "hemorrhages": 0,
+                "hard_exudates": 0,
+                "cotton_wool_spots": 0,
+            },
+            "coverage_pct": 0.0,
+        }
 
 
 def classify_dr(app, image_id):

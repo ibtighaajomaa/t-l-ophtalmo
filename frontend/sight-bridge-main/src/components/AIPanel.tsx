@@ -490,7 +490,14 @@ export function AIPanel({
               <div className="rounded-lg bg-[#121936] border border-slate-700 p-3 space-y-2">
                 <LesionRow label="Microaneurysms" value={activeAnalysis.lesions.microaneurysms} />
                 <LesionRow label="Hemorrhages" value={activeAnalysis.lesions.hemorrhages} />
-                <LesionRow label="Exudates" value={activeAnalysis.lesions.exudates} />
+                <LesionRow
+                  label="Hard exudates"
+                  value={activeAnalysis.lesions.hard_exudates ?? activeAnalysis.lesions.exudates}
+                />
+                <LesionRow
+                  label="Cotton-wool spots"
+                  value={activeAnalysis.lesions.cotton_wool_spots ?? 0}
+                />
                 <div className="flex items-center justify-between pt-1 border-t border-slate-700">
                   <span className="text-xs text-slate-400">Coverage</span>
                   <span className="text-xs text-amber-400 font-mono">

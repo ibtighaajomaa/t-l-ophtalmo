@@ -169,7 +169,11 @@ def format_analysis_data(report_data: dict) -> str:
         lines.append("## Quantification des lesions")
         lines.append(f"- Microanevrismes: {lesions.get('microaneurysms', 'N/A')}")
         lines.append(f"- Hemorragies: {lesions.get('hemorrhages', 'N/A')}")
-        lines.append(f"- Exsudats: {lesions.get('exudates', 'N/A')}")
+        lines.append(
+            f"- Exsudats durs: "
+            f"{lesions.get('hard_exudates', lesions.get('exudates', 'N/A'))}"
+        )
+        lines.append(f"- Nodules cotonneux: {lesions.get('cotton_wool_spots', 'N/A')}")
         lines.append(f"- Couverture lesionnelle: {_format_percent(lesions.get('coverage_pct'))}")
 
     if optic or glaucoma:
@@ -331,7 +335,7 @@ def _analysis_prompt() -> str:
 Retourne uniquement un objet JSON valide, sans texte avant ni apres, avec cette structure:
 {
   "dr_classification": {"grade": "string", "confidence": 0.0, "probabilities": [{"label": "string", "score": 0.0}]},
-  "lesions": {"microaneurysms": 0, "hemorrhages": 0, "exudates": 0, "coverage_pct": 0.0},
+  "lesions": {"microaneurysms": 0, "hemorrhages": 0, "hard_exudates": 0, "cotton_wool_spots": 0, "exudates": 0, "coverage_pct": 0.0},
   "glaucoma": {"vcdr": 0.0, "risk": "string", "disc_area_px": 0, "cup_area_px": 0},
   "vessels": {"coverage_pct": 0.0}
 }

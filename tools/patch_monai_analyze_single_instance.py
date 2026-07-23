@@ -109,13 +109,32 @@ async def analyze(request: dict):
 
     def _lesion_metrics(data):
         if data is None:
-            return {"microaneurysms": 0, "hemorrhages": 0, "exudates": 0, "coverage_pct": 0.0}
+            return {
+                "microaneurysms": 0, "hemorrhages": 0, "hard_exudates": 0,
+                "cotton_wool_spots": 0, "exudates": 0, "pixel_counts": {},
+                "coverage_pct": 0.0,
+            }
+        import cv2
         total = int(data.size)
         any_lesion = int(np.sum(data > 0))
+        def _regions(class_id):
+            mask = np.ascontiguousarray(data == class_id, dtype=np.uint8)
+            components, _ = cv2.connectedComponents(mask, connectivity=8)
+            return max(0, int(components) - 1)
+        hard_exudates = _regions(3)
+        cotton_wool_spots = _regions(4)
         return {
-            "microaneurysms": int(np.sum(data == 1)),
-            "hemorrhages": int(np.sum(data == 2)),
-            "exudates": int(np.sum(data == 3)),
+            "microaneurysms": _regions(1),
+            "hemorrhages": _regions(2),
+            "hard_exudates": hard_exudates,
+            "cotton_wool_spots": cotton_wool_spots,
+            "exudates": hard_exudates + cotton_wool_spots,
+            "pixel_counts": {
+                "microaneurysms": int(np.sum(data == 1)),
+                "hemorrhages": int(np.sum(data == 2)),
+                "hard_exudates": int(np.sum(data == 3)),
+                "cotton_wool_spots": int(np.sum(data == 4)),
+            },
             "coverage_pct": round(any_lesion / total * 100, 2) if total else 0.0,
         }
 

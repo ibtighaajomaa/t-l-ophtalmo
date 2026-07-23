@@ -666,7 +666,11 @@ async def analyze(request: dict):
         opt_metrics = {"disc_area_px": 0, "cup_area_px": 0, "cup_disc_ratio": 0.0, "disc_center_x": None, "laterality": "UNKNOWN"}
         gla_metrics = {"vcdr": 0.0, "risk": "N/A", "disc_area_px": 0, "cup_area_px": 0}
         ves_metrics = {"coverage_pct": 0.0, "pixel_count": 0}
-        les_metrics = {"microaneurysms": 0, "hemorrhages": 0, "exudates": 0, "coverage_pct": 0.0}
+        les_metrics = {
+            "microaneurysms": 0, "hemorrhages": 0, "hard_exudates": 0,
+            "cotton_wool_spots": 0, "exudates": 0, "pixel_counts": {},
+            "coverage_pct": 0.0,
+        }
 
         if opt_sl is not None:
             try:
@@ -685,13 +689,27 @@ async def analyze(request: dict):
 
         if les_sl is not None:
             try:
+                import cv2
                 total = int(les_sl.size)
-                ma = int(np.sum(les_sl == 1))
-                he = int(np.sum(les_sl == 2))
-                ex = int(np.sum(les_sl == 3))
+                def _regions(class_id):
+                    mask = np.ascontiguousarray(les_sl == class_id, dtype=np.uint8)
+                    components, _ = cv2.connectedComponents(mask, connectivity=8)
+                    return max(0, int(components) - 1)
+                hard_exudates = _regions(3)
+                cotton_wool_spots = _regions(4)
                 any_lesion = int(np.sum(les_sl > 0))
                 les_metrics = {
-                    "microaneurysms": ma, "hemorrhages": he, "exudates": ex,
+                    "microaneurysms": _regions(1),
+                    "hemorrhages": _regions(2),
+                    "hard_exudates": hard_exudates,
+                    "cotton_wool_spots": cotton_wool_spots,
+                    "exudates": hard_exudates + cotton_wool_spots,
+                    "pixel_counts": {
+                        "microaneurysms": int(np.sum(les_sl == 1)),
+                        "hemorrhages": int(np.sum(les_sl == 2)),
+                        "hard_exudates": int(np.sum(les_sl == 3)),
+                        "cotton_wool_spots": int(np.sum(les_sl == 4)),
+                    },
                     "coverage_pct": round(any_lesion / total * 100, 2) if total > 0 else 0.0,
                 }
             except Exception as e:
@@ -723,7 +741,11 @@ async def analyze(request: dict):
     optic = top_slice["optic_disc_cup"] if top_slice else {"disc_area_px": 0, "cup_area_px": 0, "cup_disc_ratio": 0.0, "disc_center_x": None, "laterality": "UNKNOWN"}
     glaucoma = top_slice["glaucoma"] if top_slice else {"vcdr": 0.0, "risk": "N/A", "disc_area_px": 0, "cup_area_px": 0}
     vessel = top_slice["vessels"] if top_slice else {"coverage_pct": 0.0, "pixel_count": 0}
-    lesion = top_slice["lesions"] if top_slice else {"microaneurysms": 0, "hemorrhages": 0, "exudates": 0, "coverage_pct": 0.0}
+    lesion = top_slice["lesions"] if top_slice else {
+        "microaneurysms": 0, "hemorrhages": 0, "hard_exudates": 0,
+        "cotton_wool_spots": 0, "exudates": 0, "pixel_counts": {},
+        "coverage_pct": 0.0,
+    }
 
     # --- Grad-CAM / CLAHE ---
     gradcam_b64 = None
@@ -891,13 +913,32 @@ async def analyze(request: dict):
 
     def _lesion_metrics(data):
         if data is None:
-            return {"microaneurysms": 0, "hemorrhages": 0, "exudates": 0, "coverage_pct": 0.0}
+            return {
+                "microaneurysms": 0, "hemorrhages": 0, "hard_exudates": 0,
+                "cotton_wool_spots": 0, "exudates": 0, "pixel_counts": {},
+                "coverage_pct": 0.0,
+            }
+        import cv2
         total = int(data.size)
         any_lesion = int(np.sum(data > 0))
+        def _regions(class_id):
+            mask = np.ascontiguousarray(data == class_id, dtype=np.uint8)
+            components, _ = cv2.connectedComponents(mask, connectivity=8)
+            return max(0, int(components) - 1)
+        hard_exudates = _regions(3)
+        cotton_wool_spots = _regions(4)
         return {
-            "microaneurysms": int(np.sum(data == 1)),
-            "hemorrhages": int(np.sum(data == 2)),
-            "exudates": int(np.sum(data == 3)),
+            "microaneurysms": _regions(1),
+            "hemorrhages": _regions(2),
+            "hard_exudates": hard_exudates,
+            "cotton_wool_spots": cotton_wool_spots,
+            "exudates": hard_exudates + cotton_wool_spots,
+            "pixel_counts": {
+                "microaneurysms": int(np.sum(data == 1)),
+                "hemorrhages": int(np.sum(data == 2)),
+                "hard_exudates": int(np.sum(data == 3)),
+                "cotton_wool_spots": int(np.sum(data == 4)),
+            },
             "coverage_pct": round(any_lesion / total * 100, 2) if total else 0.0,
         }
 

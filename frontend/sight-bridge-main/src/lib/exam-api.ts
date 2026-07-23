@@ -339,6 +339,22 @@ export interface FoveaLocation {
   model: string;
 }
 
+export interface LesionMetrics {
+  microaneurysms: number;
+  hemorrhages: number;
+  /** Aggregate retained for compatibility with analyses created before lesion subtype counting. */
+  exudates: number;
+  hard_exudates?: number;
+  cotton_wool_spots?: number;
+  pixel_counts?: {
+    microaneurysms: number;
+    hemorrhages: number;
+    hard_exudates: number;
+    cotton_wool_spots: number;
+  };
+  coverage_pct: number;
+}
+
 export interface DeepSeeNetFactor {
   class_index: number;
   label: string;
@@ -369,7 +385,7 @@ export interface PerInstanceResult {
   optic_disc_cup: PerEyeMetrics;
   glaucoma: PerEyeGlaucoma;
   vessels: { coverage_pct: number; pixel_count: number };
-  lesions: { microaneurysms: number; hemorrhages: number; exudates: number; coverage_pct: number };
+  lesions: LesionMetrics;
   severity_score: number;
   dr_classification?: { grade: string; confidence: number; probabilities: DRProbabilities };
   gradcam_image?: string | null;
@@ -381,7 +397,7 @@ export interface CriticalEyeAnalysis {
   index: number;
   severity_score: number;
   dr_classification: { grade: string; confidence: number; probabilities: DRProbabilities };
-  lesions: { microaneurysms: number; hemorrhages: number; exudates: number; coverage_pct: number };
+  lesions: LesionMetrics;
   glaucoma: PerEyeGlaucoma;
   optic_disc_cup: PerEyeMetrics;
   vessels: { coverage_pct: number; pixel_count: number };
@@ -396,12 +412,7 @@ export interface AnalysisResult {
     confidence: number;
     probabilities: DRProbabilities;
   };
-  lesions: {
-    microaneurysms: number;
-    hemorrhages: number;
-    exudates: number;
-    coverage_pct: number;
-  };
+  lesions: LesionMetrics;
   optic_disc_cup: {
     disc_area_px: number;
     cup_area_px: number;
