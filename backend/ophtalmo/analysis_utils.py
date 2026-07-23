@@ -86,6 +86,7 @@ def _blank_eye(side):
             "pixel_count": 0,
         },
         "fovea": None,
+        "deepseenet_plus": None,
         "gradcam_image": None,
         "clahe_image": None,
         "visual_source": None,
@@ -102,6 +103,84 @@ def _copy_report_fields(target, report, include_visuals=True):
     if include_visuals:
         target["gradcam_image"] = report.get("gradcam_image")
         target["clahe_image"] = report.get("clahe_image")
+
+
+def aggregate_critical_deepseenet(items):
+    """Keep the most severe prediction for each factor across one eye.
+
+    Factors may intentionally originate from different images. Source SOP and
+    preprocessing metadata remain attached for clinical traceability.
+    """
+    candidates = []
+    for series_uid, report in items:
+        prediction = report.get("deepseenet_plus")
+        if not isinstance(prediction, dict) or prediction.get("status") not in {"ok", "ok_with_fallback"}:
+            continue
+        source = report.get("source") or {}
+        candidates.append((series_uid, source, prediction))
+    if not candidates:
+        return None
+
+    result = {
+        "status": "ok",
+        "aggregation": "most_critical_per_factor",
+        "conservative": True,
+        "note": "Risk factors may originate from different images of the same eye.",
+    }
+    for factor in ("drusen", "pigment", "amd"):
+        available = [item for item in candidates if isinstance(item[2].get(factor), dict)]
+        if not available:
+            continue
+        series_uid, source, prediction = max(
+            available,
+            key=lambda item: (
+                int(item[2][factor].get("class_index", -1)),
+                float(item[2][factor].get("probability", 0)),
+            ),
+        )
+        selected = dict(prediction[factor])
+        selected["source_sop_instance_uid"] = (
+            prediction.get("source_sop_instance_uid")
+            or source.get("source_sop_instance_uid")
+        )
+        selected["source_series_uid"] = source.get("series_instance_uid") or series_uid.split(":", 1)[0]
+        selected["preprocessing_mode"] = prediction.get("preprocessing_mode")
+        selected["fovea"] = prediction.get("fovea")
+        result[factor] = selected
+    return result
+
+
+def calculate_deepseenet_patient_score(per_eye):
+    left = (per_eye or {}).get("left") or {}
+    right = (per_eye or {}).get("right") or {}
+    left_dsn = left.get("deepseenet_plus")
+    right_dsn = right.get("deepseenet_plus")
+    if not left_dsn or not right_dsn:
+        return {
+            "simplified_score": None,
+            "score_status": "bilateral_input_missing",
+            "aggregation": "most_critical_per_factor",
+        }
+
+    def index(prediction, factor):
+        return int((prediction.get(factor) or {}).get("class_index", -1))
+
+    # Any advanced AMD fixes the simplified severity score at its maximum.
+    if index(left_dsn, "amd") == 1 or index(right_dsn, "amd") == 1:
+        score = 5
+    else:
+        score = 0
+        score += int(index(left_dsn, "pigment") == 1)
+        score += int(index(right_dsn, "pigment") == 1)
+        score += int(index(left_dsn, "drusen") == 2)
+        score += int(index(right_dsn, "drusen") == 2)
+        score += int(index(left_dsn, "drusen") == 1 and index(right_dsn, "drusen") == 1)
+        score = min(score, 5)
+    return {
+        "simplified_score": score,
+        "score_status": "complete",
+        "aggregation": "most_critical_per_factor",
+    }
 
 
 def _report_sop_uid(series_uid, report):
@@ -163,6 +242,7 @@ def aggregate_per_eye(per_series, quality_scores=None):
             "quality_score": _quality_score(visual_uid, visual_report, quality_scores),
         }
         eye["fovea"] = visual_report.get("fovea")
+        eye["deepseenet_plus"] = aggregate_critical_deepseenet(items)
 
         _, worst_glaucoma = max(items, key=lambda item: _glaucoma_score(item[1]))
         eye["glaucoma"] = worst_glaucoma.get("glaucoma") or eye["glaucoma"]

@@ -59,7 +59,7 @@ function formatDRLabel(label: string) {
   return DR_LABELS[key] ?? label.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function normalizeDRProbabilities(probabilities: PerEyeAnalysis["dr_classification"]["probabilities"] | undefined) {
+function normalizeDRProbabilities(probabilities: AnalysisResult["dr_classification"]["probabilities"] | undefined) {
   if (!probabilities) return [];
   const rows = Array.isArray(probabilities)
     ? probabilities.map((item) => ({ label: item.label, score: Number(item.score) || 0 }))
@@ -583,6 +583,41 @@ export function AIPanel({
                     <span className="font-mono text-yellow-200">
                       ({activeAnalysis.fovea.x_px.toFixed(1)}, {activeAnalysis.fovea.y_px.toFixed(1)}) px
                     </span>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {activeAnalysis.deepseenet_plus && (
+              <section className="space-y-2">
+                <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                  <Eye className="h-3.5 w-3.5 text-rose-300" />
+                  DMLA — DeepSeeNet+
+                </h3>
+                <div className="rounded-lg bg-[#121936] border border-slate-700 p-3 space-y-2">
+                  {([
+                    ["Drusen", activeAnalysis.deepseenet_plus.drusen],
+                    ["Pigmentation", activeAnalysis.deepseenet_plus.pigment],
+                    ["DMLA avancée", activeAnalysis.deepseenet_plus.amd],
+                  ] as const).map(([label, factor]) => factor && (
+                    <div key={label} className="flex items-center justify-between gap-3 text-xs">
+                      <span className="text-slate-400">{label}</span>
+                      <span className="text-rose-200 text-right">
+                        {factor.label.replace(/_/g, " ")} ({(factor.probability * 100).toFixed(1)}%)
+                      </span>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-700 text-xs">
+                    <span className="text-slate-400">Score AREDS bilatéral</span>
+                    <span className="font-semibold text-rose-300">
+                      {activeAnalysis.deepseenet_plus.patient_summary?.simplified_score == null
+                        ? "Non calculable"
+                        : `${activeAnalysis.deepseenet_plus.patient_summary.simplified_score}/5`}
+                    </span>
+                  </div>
+                  <div className="flex items-start gap-1.5 pt-1 text-[10px] text-amber-300/80">
+                    <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+                    Agrégation conservatrice : les facteurs peuvent provenir de plusieurs images.
                   </div>
                 </div>
               </section>

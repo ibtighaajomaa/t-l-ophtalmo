@@ -152,6 +152,7 @@ def format_analysis_data(report_data: dict) -> str:
     optic = report_data.get("optic_disc_cup") or {}
     glaucoma = report_data.get("glaucoma") or {}
     vessels = report_data.get("vessels") or {}
+    deepseenet = report_data.get("deepseenet_plus") or {}
 
     if cls:
         lines.append("## Sortie du modele DR classification")
@@ -184,6 +185,28 @@ def format_analysis_data(report_data: dict) -> str:
     if vessels:
         lines.append("## Analyse vasculaire")
         lines.append(f"- Couverture / densite vasculaire: {_format_percent(vessels.get('coverage_pct'))}")
+
+    if deepseenet:
+        lines.append("## Evaluation DMLA DeepSeeNet+")
+        for key, label in (
+            ("drusen", "Drusen"),
+            ("pigment", "Anomalies pigmentaires"),
+            ("amd", "DMLA avancee"),
+        ):
+            factor = deepseenet.get(key) or {}
+            if factor:
+                lines.append(
+                    f"- {label}: {factor.get('label', 'N/A')} "
+                    f"(confiance: {_format_percent(factor.get('probability'))})"
+                )
+        patient = deepseenet.get("patient_summary") or {}
+        score = patient.get("simplified_score")
+        lines.append(f"- Score AREDS simplifie bilateral: {score if score is not None else 'non calculable'}")
+        if deepseenet.get("conservative"):
+            lines.append(
+                "- Methode: aggregation conservatrice; les facteurs peuvent provenir "
+                "de plusieurs images du meme oeil."
+            )
 
     if not lines:
         return "Aucune donnee quantitative fournie."

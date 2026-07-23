@@ -1457,6 +1457,7 @@ def latest_analysis(request):
         'study_instance_uid': study_uid,
         'stored_study_uid': report.series_instance_uid,
         'analysis': report_json.get('per_eye') or report_json,
+        'deepseenet_plus': report_json.get('deepseenet_plus'),
         'fovea_markers': fovea_markers,
         'reports_by_eye': reports_by_eye,
         'summary_report': summary_report,

@@ -11,6 +11,7 @@
 
 from .composite_segmenter import CompositeSegmenter
 from .deepedit import DeepEdit
+from .deepseenet_plus import DeepSeeNetPlus
 from .deepgrow import Deepgrow
 from .dr_classification import DRClassification
 from .eye_laterality import EyeLaterality

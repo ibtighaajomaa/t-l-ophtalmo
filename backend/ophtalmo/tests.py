@@ -20,7 +20,7 @@ from ophtalmo.views import (
     sync_orthanc,
 )
 from ophtalmo.distribution import get_examens_en_attente, distribuer_examens
-from ophtalmo.analysis_utils import aggregate_per_eye
+from ophtalmo.analysis_utils import aggregate_per_eye, calculate_deepseenet_patient_score
 
 
 TODAY = date.today()
@@ -47,6 +47,76 @@ class FoveaAggregationTest(TestCase):
         )
 
         self.assertEqual(result['right']['fovea'], {'x_px': 30.0, 'y_px': 40.0})
+
+
+class DeepSeeNetAggregationTest(TestCase):
+    @staticmethod
+    def prediction(drusen, pigment, amd, sop):
+        labels = {
+            'drusen': ['none_small', 'intermediate', 'large'],
+            'pigment': ['absent', 'present'],
+            'amd': ['absent', 'advanced'],
+        }
+        values = {'drusen': drusen, 'pigment': pigment, 'amd': amd}
+        result = {
+            'status': 'ok',
+            'preprocessing_mode': 'fovea_centered',
+            'source_sop_instance_uid': sop,
+        }
+        for factor, value in values.items():
+            result[factor] = {
+                'class_index': value,
+                'label': labels[factor][value],
+                'probability': 0.8,
+                'probabilities': [],
+            }
+        return result
+
+    def test_aggregates_most_critical_factor_with_independent_sources(self):
+        reports = {
+            'series:sop-a': {
+                'eye_laterality': {'laterality': 'R'},
+                'source': {'source_sop_instance_uid': 'sop-a'},
+                'deepseenet_plus': self.prediction(2, 0, 0, 'sop-a'),
+            },
+            'series:sop-b': {
+                'eye_laterality': {'laterality': 'R'},
+                'source': {'source_sop_instance_uid': 'sop-b'},
+                'deepseenet_plus': self.prediction(1, 1, 1, 'sop-b'),
+            },
+        }
+
+        eye = aggregate_per_eye(reports)['right']['deepseenet_plus']
+
+        self.assertEqual(eye['drusen']['class_index'], 2)
+        self.assertEqual(eye['drusen']['source_sop_instance_uid'], 'sop-a')
+        self.assertEqual(eye['pigment']['class_index'], 1)
+        self.assertEqual(eye['amd']['class_index'], 1)
+        self.assertEqual(eye['amd']['source_sop_instance_uid'], 'sop-b')
+
+    def test_patient_score_requires_both_eyes(self):
+        right = {'deepseenet_plus': {
+            'drusen': {'class_index': 2},
+            'pigment': {'class_index': 1},
+            'amd': {'class_index': 0},
+        }}
+        result = calculate_deepseenet_patient_score({'right': right})
+        self.assertIsNone(result['simplified_score'])
+        self.assertEqual(result['score_status'], 'bilateral_input_missing')
+
+    def test_advanced_amd_sets_bilateral_score_to_five(self):
+        normal = {
+            'drusen': {'class_index': 0},
+            'pigment': {'class_index': 0},
+            'amd': {'class_index': 0},
+        }
+        advanced = {**normal, 'amd': {'class_index': 1}}
+        result = calculate_deepseenet_patient_score({
+            'left': {'deepseenet_plus': normal},
+            'right': {'deepseenet_plus': advanced},
+        })
+        self.assertEqual(result['simplified_score'], 5)
+        self.assertEqual(result['score_status'], 'complete')
 
 
 class PoorQualityAnalysisGuardTest(TestCase):

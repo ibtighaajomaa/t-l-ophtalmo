@@ -339,6 +339,31 @@ export interface FoveaLocation {
   model: string;
 }
 
+export interface DeepSeeNetFactor {
+  class_index: number;
+  label: string;
+  probability: number;
+  probabilities: number[];
+  source_sop_instance_uid?: string | null;
+  source_series_uid?: string | null;
+  preprocessing_mode?: "fovea_centered" | "central_crop_fallback";
+}
+
+export interface DeepSeeNetResult {
+  status: string;
+  aggregation: "most_critical_per_factor";
+  conservative: boolean;
+  note?: string;
+  drusen?: DeepSeeNetFactor;
+  pigment?: DeepSeeNetFactor;
+  amd?: DeepSeeNetFactor;
+  patient_summary?: {
+    simplified_score: number | null;
+    score_status: "complete" | "bilateral_input_missing";
+    aggregation: string;
+  };
+}
+
 export interface PerInstanceResult {
   index: number;
   optic_disc_cup: PerEyeMetrics;
@@ -393,6 +418,7 @@ export interface AnalysisResult {
     pixel_count: number;
   };
   fovea?: FoveaLocation | null;
+  deepseenet_plus?: DeepSeeNetResult | null;
   gradcam_image: string | null;
   clahe_image: string | null;
   per_instance?: PerInstanceResult[];

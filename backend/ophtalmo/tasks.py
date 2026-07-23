@@ -963,7 +963,7 @@ def tache_auto_report_generation(limit=20):
     AnalysisReport contains per-eye DR/classification data, the medical report
     is generated and stored without a user click.
     """
-    from .analysis_utils import aggregate_per_eye
+    from .analysis_utils import aggregate_per_eye, calculate_deepseenet_patient_score
     from .models import AnalysisReport, Exam
 
     queued = 0
@@ -1392,12 +1392,13 @@ def tache_auto_segmentation(exam_id=None):
     Après la segmentation, déclenche la distribution pour que l'examen
     passe de 'En attente' → 'En cours' avec assignation à un médecin.
     """
-    from .analysis_utils import aggregate_per_eye
+    from .analysis_utils import aggregate_per_eye, calculate_deepseenet_patient_score
     from .models import AnalysisReport, Exam, ImageQualityAssessment
 
     MAX_RETRIES = 3
     SEG_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
     FOVEA_MODEL = "fovea_detection"
+    DEEPSEENET_MODEL = "deepseenet_plus"
     MONAI_LABEL = "http://monai-label:8000"
 
     logger.info("[AutoSeg] === Démarrage de la tâche de segmentation automatique ===")
@@ -1628,12 +1629,14 @@ def tache_auto_segmentation(exam_id=None):
 
                 model_results = {model: [] for model in SEG_MODELS}
                 fovea_results = []
+                deepseenet_results = []
                 segmented_instances = []
 
                 for instance_index, source_instance in enumerate(source_instances, start=1):
                     instance_id = source_instance.get('orthanc_instance_id')
                     sop_uid = source_instance.get('sop_instance_uid')
 
+                    fovea_error = None
                     try:
                         if instance_id:
                             _prepare_monai_instance_cache(
@@ -1733,15 +1736,71 @@ def tache_auto_segmentation(exam_id=None):
                             fovea_results.append('ok' if instance_status['fovea'] else 'failed (no coordinates)')
                         else:
                             fovea_status = f'failed (HTTP {fovea_resp.status_code})'
+                            fovea_error = fovea_status
                             instance_status['models'][FOVEA_MODEL] = fovea_status
                             fovea_results.append(fovea_status)
                     except Exception as e:
                         fovea_status = f'failed ({str(e)[:100]})'
+                        fovea_error = fovea_status
                         instance_status['models'][FOVEA_MODEL] = fovea_status
                         fovea_results.append(fovea_status)
                         logger.warning(
                             f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] "
                             f"La localisation de la fovéa a échoué : {str(e)}",
+                            exc_info=True,
+                        )
+
+                    # DeepSeeNet+ runs after segmentation/VascX and before the
+                    # general DR classification. If VascX failed, the inference
+                    # task deliberately falls back to the official central crop.
+                    try:
+                        logger.info(
+                            f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] "
+                            f"Classification DeepSeeNet+ sur instance {instance_index}/{len(source_instances)}"
+                        )
+                        deepseenet_resp = requests.post(
+                            f"{MONAI_LABEL}/infer/{DEEPSEENET_MODEL}",
+                            params={"image": op_series_uid},
+                            data={
+                                "params": json.dumps({
+                                    **base_params,
+                                    "source_sop_instance_uid": sop_uid,
+                                    "fovea": instance_status.get("fovea"),
+                                    "fovea_error": fovea_error,
+                                })
+                            },
+                            timeout=300,
+                        )
+                        if deepseenet_resp.status_code == 200:
+                            deepseenet_payload = deepseenet_resp.json()
+                            deepseenet_params = deepseenet_payload.get('params') or deepseenet_payload
+                            deepseenet_result = deepseenet_params.get(DEEPSEENET_MODEL)
+                            if deepseenet_result:
+                                deepseenet_result['source_sop_instance_uid'] = sop_uid
+                                instance_status[DEEPSEENET_MODEL] = deepseenet_result
+                                instance_status['models'][DEEPSEENET_MODEL] = 'ok'
+                                deepseenet_results.append('ok')
+                            else:
+                                status = 'failed (no prediction)'
+                                instance_status['models'][DEEPSEENET_MODEL] = status
+                                deepseenet_results.append(status)
+                        else:
+                            status = f'failed (HTTP {deepseenet_resp.status_code})'
+                            instance_status['models'][DEEPSEENET_MODEL] = status
+                            deepseenet_results.append(status)
+                            logger.warning(
+                                "[AutoSeg] DeepSeeNet+ failed for SOP %s: HTTP %s %s",
+                                sop_uid,
+                                deepseenet_resp.status_code,
+                                deepseenet_resp.text[:200],
+                            )
+                    except Exception as e:
+                        status = f'failed ({str(e)[:100]})'
+                        instance_status['models'][DEEPSEENET_MODEL] = status
+                        deepseenet_results.append(status)
+                        logger.warning(
+                            f"[Examen {exam.id}] [Série {op_series_uid[:15]}...] "
+                            f"DeepSeeNet+ a échoué sans bloquer la classification DR : {str(e)}",
                             exc_info=True,
                         )
                     segmented_instances.append(instance_status)
@@ -1752,6 +1811,10 @@ def tache_auto_segmentation(exam_id=None):
                 series_status[FOVEA_MODEL] = (
                     'ok' if fovea_results and all(result == 'ok' for result in fovea_results)
                     else fovea_results
+                )
+                series_status[DEEPSEENET_MODEL] = (
+                    'ok' if deepseenet_results and all(result == 'ok' for result in deepseenet_results)
+                    else deepseenet_results
                 )
 
                 # Étape E : Analyse globale et classification DR sur chaque instance source.
@@ -1789,6 +1852,9 @@ def tache_auto_segmentation(exam_id=None):
                         )
                         if analyze_resp.status_code == 200:
                             analysis = analyze_resp.json()
+                            instance_ai = segmented_instances[instance_index - 1]
+                            analysis["fovea"] = instance_ai.get("fovea")
+                            analysis[DEEPSEENET_MODEL] = instance_ai.get(DEEPSEENET_MODEL)
                             analysis["eye_laterality"] = series_status.get("eye_laterality")
                             analysis.setdefault("source", {})
                             analysis["source"].update({
@@ -1893,6 +1959,10 @@ def tache_auto_segmentation(exam_id=None):
             )
             per_eye = aggregate_per_eye(series_reports, quality_scores=quality_scores)
             if per_eye:
+                deepseenet_patient = calculate_deepseenet_patient_score(per_eye)
+                for eye_data in per_eye.values():
+                    if eye_data.get("deepseenet_plus"):
+                        eye_data["deepseenet_plus"]["patient_summary"] = deepseenet_patient
                 logger.info(
                     f"[Examen {exam.id}] Données d'IA agrégées par oeil. "
                     "Le compte rendu MedGemma sera généré en arrière-plan."
@@ -1905,6 +1975,7 @@ def tache_auto_segmentation(exam_id=None):
                     "study_instance_uid": study_id,
                     "series_reports": series_reports,
                     "per_eye": per_eye,
+                    "deepseenet_plus": deepseenet_patient,
                     "reports_by_eye": {},
                     "report_generation_status": "pending",
                     "report_generation_task_queued": True,
