@@ -10,9 +10,7 @@ from lib.infers.bigeye import quantify_lesion_mask
 logger = logging.getLogger(__name__)
 
 SEGMENTATION_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
-CLASSIFICATION_MODEL = "dr_classification"
 CLIP_DR_MODEL = "clip_dr_classification"
-DINO2_DR_MODEL = "dino2_dr_classification"
 LATERALITY_MODEL = "eye_laterality"
 
 
@@ -105,127 +103,53 @@ def quantify_lesions(label_path):
 
 
 def classify_dr(app, image_id):
-    """Run DR classification model and return grade + confidence."""
+    """Run the CLIP-DR classification model."""
     try:
         req = {
-            "model": CLASSIFICATION_MODEL,
-            "image": image_id,
-            "result_extension": ".json",
-            "restore_label_idx": False,
-        }
-        result = app.infer(req)
-        if result and result.get("params"):
-            params = result["params"]
-            grade = params.get("label", params.get("prediction", "Unknown"))
-            confidence = params.get("probability", params.get("confidence", 0.0))
-            if isinstance(confidence, (list, np.ndarray)):
-                confidence = float(max(confidence))
-            return {"grade": str(grade), "confidence": round(float(confidence), 4)}
-        logger.warning("DR classification returned no params")
-    except Exception as e:
-        logger.error(f"DR classification failed: {e}")
-    return {"grade": "Unknown", "confidence": 0.0}
-
-
-def classify_dr_models(app, image_id):
-    """Run canonical ViT followed by optional CLIP-DR and Dino2-DR."""
-    current = classify_dr(app, image_id)
-    def grade_index(grade):
-        normalized = str(grade).strip().lower().replace("_", " ")
-        return next(
-            (
-                index
-                for marker, index in (
-                    ("proliferative", 4), ("severe", 3), ("moderate", 2),
-                    ("mild", 1), ("no dr", 0), ("normal", 0),
-                )
-                if marker in normalized
-            ),
-            None,
-        )
-
-    current_model = {
-        "status": "ok" if current.get("grade") != "Unknown" else "unavailable",
-        "grade_index": grade_index(current.get("grade")),
-        **current,
-    }
-    clip_dr = {
-        "status": "unavailable",
-        "grade": "Unknown",
-        "confidence": 0.0,
-        "probabilities": {},
-        "calibration_status": "not_locally_calibrated",
-    }
-    try:
-        result = app.infer({
             "model": CLIP_DR_MODEL,
             "image": image_id,
             "result_extension": ".json",
             "restore_label_idx": False,
             "device": "cpu",
-        })
-        params = (result or {}).get("params") or {}
-        clip_dr = {
-            "status": params.get("status", "ok"),
-            "grade": str(params.get("dr_label", "Unknown")),
-            "grade_index": params.get("dr_grade")
-            if params.get("dr_grade") is not None
-            else grade_index(params.get("dr_label")),
-            "confidence": round(float(params.get("dr_probability", 0.0)), 4),
-            "probabilities": params.get("dr_all_probabilities", {}),
-            "calibration_status": params.get("calibration_status", "not_locally_calibrated"),
         }
-    except Exception as exc:
-        logger.warning("CLIP-DR unavailable without blocking canonical ViT: %s", exc)
-        clip_dr["reason"] = str(exc)
-
-    dino2_dr = {
+        result = app.infer(req)
+        if result and result.get("params"):
+            params = result["params"]
+            return {
+                "status": params.get("status", "ok"),
+                "grade": str(params.get("dr_label", "Unknown")),
+                "grade_index": params.get("dr_grade"),
+                "confidence": round(float(params.get("dr_probability", 0.0)), 4),
+                "probabilities": params.get("dr_all_probabilities", {}),
+                "calibration_status": params.get(
+                    "calibration_status", "not_locally_calibrated"
+                ),
+                "model_id": params.get("model_id", "Qinkaiyu/CLIP-DR"),
+            }
+        logger.warning("CLIP-DR classification returned no params")
+    except Exception as e:
+        logger.error(f"CLIP-DR classification failed: {e}")
+        return {
+            "status": "unavailable",
+            "grade": "Unknown",
+            "confidence": 0.0,
+            "probabilities": {},
+            "calibration_status": "not_locally_calibrated",
+            "reason": str(e),
+        }
+    return {
         "status": "unavailable",
         "grade": "Unknown",
         "confidence": 0.0,
         "probabilities": {},
         "calibration_status": "not_locally_calibrated",
     }
-    try:
-        result = app.infer({
-            "model": DINO2_DR_MODEL,
-            "image": image_id,
-            "result_extension": ".json",
-            "restore_label_idx": False,
-            "device": "cpu",
-        })
-        params = (result or {}).get("params") or {}
-        dino2_dr = {
-            "status": params.get("status", "ok"),
-            "grade": str(params.get("dr_label", "Unknown")),
-            "grade_index": params.get("dr_grade")
-            if params.get("dr_grade") is not None
-            else grade_index(params.get("dr_label")),
-            "confidence": round(float(params.get("dr_probability", 0.0)), 4),
-            "probabilities": params.get("dr_all_probabilities", {}),
-            "calibration_status": params.get("calibration_status", "not_locally_calibrated"),
-        }
-    except Exception as exc:
-        logger.warning("Dino2-DR unavailable without blocking canonical ViT: %s", exc)
-        dino2_dr["reason"] = str(exc)
 
-    current_index = current_model.get("grade_index")
-    clip_index = clip_dr.get("grade_index")
-    dino_index = dino2_dr.get("grade_index")
-    comparison = {
-        "concordant": current_index == clip_index if current_index is not None and clip_index is not None else None,
-        "grade_difference": abs(int(current_index) - int(clip_index))
-        if current_index is not None and clip_index is not None else None,
-        "dino2_dr_concordant": current_index == dino_index
-        if current_index is not None and dino_index is not None else None,
-        "dino2_dr_grade_difference": abs(int(current_index) - int(dino_index))
-        if current_index is not None and dino_index is not None else None,
-    }
-    return current, {
-        "vit_current": current_model,
-        "clip_dr": clip_dr,
-        "dino2_dr": dino2_dr,
-    }, comparison
+
+def classify_dr_models(app, image_id):
+    """Run CLIP-DR as the sole diabetic-retinopathy classifier."""
+    clip_dr = classify_dr(app, image_id)
+    return clip_dr, {"clip_dr": clip_dr}, {}
 
 
 def detect_laterality(app, image_id):

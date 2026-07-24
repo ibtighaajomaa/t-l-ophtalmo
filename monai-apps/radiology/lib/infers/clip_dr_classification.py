@@ -43,6 +43,19 @@ def sha256_file(path: str) -> str:
 def _to_rgb_uint8(image) -> np.ndarray:
     array = np.asarray(image)
     array = np.squeeze(array)
+    # A MONAI DICOM series can be loaded as H×W×N×C, even when the analyze
+    # endpoint targets one source instance. CLIP-DR classifies one fundus
+    # photograph at a time, so select the first frame deterministically.
+    if array.ndim > 3 and array.shape[-1] in (1, 3, 4):
+        array = array.reshape(
+            array.shape[0],
+            array.shape[1],
+            -1,
+            array.shape[-1],
+        )[:, :, 0, :]
+    # Also accept batched/channel-first tensors such as N×C×H×W.
+    elif array.ndim == 4 and array.shape[1] in (1, 3, 4):
+        array = np.moveaxis(array[0], 0, -1)
     if array.ndim == 3 and array.shape[0] in (1, 3, 4) and array.shape[-1] not in (1, 3, 4):
         array = np.moveaxis(array, 0, -1)
     if array.ndim == 2:

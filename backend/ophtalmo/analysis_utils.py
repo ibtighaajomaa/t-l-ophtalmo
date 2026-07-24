@@ -65,12 +65,6 @@ def _blank_eye(side):
             "probabilities": [],
         },
         "dr_classification_models": {
-            "vit_current": {
-                "status": "unavailable",
-                "grade": "Unknown",
-                "confidence": 0.0,
-                "probabilities": [],
-            },
             "clip_dr": {
                 "status": "unavailable",
                 "grade": "Unknown",
@@ -78,20 +72,6 @@ def _blank_eye(side):
                 "probabilities": [],
                 "calibration_status": "not_locally_calibrated",
             },
-            "dino2_dr": {
-                "status": "unavailable",
-                "grade": "Unknown",
-                "confidence": 0.0,
-                "probabilities": [],
-                "calibration_status": "not_locally_calibrated",
-                "reason": "checkpoint spécialisé Dino2-DR FSMT officiel non installé",
-            },
-        },
-        "dr_model_comparison": {
-            "concordant": None,
-            "grade_difference": None,
-            "dino2_dr_concordant": None,
-            "dino2_dr_grade_difference": None,
         },
         "lesions": {
             "microaneurysms": 0,
@@ -139,9 +119,6 @@ def _copy_report_fields(target, report, include_visuals=True):
     target["dr_classification"] = report.get("dr_classification") or target["dr_classification"]
     target["dr_classification_models"] = (
         report.get("dr_classification_models") or target["dr_classification_models"]
-    )
-    target["dr_model_comparison"] = (
-        report.get("dr_model_comparison") or target["dr_model_comparison"]
     )
     target["optic_disc_cup"] = report.get("optic_disc_cup") or target["optic_disc_cup"]
     target["glaucoma"] = report.get("glaucoma") or target["glaucoma"]

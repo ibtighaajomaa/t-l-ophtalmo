@@ -34,6 +34,28 @@ def test_preprocess_clip_dr_is_deterministic():
     assert torch.equal(preprocess_clip_dr(image), preprocess_clip_dr(image))
 
 
+def test_preprocess_clip_dr_accepts_multi_instance_series():
+    image = np.zeros((2736, 1824, 2, 3), dtype=np.uint8)
+    image[300:2400, 200:1600, 0, :] = (120, 80, 40)
+    image[..., 1, :] = 255
+
+    result = preprocess_clip_dr(image)
+    expected = preprocess_clip_dr(image[:, :, 0, :])
+
+    assert result.shape == (3, 224, 224)
+    assert torch.equal(result, expected)
+
+
+def test_preprocess_clip_dr_accepts_batched_channel_first_image():
+    image = np.zeros((2, 3, 480, 720), dtype=np.uint8)
+    image[0, :, 60:420, 90:630] = np.asarray([120, 80, 40])[:, None, None]
+
+    result = preprocess_clip_dr(image)
+
+    assert result.shape == (3, 224, 224)
+    assert torch.isfinite(result).all()
+
+
 def test_sha256_file(tmp_path):
     checkpoint = tmp_path / "APTOS.ckpt"
     checkpoint.write_bytes(b"clip-dr")

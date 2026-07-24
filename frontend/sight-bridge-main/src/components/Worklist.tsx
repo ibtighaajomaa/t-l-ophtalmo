@@ -415,7 +415,7 @@ interface WorklistProps {
 
 export function Worklist({ todayOnly = false, showStats = false }: WorklistProps) {
   const { user } = useAuth();
-  const isDoctorView = user.role === "Medecin" || user.role === "Resident";
+  const isDoctorView = user?.role === "Medecin" || user?.role === "Resident";
   const [exams, setExams] = useState<Exam[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);

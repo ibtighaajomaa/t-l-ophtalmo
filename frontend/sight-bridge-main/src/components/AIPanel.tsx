@@ -142,15 +142,12 @@ export function AIPanel({
       : (analysis as AnalysisResult | null);
   const activeReportText = eyeAnalysis ? reportByEye[activeEye] ?? null : reportText;
   const activeReportHtml = eyeAnalysis ? reportHtmlByEye[activeEye] ?? null : reportHtml;
-  const canonicalDR: DRModelResult | null = activeAnalysis
-    ? activeAnalysis.dr_classification_models?.vit_current ?? {
+  const clipDR = activeAnalysis
+    ? activeAnalysis.dr_classification_models?.clip_dr ?? {
         status: activeAnalysis.dr_classification.grade === "Unknown" ? "unavailable" : "ok",
         ...activeAnalysis.dr_classification,
       }
     : null;
-  const clipDR = activeAnalysis?.dr_classification_models?.clip_dr ?? null;
-  const dino2DR = activeAnalysis?.dr_classification_models?.dino2_dr ?? null;
-  const drComparison = activeAnalysis?.dr_model_comparison;
 
   const loadMedicalReport = useCallback(async () => {
     if (!examinationId) return;
@@ -442,8 +439,7 @@ export function AIPanel({
                 <Activity className="h-3.5 w-3.5 text-emerald-400" />
                 DR Classification
               </h3>
-              <div className="grid grid-cols-1 gap-2 xl:grid-cols-3">
-                {canonicalDR && <DRResultCard title="ViT actuel" result={canonicalDR} canonical />}
+              <div className="grid grid-cols-1 gap-2">
                 <DRResultCard
                   title="CLIP-DR"
                   result={clipDR ?? {
@@ -455,39 +451,6 @@ export function AIPanel({
                     reason: "Résultat CLIP-DR absent de cette analyse",
                   }}
                 />
-                <DRResultCard
-                  title="Dino2-DR"
-                  result={dino2DR ?? {
-                    status: "unavailable",
-                    grade: "Unknown",
-                    confidence: 0,
-                    probabilities: [],
-                    calibration_status: "not_locally_calibrated",
-                    reason: "checkpoint spécialisé Dino2-DR FSMT officiel non installé",
-                  }}
-                />
-              </div>
-              <div className="rounded-md border border-slate-700 bg-slate-900/50 px-3 py-2 text-xs">
-                {drComparison?.dino2_dr_concordant === true ? (
-                  <span className="text-emerald-300">ViT et Dino2-DR concordants</span>
-                ) : drComparison?.dino2_dr_grade_difference != null ? (
-                  <span className="text-amber-300">
-                    Écart ViT/Dino2-DR de {drComparison.dino2_dr_grade_difference} grade(s)
-                  </span>
-                ) : (
-                  <span className="text-slate-400">Comparaison Dino2-DR indisponible</span>
-                )}
-              </div>
-              <div className="rounded-md border border-slate-700 bg-slate-900/50 px-3 py-2 text-xs">
-                {drComparison?.concordant === true ? (
-                  <span className="text-emerald-300">Modèles concordants</span>
-                ) : drComparison?.grade_difference != null ? (
-                  <span className="text-amber-300">
-                    Écart de {drComparison.grade_difference} grade(s)
-                  </span>
-                ) : (
-                  <span className="text-slate-400">Comparaison indisponible</span>
-                )}
               </div>
             </section>
 

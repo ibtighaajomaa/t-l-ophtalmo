@@ -988,6 +988,70 @@ def request_composite_segmentation(request):
 
 
 @api_view(['POST'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def classify_worklist(request):
+    """Queue CLIP-DR analysis for every unclassified fundus exam."""
+    from .tasks import tache_auto_quality, tache_auto_segmentation
+
+    classified_studies = AnalysisReport.objects.exclude(
+        series_instance_uid__isnull=True,
+    ).exclude(
+        series_instance_uid='',
+    ).values_list('series_instance_uid', flat=True)
+
+    exams = Exam.objects.filter(
+        exam_type=Exam.ExamType.RETINOGRAPHIE,
+    ).exclude(
+        study_instance_uid__isnull=True,
+    ).exclude(
+        study_instance_uid='',
+    ).exclude(
+        study_instance_uid__in=classified_studies,
+    )
+
+    exam_ids = list(exams.values_list('id', flat=True))
+    if not exam_ids:
+        return Response({
+            'status': 'nothing_to_queue',
+            'queued': 0,
+            'message': 'Tous les examens de la worklist sont déjà classifiés.',
+        })
+
+    quality_pending_ids = list(
+        exams.filter(quality_status=Exam.QualityStatus.PENDING)
+        .values_list('id', flat=True)
+    )
+    ready_ids = list(
+        exams.filter(quality_status__in=[
+            Exam.QualityStatus.COMPLETED,
+            Exam.QualityStatus.FAILED,
+        ]).values_list('id', flat=True)
+    )
+
+    Exam.objects.filter(id__in=exam_ids).update(
+        segmentation_status=Exam.SegmentationStatus.PENDING,
+        segmentation_retries=0,
+        segmentation_error='',
+    )
+
+    for exam_id in quality_pending_ids:
+        tache_auto_quality.delay(exam_id)
+    if ready_ids:
+        # One worker task consumes the complete pending batch under its
+        # concurrency lock, so a single enqueue is intentional.
+        tache_auto_segmentation.delay()
+
+    return Response({
+        'status': 'queued',
+        'queued': len(exam_ids),
+        'quality_pending': len(quality_pending_ids),
+        'ready_for_classification': len(ready_ids),
+        'message': f'{len(exam_ids)} examen(s) mis en file pour classification CLIP-DR.',
+    }, status=status.HTTP_202_ACCEPTED)
+
+
+@api_view(['POST'])
 @permission_classes([AllowAny])
 def run_analysis(request):
     """

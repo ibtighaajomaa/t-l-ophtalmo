@@ -1040,15 +1040,6 @@ async def analyze(request: dict):
         except Exception as e:
             logger.error("Analyze segmentation %s failed: %s", model, e)
 
-    dr = {"grade": "Unknown", "confidence": 0.0, "probabilities": {}}
-    try:
-        dr_result = _run_model("dr_classification", {"result_extension": ".json"})
-        params = dr_result.get("params") or {}
-        dr = _normalize_dr(params)
-    except Exception as e:
-        logger.error("Analyze DR classification failed: %s", e)
-
-    vit_current = {"status": "ok" if dr.get("grade") != "Unknown" else "unavailable", **dr}
     clip_dr = {
         "status": "unavailable",
         "grade": "Unknown",
@@ -1065,7 +1056,7 @@ async def analyze(request: dict):
         clip_dr.setdefault("status", "ok")
         clip_dr.setdefault("calibration_status", "not_locally_calibrated")
     except Exception as e:
-        logger.warning("Analyze CLIP-DR unavailable; canonical ViT is preserved: %s", e)
+        logger.warning("Analyze CLIP-DR unavailable: %s", e)
         message = str(e)
         clip_dr["reason"] = (
             "checkpoint CLIP-DR APTOS non installé"
@@ -1074,49 +1065,8 @@ async def analyze(request: dict):
             else message[:240]
         )
 
-    dino2_dr = {
-        "status": "unavailable",
-        "grade": "Unknown",
-        "confidence": 0.0,
-        "probabilities": {},
-        "calibration_status": "not_locally_calibrated",
-    }
-    try:
-        dino_result = _run_model(
-            "dino2_dr_classification",
-            {"result_extension": ".json", "device": "cpu"},
-        )
-        dino2_dr = _normalize_dr(dino_result.get("params") or {})
-        dino2_dr.setdefault("status", "ok")
-        dino2_dr.setdefault("calibration_status", "not_locally_calibrated")
-    except Exception as e:
-        logger.warning("Analyze Dino2-DR unavailable; canonical ViT is preserved: %s", e)
-        message = str(e)
-        dino2_dr["reason"] = (
-            "checkpoint spécialisé Dino2-DR FSMT officiel non installé"
-            if isinstance(e, FileNotFoundError) or "not installed" in message.lower()
-            or "non installé" in message.lower()
-            else message[:240]
-        )
-
-    vit_index = vit_current.get("grade_index")
-    clip_index = clip_dr.get("grade_index")
-    dino_index = dino2_dr.get("grade_index")
-    dr_model_comparison = {
-        "concordant": vit_index == clip_index
-        if vit_index is not None and clip_index is not None else None,
-        "grade_difference": abs(int(vit_index) - int(clip_index))
-        if vit_index is not None and clip_index is not None else None,
-        "dino2_dr_concordant": vit_index == dino_index
-        if vit_index is not None and dino_index is not None else None,
-        "dino2_dr_grade_difference": abs(int(vit_index) - int(dino_index))
-        if vit_index is not None and dino_index is not None else None,
-    }
-    dr_classification_models = {
-        "vit_current": vit_current,
-        "clip_dr": clip_dr,
-        "dino2_dr": dino2_dr,
-    }
+    dr = clip_dr
+    dr_classification_models = {"clip_dr": clip_dr}
 
     fovea = None
     try:
@@ -1288,7 +1238,6 @@ async def analyze(request: dict):
         "source_sop_instance_uid": source_sop_uid,
         "dr_classification": dr,
         "dr_classification_models": dr_classification_models,
-        "dr_model_comparison": dr_model_comparison,
         "optic_disc_cup": optic,
         "glaucoma": glaucoma,
         "vessels": vessels,
@@ -1307,7 +1256,6 @@ async def analyze(request: dict):
         },
         "dr_classification": dr,
         "dr_classification_models": dr_classification_models,
-        "dr_model_comparison": dr_model_comparison,
         "lesions": lesions,
         "optic_disc_cup": optic,
         "glaucoma": glaucoma,
