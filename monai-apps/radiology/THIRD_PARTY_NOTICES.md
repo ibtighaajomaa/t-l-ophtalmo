@@ -17,3 +17,8 @@ version 3. Their source code and license texts are available from:
 
 VascX model revision used by this application:
 `962c83a78b8867c2d3028635e7d7d1ee07fff2be`.
+## BigEye
+
+The retinal lesion segmentation checkpoint is sourced from
+Janga-Lab/BigEye at commit `c09dbc164507872eb7c8b7f57c91b7ba4fdd289f`.
+BigEye is licensed under the Apache License 2.0.

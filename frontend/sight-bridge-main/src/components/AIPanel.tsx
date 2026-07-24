@@ -12,7 +12,7 @@ import {
   Plus,
   MessageSquare,
 } from "lucide-react";
-import type { AnalysisResult, DoctorNote, MedicalReport } from "@/lib/exam-api";
+import type { AnalysisResult, DoctorNote, DRModelResult, MedicalReport } from "@/lib/exam-api";
 import type { EyeSide, PerEyeAnalysis } from "@/lib/exam-api";
 import {
   runAIAnalysis,
@@ -142,7 +142,15 @@ export function AIPanel({
       : (analysis as AnalysisResult | null);
   const activeReportText = eyeAnalysis ? reportByEye[activeEye] ?? null : reportText;
   const activeReportHtml = eyeAnalysis ? reportHtmlByEye[activeEye] ?? null : reportHtml;
-  const drProbabilities = normalizeDRProbabilities(activeAnalysis?.dr_classification.probabilities);
+  const canonicalDR: DRModelResult | null = activeAnalysis
+    ? activeAnalysis.dr_classification_models?.vit_current ?? {
+        status: activeAnalysis.dr_classification.grade === "Unknown" ? "unavailable" : "ok",
+        ...activeAnalysis.dr_classification,
+      }
+    : null;
+  const clipDR = activeAnalysis?.dr_classification_models?.clip_dr ?? null;
+  const dino2DR = activeAnalysis?.dr_classification_models?.dino2_dr ?? null;
+  const drComparison = activeAnalysis?.dr_model_comparison;
 
   const loadMedicalReport = useCallback(async () => {
     if (!examinationId) return;
@@ -169,6 +177,7 @@ export function AIPanel({
 
   useEffect(() => {
     if (!studyInstanceUid) return;
+    const requestedStudyUid = studyInstanceUid;
     let cancelled = false;
     let attempts = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -177,7 +186,7 @@ export function AIPanel({
       attempts += 1;
       setPollingAnalysis(true);
       try {
-        const result = await fetchAnalysis(studyInstanceUid);
+        const result = await fetchAnalysis(requestedStudyUid);
         if (cancelled) return;
         setAnalysis(result.analysis);
         const eyes = EYE_SIDES.filter((side) => !!result.analysis[side]);
@@ -265,7 +274,8 @@ export function AIPanel({
       const result = await runAIAnalysis(studyInstanceUid);
       setAnalysis(result.analysis);
       if (isPerEyeAnalysis(result.analysis)) {
-        const eyes = EYE_SIDES.filter((side) => !!result.analysis[side]);
+        const perEyeResult = result.analysis;
+        const eyes = EYE_SIDES.filter((side) => !!perEyeResult[side]);
         if (eyes.length > 0) setActiveEye(eyes[0]);
       }
     } catch (e) {
@@ -432,51 +442,51 @@ export function AIPanel({
                 <Activity className="h-3.5 w-3.5 text-emerald-400" />
                 DR Classification
               </h3>
-              <div className="rounded-lg bg-[#121936] border border-slate-700 p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400">Predicted Grade</span>
-                  <span
-                    className={`text-xs font-semibold ${
-                      activeAnalysis.dr_classification.grade === "Unknown"
-                        ? "text-slate-500"
-                        : "text-emerald-400"
-                    }`}
-                  >
-                    {formatDRLabel(activeAnalysis.dr_classification.grade)}
+              <div className="grid grid-cols-1 gap-2 xl:grid-cols-3">
+                {canonicalDR && <DRResultCard title="ViT actuel" result={canonicalDR} canonical />}
+                <DRResultCard
+                  title="CLIP-DR"
+                  result={clipDR ?? {
+                    status: "unavailable",
+                    grade: "Unknown",
+                    confidence: 0,
+                    probabilities: [],
+                    calibration_status: "not_locally_calibrated",
+                    reason: "Résultat CLIP-DR absent de cette analyse",
+                  }}
+                />
+                <DRResultCard
+                  title="Dino2-DR"
+                  result={dino2DR ?? {
+                    status: "unavailable",
+                    grade: "Unknown",
+                    confidence: 0,
+                    probabilities: [],
+                    calibration_status: "not_locally_calibrated",
+                    reason: "checkpoint spécialisé Dino2-DR FSMT officiel non installé",
+                  }}
+                />
+              </div>
+              <div className="rounded-md border border-slate-700 bg-slate-900/50 px-3 py-2 text-xs">
+                {drComparison?.dino2_dr_concordant === true ? (
+                  <span className="text-emerald-300">ViT et Dino2-DR concordants</span>
+                ) : drComparison?.dino2_dr_grade_difference != null ? (
+                  <span className="text-amber-300">
+                    Écart ViT/Dino2-DR de {drComparison.dino2_dr_grade_difference} grade(s)
                   </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400">Confidence</span>
-                  <span className="text-xs text-slate-300">
-                    {(activeAnalysis.dr_classification.confidence * 100).toFixed(1)}%
+                ) : (
+                  <span className="text-slate-400">Comparaison Dino2-DR indisponible</span>
+                )}
+              </div>
+              <div className="rounded-md border border-slate-700 bg-slate-900/50 px-3 py-2 text-xs">
+                {drComparison?.concordant === true ? (
+                  <span className="text-emerald-300">Modèles concordants</span>
+                ) : drComparison?.grade_difference != null ? (
+                  <span className="text-amber-300">
+                    Écart de {drComparison.grade_difference} grade(s)
                   </span>
-                </div>
-                {drProbabilities.length > 0 && (
-                  <div className="space-y-2 pt-2 border-t border-slate-700">
-                    {drProbabilities.map((p) => {
-                      const pct = Math.max(0, Math.min(100, p.score * 100));
-                      const isPredicted =
-                        p.label.toLowerCase() === activeAnalysis.dr_classification.grade.toLowerCase();
-                      return (
-                        <div key={p.label} className="grid grid-cols-[92px_1fr_42px] items-center gap-2 text-[11px]">
-                          <span className={`truncate ${isPredicted ? "text-cyan-100" : "text-slate-400"}`}>
-                            {p.displayLabel}
-                          </span>
-                          <div className="h-2 overflow-hidden rounded-full bg-slate-950/45">
-                            <div
-                              className={`h-full rounded-full transition-[width] duration-500 ${
-                                isPredicted ? "bg-cyan-300" : "bg-slate-500"
-                              }`}
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
-                          <span className={`text-right font-mono ${isPredicted ? "text-cyan-100" : "text-slate-400"}`}>
-                            {pct.toFixed(0)}%
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
+                ) : (
+                  <span className="text-slate-400">Comparaison indisponible</span>
                 )}
               </div>
             </section>
@@ -497,6 +507,14 @@ export function AIPanel({
                 <LesionRow
                   label="Cotton-wool spots"
                   value={activeAnalysis.lesions.cotton_wool_spots ?? 0}
+                />
+                <LesionRow
+                  label="Neovascularization"
+                  value={activeAnalysis.lesions.neovascularization ?? 0}
+                />
+                <LesionRow
+                  label="Laser scars"
+                  value={activeAnalysis.lesions.laser_scars ?? 0}
                 />
                 <div className="flex items-center justify-between pt-1 border-t border-slate-700">
                   <span className="text-xs text-slate-400">Coverage</span>
@@ -843,6 +861,80 @@ function LesionRow({ label, value }: { label: string; value: number }) {
     <div className="flex items-center justify-between">
       <span className="text-xs text-slate-400">{label}</span>
       <span className="text-xs text-slate-300 font-mono">{value}</span>
+    </div>
+  );
+}
+
+function DRResultCard({
+  title,
+  result,
+  canonical = false,
+}: {
+  title: string;
+  result: DRModelResult;
+  canonical?: boolean;
+}) {
+  const probabilities = normalizeDRProbabilities(result.probabilities);
+  const available = result.status === "ok";
+  return (
+    <div className="rounded-lg bg-[#121936] border border-slate-700 p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold text-white">{title}</span>
+        {canonical && (
+          <span className="rounded bg-emerald-950 px-1.5 py-0.5 text-[10px] text-emerald-300">
+            canonique
+          </span>
+        )}
+      </div>
+      {!available ? (
+        <div className="space-y-1 text-xs text-amber-300">
+          <div className="flex items-center gap-1">
+            <AlertTriangle className="h-3 w-3" />
+            Indisponible
+          </div>
+          {result.reason && <p className="break-words text-[10px] text-slate-400">{result.reason}</p>}
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-slate-400">Grade prédit</span>
+            <span className="text-xs font-semibold text-emerald-400">{formatDRLabel(result.grade)}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-slate-400">Confiance</span>
+            <span className="text-xs text-slate-300">{(result.confidence * 100).toFixed(1)}%</span>
+          </div>
+          {probabilities.length > 0 && (
+            <div className="space-y-2 pt-2 border-t border-slate-700">
+              {probabilities.map((probability) => {
+                const percentage = Math.max(0, Math.min(100, probability.score * 100));
+                const predicted = probability.displayLabel.toLowerCase() === formatDRLabel(result.grade).toLowerCase();
+                return (
+                  <div key={probability.label} className="grid grid-cols-[82px_1fr_38px] items-center gap-2 text-[10px]">
+                    <span className={`truncate ${predicted ? "text-cyan-100" : "text-slate-400"}`}>
+                      {probability.displayLabel}
+                    </span>
+                    <div className="h-2 overflow-hidden rounded-full bg-slate-950/45">
+                      <div
+                        className={`h-full rounded-full ${predicted ? "bg-cyan-300" : "bg-slate-500"}`}
+                        style={{ width: `${percentage}%` }}
+                      />
+                    </div>
+                    <span className="text-right font-mono text-slate-400">{percentage.toFixed(0)}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+      {result.calibration_status && (
+        <p className="border-t border-slate-700 pt-1 text-[10px] text-slate-500">
+          Calibration : {result.calibration_status === "not_locally_calibrated"
+            ? "non validée localement"
+            : result.calibration_status}
+        </p>
+      )}
     </div>
   );
 }

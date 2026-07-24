@@ -24,15 +24,20 @@ class CompositeSeg(TaskConfig):
             "optic_disc": 1,
             "optic_cup": 2,
             "microaneurysms": 1,
-            "hemorrhages": 2,
-            "hard_exudates": 3,
-            "soft_exudates": 4,
+            "hard_exudates": 2,
+            "cotton_wool_spots": 3,
+            "hemorrhages": 4,
+            "neovascularization": 5,
+            "laser_scars": 6,
             "vessel": 1,
         }
 
         self.lesion_path = [
-            os.path.join(self.model_dir, "lesion_seg_ddr.pt"),
-            os.path.join(self.model_dir, "lesion_seg.pt"),
+            os.environ.get(
+                "BIGEYE_MODEL_PATH",
+                "/opt/monai/models/bigeye/deeplab_lesion_segmentation.hdf5",
+            ),
+            os.path.join(self.model_dir, "deeplab_lesion_segmentation.hdf5"),
         ]
         self.vessel_path = [
             os.path.join(self.model_dir, "vessel_seg.pt"),
@@ -42,12 +47,6 @@ class CompositeSeg(TaskConfig):
             "/opt/monai/models/vascx/fovea/fovea_may26.pt",
         )
 
-        self.lesion_network = smp.DeepLabV3Plus(
-            encoder_name="efficientnet-b3",
-            in_channels=3,
-            classes=5,
-            encoder_weights=None,
-        )
         self.vessel_network = smp.UnetPlusPlus(
             encoder_name="efficientnet-b3",
             in_channels=3,
@@ -59,13 +58,14 @@ class CompositeSeg(TaskConfig):
         task: InferTask = lib.infers.CompositeSegmenter(
             lesion_model_path=self.lesion_path,
             vessel_model_path=self.vessel_path,
-            lesion_network=self.lesion_network,
             vessel_network=self.vessel_network,
             lesion_labels={
                 "microaneurysms": 1,
-                "hemorrhages": 2,
-                "hard_exudates": 3,
-                "soft_exudates": 4,
+                "hard_exudates": 2,
+                "cotton_wool_spots": 3,
+                "hemorrhages": 4,
+                "neovascularization": 5,
+                "laser_scars": 6,
             },
             vessel_labels={"vessel": 1},
             odoc_labels={"optic_disc": 1, "optic_cup": 2},

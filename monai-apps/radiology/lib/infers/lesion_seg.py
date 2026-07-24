@@ -1,23 +1,20 @@
 import logging
 from typing import Callable, Sequence
 
+import cv2
+import numpy as np
 import torch
-from monai.inferers import Inferer, SimpleInferer
+from monai.data import MetaTensor
 from monai.transforms import (
-    Activationsd,
-    AsDiscreted,
     EnsureChannelFirstd,
     EnsureTyped,
     LoadImaged,
-    Resized,
-    ScaleIntensityRanged,
 )
 
 from monailabel.interfaces.tasks.infer_v2 import InferType
 from monailabel.tasks.infer.basic_infer import BasicInferTask
-from monailabel.transform.post import Restored
-
 from .optic_disc_cup import Ensure3ChannelRGBd, SqueezeDepthd
+from .bigeye import LESION_COLORS, LESION_NAMES, load_bigeye_model, model_metadata, predict_bigeye
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +27,7 @@ class LesionSeg(BasicInferTask):
         type=InferType.SEGMENTATION,
         labels=None,
         dimension=2,
-        description="DeepLabV3+ based retinal lesion segmentation (DDR dataset)",
+        description="BigEye DeepLab retinal lesion segmentation (six lesion classes)",
         **kwargs,
     ):
         super().__init__(
@@ -40,9 +37,16 @@ class LesionSeg(BasicInferTask):
             labels=labels,
             dimension=dimension,
             description=description,
-            load_strict=True,
+            load_strict=False,
             **kwargs,
         )
+        # Load eagerly so a missing, corrupt, or incompatible checkpoint keeps
+        # the service unhealthy instead of producing a partial lesion report.
+        self._keras_model = load_bigeye_model(self.path)
+
+    def is_valid(self) -> bool:
+        # Missing or invalid checkpoints are reported explicitly during load.
+        return True
 
     def pre_transforms(self, data=None) -> Sequence[Callable]:
         return [
@@ -51,45 +55,44 @@ class LesionSeg(BasicInferTask):
             EnsureChannelFirstd(keys="image"),
             Ensure3ChannelRGBd(keys="image"),
             SqueezeDepthd(keys="image"),
-            Resized(keys="image", spatial_size=(512, 512), mode="bilinear"),
-            ScaleIntensityRanged(keys="image", a_min=0, a_max=255, b_min=0.0, b_max=1.0, clip=True),
         ]
 
-    def inferer(self, data=None) -> Inferer:
-        return SimpleInferer()
-
     def run_inferer(self, data, convert_to_batch=True, device="cuda"):
-        inferer = self.inferer(data)
-        network = self._get_network(device, data)
-        inputs = data[self.input_key]
-        inputs = inputs if torch.is_tensor(inputs) else torch.from_numpy(inputs)
-        inputs = inputs[None] if convert_to_batch else inputs
-        inputs = inputs.to(torch.device(device))
-
-        with torch.no_grad():
-            outputs = inferer(inputs, network)
-
-        if convert_to_batch:
-            outputs = outputs[0]
-
-        data[self.output_label_key] = outputs
+        image = data[self.input_key]
+        original_shape = tuple(image.shape[-2:])
+        prediction = predict_bigeye(self._get_keras_model(), image)
+        if prediction.shape != original_shape:
+            prediction = cv2.resize(
+                prediction,
+                (original_shape[1], original_shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        meta = dict(getattr(image, "meta", {}) or {})
+        data[self.output_label_key] = MetaTensor(
+            torch.from_numpy(prediction.astype(np.uint8)), meta=meta
+        )
         data[self.output_json_key] = {
             "label_info": [
-                {"name": "microaneurysms", "color": [168, 85, 247]},
-                {"name": "hemorrhages", "color": [255, 70, 70]},
-                {"name": "hard_exudates", "color": [255, 217, 61]},
-                {"name": "soft_exudates", "color": [255, 217, 61]},
-            ]
+                {"name": LESION_NAMES[class_id], "color": list(LESION_COLORS[class_id])}
+                for class_id in range(1, 7)
+            ],
+            **model_metadata(),
         }
         return data
 
-    def inverse_transforms(self, data=None):
-        return []
+    def run_invert_transforms(self, data, pre_transforms, transforms):
+        return data
 
     def post_transforms(self, data=None) -> Sequence[Callable]:
-        return [
-            EnsureTyped(keys="pred", device=data.get("device") if data else None),
-            Activationsd(keys="pred", softmax=True),
-            AsDiscreted(keys="pred", argmax=True),
-            Restored(keys="pred", ref_image="image"),
-        ]
+        return []
+
+    def writer(self, data, extension=None, dtype=None):
+        result_file, result_json = super().writer(data, extension, dtype)
+        if self.output_json_key in data and isinstance(data[self.output_json_key], dict):
+            result_json.update(data[self.output_json_key])
+        return result_file, result_json
+
+    def _get_keras_model(self):
+        if self._keras_model is None:
+            self._keras_model = load_bigeye_model(self.path)
+        return self._keras_model

@@ -14,6 +14,8 @@ from .deepedit import DeepEdit
 from .deepseenet_plus import DeepSeeNetPlus
 from .deepgrow import Deepgrow
 from .dr_classification import DRClassification
+from .clip_dr_classification import CLIPDRClassification
+from .dino2_dr_classification import Dino2DRClassification
 from .eye_laterality import EyeLaterality
 from .fovea_detection import FoveaDetection
 from .lesion_seg import LesionSeg

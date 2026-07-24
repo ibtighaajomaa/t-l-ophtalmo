@@ -668,7 +668,8 @@ async def analyze(request: dict):
         ves_metrics = {"coverage_pct": 0.0, "pixel_count": 0}
         les_metrics = {
             "microaneurysms": 0, "hemorrhages": 0, "hard_exudates": 0,
-            "cotton_wool_spots": 0, "exudates": 0, "pixel_counts": {},
+            "cotton_wool_spots": 0, "neovascularization": 0, "laser_scars": 0,
+            "exudates": 0, "pixel_counts": {},
             "coverage_pct": 0.0,
         }
 
@@ -695,22 +696,29 @@ async def analyze(request: dict):
                     mask = np.ascontiguousarray(les_sl == class_id, dtype=np.uint8)
                     components, _ = cv2.connectedComponents(mask, connectivity=8)
                     return max(0, int(components) - 1)
-                hard_exudates = _regions(3)
-                cotton_wool_spots = _regions(4)
+                hard_exudates = _regions(2)
+                cotton_wool_spots = _regions(3)
                 any_lesion = int(np.sum(les_sl > 0))
                 les_metrics = {
                     "microaneurysms": _regions(1),
-                    "hemorrhages": _regions(2),
+                    "hemorrhages": _regions(4),
                     "hard_exudates": hard_exudates,
                     "cotton_wool_spots": cotton_wool_spots,
+                    "neovascularization": _regions(5),
+                    "laser_scars": _regions(6),
                     "exudates": hard_exudates + cotton_wool_spots,
                     "pixel_counts": {
                         "microaneurysms": int(np.sum(les_sl == 1)),
-                        "hemorrhages": int(np.sum(les_sl == 2)),
-                        "hard_exudates": int(np.sum(les_sl == 3)),
-                        "cotton_wool_spots": int(np.sum(les_sl == 4)),
+                        "hard_exudates": int(np.sum(les_sl == 2)),
+                        "cotton_wool_spots": int(np.sum(les_sl == 3)),
+                        "hemorrhages": int(np.sum(les_sl == 4)),
+                        "neovascularization": int(np.sum(les_sl == 5)),
+                        "laser_scars": int(np.sum(les_sl == 6)),
                     },
                     "coverage_pct": round(any_lesion / total * 100, 2) if total > 0 else 0.0,
+                    "model_id": "Janga-Lab/BigEye@c09dbc164507872eb7c8b7f57c91b7ba4fdd289f",
+                    "model_commit": "c09dbc164507872eb7c8b7f57c91b7ba4fdd289f",
+                    "checkpoint_sha256": "f4c3c89a4da02b84af6cc85b4ee9cd4be35bf2c836cf230b0a6d06a3805b646b",
                 }
             except Exception as e:
                 logger.error("Lesion quantification failed for slice %s: %s", i, e)
@@ -743,7 +751,8 @@ async def analyze(request: dict):
     vessel = top_slice["vessels"] if top_slice else {"coverage_pct": 0.0, "pixel_count": 0}
     lesion = top_slice["lesions"] if top_slice else {
         "microaneurysms": 0, "hemorrhages": 0, "hard_exudates": 0,
-        "cotton_wool_spots": 0, "exudates": 0, "pixel_counts": {},
+        "cotton_wool_spots": 0, "neovascularization": 0, "laser_scars": 0,
+        "exudates": 0, "pixel_counts": {},
         "coverage_pct": 0.0,
     }
 
@@ -915,7 +924,8 @@ async def analyze(request: dict):
         if data is None:
             return {
                 "microaneurysms": 0, "hemorrhages": 0, "hard_exudates": 0,
-                "cotton_wool_spots": 0, "exudates": 0, "pixel_counts": {},
+                "cotton_wool_spots": 0, "neovascularization": 0, "laser_scars": 0,
+                "exudates": 0, "pixel_counts": {},
                 "coverage_pct": 0.0,
             }
         import cv2
@@ -925,21 +935,28 @@ async def analyze(request: dict):
             mask = np.ascontiguousarray(data == class_id, dtype=np.uint8)
             components, _ = cv2.connectedComponents(mask, connectivity=8)
             return max(0, int(components) - 1)
-        hard_exudates = _regions(3)
-        cotton_wool_spots = _regions(4)
+        hard_exudates = _regions(2)
+        cotton_wool_spots = _regions(3)
         return {
             "microaneurysms": _regions(1),
-            "hemorrhages": _regions(2),
+            "hemorrhages": _regions(4),
             "hard_exudates": hard_exudates,
             "cotton_wool_spots": cotton_wool_spots,
+            "neovascularization": _regions(5),
+            "laser_scars": _regions(6),
             "exudates": hard_exudates + cotton_wool_spots,
             "pixel_counts": {
                 "microaneurysms": int(np.sum(data == 1)),
-                "hemorrhages": int(np.sum(data == 2)),
-                "hard_exudates": int(np.sum(data == 3)),
-                "cotton_wool_spots": int(np.sum(data == 4)),
+                "hard_exudates": int(np.sum(data == 2)),
+                "cotton_wool_spots": int(np.sum(data == 3)),
+                "hemorrhages": int(np.sum(data == 4)),
+                "neovascularization": int(np.sum(data == 5)),
+                "laser_scars": int(np.sum(data == 6)),
             },
             "coverage_pct": round(any_lesion / total * 100, 2) if total else 0.0,
+            "model_id": "Janga-Lab/BigEye@c09dbc164507872eb7c8b7f57c91b7ba4fdd289f",
+            "model_commit": "c09dbc164507872eb7c8b7f57c91b7ba4fdd289f",
+            "checkpoint_sha256": "f4c3c89a4da02b84af6cc85b4ee9cd4be35bf2c836cf230b0a6d06a3805b646b",
         }
 
     def _severity(dr_info, glaucoma):
@@ -970,8 +987,29 @@ async def analyze(request: dict):
             "confidence": float(confidence or 0.0),
             "probabilities": probabilities,
         }
-        if "dr_grade" in params:
-            dr_info["grade_index"] = params.get("dr_grade")
+        if "dr_grade" in params and params.get("dr_grade") is not None:
+            dr_info["grade_index"] = int(params["dr_grade"])
+        else:
+            normalized_grade = str(raw_grade).strip().lower().replace("_", " ")
+            dr_info["grade_index"] = next(
+                (
+                    index
+                    for marker, index in (
+                        ("proliferative", 4), ("severe", 3), ("moderate", 2),
+                        ("mild", 1), ("no dr", 0), ("normal", 0),
+                    )
+                    if marker in normalized_grade
+                ),
+                None,
+            )
+        for key in (
+            "status", "model_id", "model_commit", "backbone", "backbone_revision",
+            "checkpoint_name", "checkpoint_sha256",
+            "calibration_status", "temperature", "preprocessing_version",
+            "inference_time_ms", "device",
+        ):
+            if key in params:
+                dr_info[key] = params[key]
         return dr_info
 
     def _run_model(model, extra=None):
@@ -1009,6 +1047,76 @@ async def analyze(request: dict):
         dr = _normalize_dr(params)
     except Exception as e:
         logger.error("Analyze DR classification failed: %s", e)
+
+    vit_current = {"status": "ok" if dr.get("grade") != "Unknown" else "unavailable", **dr}
+    clip_dr = {
+        "status": "unavailable",
+        "grade": "Unknown",
+        "confidence": 0.0,
+        "probabilities": {},
+        "calibration_status": "not_locally_calibrated",
+    }
+    try:
+        clip_result = _run_model(
+            "clip_dr_classification",
+            {"result_extension": ".json", "device": "cpu"},
+        )
+        clip_dr = _normalize_dr(clip_result.get("params") or {})
+        clip_dr.setdefault("status", "ok")
+        clip_dr.setdefault("calibration_status", "not_locally_calibrated")
+    except Exception as e:
+        logger.warning("Analyze CLIP-DR unavailable; canonical ViT is preserved: %s", e)
+        message = str(e)
+        clip_dr["reason"] = (
+            "checkpoint CLIP-DR APTOS non installé"
+            if isinstance(e, FileNotFoundError) or "not installed" in message.lower()
+            or "non installé" in message.lower()
+            else message[:240]
+        )
+
+    dino2_dr = {
+        "status": "unavailable",
+        "grade": "Unknown",
+        "confidence": 0.0,
+        "probabilities": {},
+        "calibration_status": "not_locally_calibrated",
+    }
+    try:
+        dino_result = _run_model(
+            "dino2_dr_classification",
+            {"result_extension": ".json", "device": "cpu"},
+        )
+        dino2_dr = _normalize_dr(dino_result.get("params") or {})
+        dino2_dr.setdefault("status", "ok")
+        dino2_dr.setdefault("calibration_status", "not_locally_calibrated")
+    except Exception as e:
+        logger.warning("Analyze Dino2-DR unavailable; canonical ViT is preserved: %s", e)
+        message = str(e)
+        dino2_dr["reason"] = (
+            "checkpoint spécialisé Dino2-DR FSMT officiel non installé"
+            if isinstance(e, FileNotFoundError) or "not installed" in message.lower()
+            or "non installé" in message.lower()
+            else message[:240]
+        )
+
+    vit_index = vit_current.get("grade_index")
+    clip_index = clip_dr.get("grade_index")
+    dino_index = dino2_dr.get("grade_index")
+    dr_model_comparison = {
+        "concordant": vit_index == clip_index
+        if vit_index is not None and clip_index is not None else None,
+        "grade_difference": abs(int(vit_index) - int(clip_index))
+        if vit_index is not None and clip_index is not None else None,
+        "dino2_dr_concordant": vit_index == dino_index
+        if vit_index is not None and dino_index is not None else None,
+        "dino2_dr_grade_difference": abs(int(vit_index) - int(dino_index))
+        if vit_index is not None and dino_index is not None else None,
+    }
+    dr_classification_models = {
+        "vit_current": vit_current,
+        "clip_dr": clip_dr,
+        "dino2_dr": dino2_dr,
+    }
 
     fovea = None
     try:
@@ -1179,6 +1287,8 @@ async def analyze(request: dict):
         "index": 0,
         "source_sop_instance_uid": source_sop_uid,
         "dr_classification": dr,
+        "dr_classification_models": dr_classification_models,
+        "dr_model_comparison": dr_model_comparison,
         "optic_disc_cup": optic,
         "glaucoma": glaucoma,
         "vessels": vessels,
@@ -1196,6 +1306,8 @@ async def analyze(request: dict):
             "source_sop_instance_uid": source_sop_uid,
         },
         "dr_classification": dr,
+        "dr_classification_models": dr_classification_models,
+        "dr_model_comparison": dr_model_comparison,
         "lesions": lesions,
         "optic_disc_cup": optic,
         "glaucoma": glaucoma,
@@ -2666,6 +2778,35 @@ if os.path.exists(INFER):
         print("infer.py: Patch 22 already applied")
 else:
     print(f"WARNING: infer.py not found for Patch 22: {INFER}")
+
+# Patch 23: Match DICOM segment metadata by the actual numeric label value.
+# MONAI's upstream converter uses the position in unique_labels, which shifts
+# names/colors whenever a lower-numbered lesion class is absent.
+PATCH23_MARKER = "OHIF SEG: map metadata by numeric label"
+if os.path.exists(CONVERT):
+    with open(CONVERT) as f:
+        content = f.read()
+
+    if PATCH23_MARKER not in content:
+        old_label_info23 = '''        info = label_info[i] if label_info and i < len(label_info) else {}
+        name = info.get("name", "unknown")'''
+        new_label_info23 = '''        # OHIF SEG: map metadata by numeric label
+        info_index = int(idx) - 1
+        info = label_info[info_index] if label_info and 0 <= info_index < len(label_info) else {}
+        name = info.get("name", "unknown")'''
+        if old_label_info23 in content:
+            content = content.replace(old_label_info23, new_label_info23, 1)
+            with open(CONVERT, "w") as f:
+                f.write(content)
+            print("convert.py Patch 23: numeric label metadata mapping applied")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 23 — label metadata loop not found in convert.py")
+    else:
+        patches_applied = True
+        print("convert.py: Patch 23 already applied")
+else:
+    print(f"WARNING: convert.py not found for Patch 23: {CONVERT}")
 
 
 if not patches_applied:

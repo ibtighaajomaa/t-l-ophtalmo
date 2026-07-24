@@ -119,6 +119,7 @@ services:
       DMI_API_TOKEN: ${DMI_API_TOKEN:-test-dmi-secret-change-in-production}
     volumes:
       - ./monai-label/cache:/root/.cache/monailabel
+      - ./monai-label/cache/clip:/root/.cache/clip:ro
     depends_on:
       - postgres-django
       - keycloak
@@ -356,16 +357,18 @@ services:
       - monai-studies:/opt/monai/studies
       - ./monai-apps/patch_monailabel.py:/opt/monai/apps/patch_monailabel.py
       - ./monai-label/models/vascx:/opt/monai/models/vascx:ro
+      - ./monai-label/models/bigeye:/opt/monai/models/bigeye:ro
+      - ./monai-label/models/clip-dr:/opt/monai/models/clip-dr:ro
+      - ./monai-label/models/dino2-dr:/opt/monai/models/dino2-dr:ro
       - ./deepseenet-plus/models:/opt/monai/models/deepseenet-plus:ro
       - ./monai-label/cache:/root/.cache/monailabel
       - ./monai-label/output:/output
     command: >
-      sh -c "pip3 install -q transformers segmentation_models_pytorch tensorflow-cpu keras 'numpy==1.26.4' 'opencv-python-headless==4.11.0.86' 2>/dev/null;
-      python3 /opt/monai/apps/patch_monailabel.py &&
+      sh -c "python3 /opt/monai/apps/patch_monailabel.py &&
       monailabel start_server
       --app /opt/monai/apps/radiology
       --studies http://orthanc-container:8042/dicom-web
-      --conf models eye_laterality,fovea_detection,deepseenet_plus,optic_disc_cup,vessel_seg,lesion_seg,dr_classification,composite_seg
+      --conf models eye_laterality,fovea_detection,deepseenet_plus,optic_disc_cup,vessel_seg,lesion_seg,dr_classification,clip_dr_classification,dino2_dr_classification,composite_seg
       --conf sam2 false
       --host 0.0.0.0
       --port 8000
@@ -374,6 +377,13 @@ services:
       MONAI_LABEL_DICOMWEB_SEARCH_FILTER: "{}"
       VASCX_FOVEA_MODEL_PATH: /opt/monai/models/vascx/fovea/fovea_may26.pt
       DEEPSEENET_MODEL_FOLDER: /opt/monai/models/deepseenet-plus
+      BIGEYE_MODEL_PATH: /opt/monai/models/bigeye/deeplab_lesion_segmentation.hdf5
+      CLIP_DR_CHECKPOINT_PATH: /opt/monai/models/clip-dr/APTOS.ckpt
+      CLIP_DR_CHECKPOINT_SHA256: e787ba51e334f7038c57e72b49e13c60e507f8de543df88180daab55d0e96fd5
+      CLIP_DR_TEMPERATURE: ${CLIP_DR_TEMPERATURE:-1.0}
+      CLIP_DR_CALIBRATION_STATUS: ${CLIP_DR_CALIBRATION_STATUS:-not_locally_calibrated}
+      DINO2_DR_CHECKPOINT_PATH: /opt/monai/models/dino2-dr/dino2_dr_fsmt.pth
+      DINO2_DR_CHECKPOINT_SHA256: ${DINO2_DR_CHECKPOINT_SHA256:-}
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/', timeout=3).read()\""]
       interval: 15s

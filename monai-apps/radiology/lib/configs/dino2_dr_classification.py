@@ -1,4 +1,3 @@
-import logging
 import os
 from typing import Any, Dict, Optional, Union
 
@@ -9,40 +8,28 @@ from monailabel.interfaces.tasks.scoring import ScoringMethod
 from monailabel.interfaces.tasks.strategy import Strategy
 from monailabel.interfaces.tasks.train import TrainTask
 
-logger = logging.getLogger(__name__)
 
-
-class LesionSeg(TaskConfig):
-    def __init__(self):
-        super().__init__()
-
+class Dino2DRClassification(TaskConfig):
     def init(self, name: str, model_dir: str, conf: Dict[str, str], planner: Any, **kwargs):
         super().init(name, model_dir, conf, planner, **kwargs)
-
         self.labels = {
-            "microaneurysms": 1,
-            "hard_exudates": 2,
-            "cotton_wool_spots": 3,
-            "hemorrhages": 4,
-            "neovascularization": 5,
-            "laser_scars": 6,
+            "no_dr": 0,
+            "mild_npdr": 1,
+            "moderate_npdr": 2,
+            "severe_npdr": 3,
+            "proliferative_dr": 4,
         }
         self.path = [
             os.environ.get(
-                "BIGEYE_MODEL_PATH",
-                "/opt/monai/models/bigeye/deeplab_lesion_segmentation.hdf5",
-            ),
-            os.path.join(self.model_dir, "deeplab_lesion_segmentation.hdf5"),
+                "DINO2_DR_CHECKPOINT_PATH",
+                "/opt/monai/models/dino2-dr/dino2_dr_fsmt.pth",
+            )
         ]
 
     def infer(self) -> Union[InferTask, Dict[str, InferTask]]:
-        task: InferTask = lib.infers.LesionSeg(
-            path=self.path,
-            network=None,
-            labels=self.labels,
-            preload=strtobool(self.conf.get("preload", "false")),
+        return lib.infers.Dino2DRClassification(
+            path=self.path, network=None, labels=self.labels, preload=False
         )
-        return task
 
     def trainer(self) -> Optional[TrainTask]:
         return None
@@ -52,7 +39,3 @@ class LesionSeg(TaskConfig):
 
     def scoring_method(self) -> Union[None, ScoringMethod, Dict[str, ScoringMethod]]:
         return None
-
-
-def strtobool(val):
-    return val.lower() in ("true", "1", "yes") if isinstance(val, str) else bool(val)

@@ -8,3 +8,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+numpy==1.26.4
+opencv-python-headless==4.11.0.86
+tensorflow-cpu==2.15.1
+keras==2.15.0
+h5py

@@ -346,13 +346,35 @@ export interface LesionMetrics {
   exudates: number;
   hard_exudates?: number;
   cotton_wool_spots?: number;
+  neovascularization?: number;
+  laser_scars?: number;
   pixel_counts?: {
     microaneurysms: number;
     hemorrhages: number;
     hard_exudates: number;
     cotton_wool_spots: number;
+    neovascularization: number;
+    laser_scars: number;
   };
   coverage_pct: number;
+}
+
+export interface DRModelResult {
+  status: "ok" | "unavailable";
+  grade: string;
+  grade_index?: number | null;
+  confidence: number;
+  probabilities: DRProbabilities;
+  calibration_status?: string;
+  reason?: string;
+  inference_time_ms?: number;
+}
+
+export interface DRModelComparison {
+  concordant: boolean | null;
+  grade_difference: number | null;
+  dino2_dr_concordant?: boolean | null;
+  dino2_dr_grade_difference?: number | null;
 }
 
 export interface DeepSeeNetFactor {
@@ -388,6 +410,12 @@ export interface PerInstanceResult {
   lesions: LesionMetrics;
   severity_score: number;
   dr_classification?: { grade: string; confidence: number; probabilities: DRProbabilities };
+  dr_classification_models?: {
+    vit_current: DRModelResult;
+    clip_dr: DRModelResult;
+    dino2_dr?: DRModelResult;
+  };
+  dr_model_comparison?: DRModelComparison;
   gradcam_image?: string | null;
   clahe_image?: string | null;
   fovea?: FoveaLocation | null;
@@ -397,6 +425,12 @@ export interface CriticalEyeAnalysis {
   index: number;
   severity_score: number;
   dr_classification: { grade: string; confidence: number; probabilities: DRProbabilities };
+  dr_classification_models?: {
+    vit_current: DRModelResult;
+    clip_dr: DRModelResult;
+    dino2_dr?: DRModelResult;
+  };
+  dr_model_comparison?: DRModelComparison;
   lesions: LesionMetrics;
   glaucoma: PerEyeGlaucoma;
   optic_disc_cup: PerEyeMetrics;
@@ -412,6 +446,12 @@ export interface AnalysisResult {
     confidence: number;
     probabilities: DRProbabilities;
   };
+  dr_classification_models?: {
+    vit_current: DRModelResult;
+    clip_dr: DRModelResult;
+    dino2_dr?: DRModelResult;
+  };
+  dr_model_comparison?: DRModelComparison;
   lesions: LesionMetrics;
   optic_disc_cup: {
     disc_area_px: number;

@@ -20,22 +20,15 @@ from monailabel.interfaces.tasks.infer_v2 import InferTask, InferType
 from monailabel.utils.others.generic import device_list
 from transformers import SegformerForSemanticSegmentation, AutoImageProcessor
 from .fovea_detection import detect_fovea_rgb, loaded_image_to_rgb
+from .bigeye import (
+    LESION_COLORS,
+    LESION_NAMES,
+    load_bigeye_model,
+    model_metadata,
+    predict_bigeye,
+)
 
 logger = logging.getLogger(__name__)
-
-LESION_COLORS = {
-    1: (168, 85, 247),
-    2: (255, 70, 70),
-    3: (255, 217, 61),
-    4: (255, 217, 61),
-}
-
-LESION_NAMES = {
-    1: "microaneurysms",
-    2: "hemorrhages",
-    3: "hard_exudates",
-    4: "soft_exudates",
-}
 
 OD_OC_COLORS = {
     1: (0, 255, 0),
@@ -52,7 +45,6 @@ class CompositeSegmenter(InferTask):
         self,
         lesion_model_path: Union[str, Sequence[str]],
         vessel_model_path: Union[str, Sequence[str]],
-        lesion_network: torch.nn.Module,
         vessel_network: torch.nn.Module,
         lesion_labels: Dict[Any, Any],
         vessel_labels: Dict[Any, Any],
@@ -68,7 +60,6 @@ class CompositeSegmenter(InferTask):
         )
         self.lesion_model_path = lesion_model_path if isinstance(lesion_model_path, list) else [lesion_model_path]
         self.vessel_model_path = vessel_model_path if isinstance(vessel_model_path, list) else [vessel_model_path]
-        self.lesion_network = lesion_network
         self.vessel_network = vessel_network
         self.lesion_labels = lesion_labels
         self.vessel_labels = vessel_labels
@@ -77,6 +68,7 @@ class CompositeSegmenter(InferTask):
 
         self._odoc_model = None
         self._odoc_processor = None
+        self._lesion_model = None
 
         if preload:
             for device in device_list():
@@ -114,7 +106,9 @@ class CompositeSegmenter(InferTask):
     def _load_models(self, device):
         logger.info("Loading all models for composite segmentation")
         odoc = self._load_odoc(device)
-        lesion = self._load_checkpoint(self.lesion_model_path, self.lesion_network, device)
+        if self._lesion_model is None:
+            self._lesion_model = load_bigeye_model(self.lesion_model_path)
+        lesion = self._lesion_model
         vessel = self._load_checkpoint(self.vessel_model_path, self.vessel_network, device)
         return odoc, lesion, vessel
 
@@ -166,14 +160,7 @@ class CompositeSegmenter(InferTask):
         return pred
 
     def _run_lesion(self, image_np: np.ndarray, model, device):
-        if model is None:
-            h, w = image_np.shape[1], image_np.shape[2]
-            return np.zeros((h, w), dtype=np.int64)
-        tensor = torch.from_numpy(image_np).unsqueeze(0).float().to(device)
-        with torch.no_grad():
-            logits = model(tensor).cpu().numpy()[0]
-        pred = np.argmax(logits, axis=0)
-        return pred
+        return predict_bigeye(model, image_np)
 
     def _run_vessel(self, image_np: np.ndarray, model, device):
         if model is None:
@@ -306,7 +293,7 @@ class CompositeSegmenter(InferTask):
         # Lesion stats
         lesion_stats = {}
         total_pixels = lesion_pred.size
-        for cls_id in range(1, 5):
+        for cls_id in range(1, 7):
             mask = (lesion_pred == cls_id).astype(np.uint8)
             px = int(mask.sum())
             lesion_stats[str(cls_id)] = {
@@ -355,10 +342,11 @@ class CompositeSegmenter(InferTask):
             "fovea": fovea,
             "model_status": {
                 "odoc": "loaded",
-                "lesion": "loaded" if lesion_model is not None else "not_found",
+                "lesion": "loaded",
                 "vessel": "loaded" if vessel_model is not None else "not_found",
                 "fovea": "loaded" if fovea is not None else f"failed: {fovea_error}",
             },
+            "lesion_model": model_metadata(),
         }
 
         return None, result_json
