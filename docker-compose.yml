@@ -357,7 +357,6 @@ services:
       - monai-studies:/opt/monai/studies
       - ./monai-apps/patch_monailabel.py:/opt/monai/apps/patch_monailabel.py
       - ./monai-label/models/vascx:/opt/monai/models/vascx:ro
-      - ./monai-label/models/bigeye:/opt/monai/models/bigeye:ro
       - ./monai-label/models/clip-dr:/opt/monai/models/clip-dr:ro
       - ./deepseenet-plus/models:/opt/monai/models/deepseenet-plus:ro
       - ./monai-label/cache:/root/.cache/monailabel
@@ -376,7 +375,6 @@ services:
       MONAI_LABEL_DICOMWEB_SEARCH_FILTER: "{}"
       VASCX_FOVEA_MODEL_PATH: /opt/monai/models/vascx/fovea/fovea_may26.pt
       DEEPSEENET_MODEL_FOLDER: /opt/monai/models/deepseenet-plus
-      BIGEYE_MODEL_PATH: /opt/monai/models/bigeye/deeplab_lesion_segmentation.hdf5
       CLIP_DR_CHECKPOINT_PATH: /opt/monai/models/clip-dr/APTOS.ckpt
       CLIP_DR_CHECKPOINT_SHA256: e787ba51e334f7038c57e72b49e13c60e507f8de543df88180daab55d0e96fd5
       CLIP_DR_TEMPERATURE: ${CLIP_DR_TEMPERATURE:-1.0}

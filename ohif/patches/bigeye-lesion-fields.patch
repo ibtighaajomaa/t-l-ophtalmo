@@ -1,7 +1,7 @@
 diff --git a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
 --- a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
 +++ b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
-@@ -858,6 +858,14 @@
+@@ -858,6 +858,12 @@
                <span className="label">Cotton-wool spots</span>
                <span className="value">{lesions.cotton_wool_spots ?? 0}</span>
              </div>
@@ -14,5 +14,3 @@ diff --git a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPane
 +              <span className="value">{lesions.laser_scars ?? 0}</span>
 +            </div>
              {lesions.coverage_pct !== undefined && (
-               <div className="row">
-                 <span className="label">Coverage</span>

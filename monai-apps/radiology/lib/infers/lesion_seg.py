@@ -9,12 +9,13 @@ from monai.transforms import (
     EnsureChannelFirstd,
     EnsureTyped,
     LoadImaged,
+    Resized,
+    ScaleIntensityRanged,
 )
 
 from monailabel.interfaces.tasks.infer_v2 import InferType
 from monailabel.tasks.infer.basic_infer import BasicInferTask
 from .optic_disc_cup import Ensure3ChannelRGBd, SqueezeDepthd
-from .bigeye import LESION_COLORS, LESION_NAMES, load_bigeye_model, model_metadata, predict_bigeye
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ class LesionSeg(BasicInferTask):
         type=InferType.SEGMENTATION,
         labels=None,
         dimension=2,
-        description="BigEye DeepLab retinal lesion segmentation (six lesion classes)",
+        description="DDR DeepLabV3+ EfficientNet-B3 retinal lesion segmentation",
         **kwargs,
     ):
         super().__init__(
@@ -40,9 +41,6 @@ class LesionSeg(BasicInferTask):
             load_strict=False,
             **kwargs,
         )
-        # Load eagerly so a missing, corrupt, or incompatible checkpoint keeps
-        # the service unhealthy instead of producing a partial lesion report.
-        self._keras_model = load_bigeye_model(self.path)
 
     def is_valid(self) -> bool:
         # Missing or invalid checkpoints are reported explicitly during load.
@@ -55,12 +53,19 @@ class LesionSeg(BasicInferTask):
             EnsureChannelFirstd(keys="image"),
             Ensure3ChannelRGBd(keys="image"),
             SqueezeDepthd(keys="image"),
+            Resized(keys="image", spatial_size=(512, 512), mode="bilinear"),
+            ScaleIntensityRanged(keys="image", a_min=0, a_max=255, b_min=0.0, b_max=1.0, clip=True),
         ]
 
     def run_inferer(self, data, convert_to_batch=True, device="cuda"):
         image = data[self.input_key]
         original_shape = tuple(image.shape[-2:])
-        prediction = predict_bigeye(self._get_keras_model(), image)
+        network = self._get_network(device, data)
+        inputs = image if torch.is_tensor(image) else torch.as_tensor(image)
+        inputs = inputs.unsqueeze(0) if convert_to_batch else inputs
+        with torch.no_grad():
+            logits = network(inputs.to(torch.device(device)))
+            prediction = torch.softmax(logits, dim=1).argmax(dim=1)[0].cpu().numpy().astype(np.uint8)
         if prediction.shape != original_shape:
             prediction = cv2.resize(
                 prediction,
@@ -73,10 +78,14 @@ class LesionSeg(BasicInferTask):
         )
         data[self.output_json_key] = {
             "label_info": [
-                {"name": LESION_NAMES[class_id], "color": list(LESION_COLORS[class_id])}
-                for class_id in range(1, 7)
+                {"name": "microaneurysms", "color": [255, 50, 50]},
+                {"name": "hemorrhages", "color": [50, 50, 255]},
+                {"name": "hard_exudates", "color": [160, 160, 160]},
+                {"name": "soft_exudates", "color": [0, 255, 0]},
             ],
-            **model_metadata(),
+            "model_id": "DDR-DeepLabV3Plus-EfficientNetB3",
+            "dataset": "DDR",
+            "preprocessing": "512x512 RGB, intensity scaled to [0,1]",
         }
         return data
 
@@ -91,8 +100,3 @@ class LesionSeg(BasicInferTask):
         if self.output_json_key in data and isinstance(data[self.output_json_key], dict):
             result_json.update(data[self.output_json_key])
         return result_file, result_json
-
-    def _get_keras_model(self):
-        if self._keras_model is None:
-            self._keras_model = load_bigeye_model(self.path)
-        return self._keras_model

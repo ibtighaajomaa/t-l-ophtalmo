@@ -111,7 +111,7 @@ async def analyze(request: dict):
         if data is None:
             return {
                 "microaneurysms": 0, "hemorrhages": 0, "hard_exudates": 0,
-                "cotton_wool_spots": 0, "neovascularization": 0, "laser_scars": 0,
+                "soft_exudates": 0,
                 "exudates": 0, "pixel_counts": {},
                 "coverage_pct": 0.0,
             }
@@ -122,26 +122,22 @@ async def analyze(request: dict):
             mask = np.ascontiguousarray(data == class_id, dtype=np.uint8)
             components, _ = cv2.connectedComponents(mask, connectivity=8)
             return max(0, int(components) - 1)
-        hard_exudates = _regions(2)
-        cotton_wool_spots = _regions(3)
+        hard_exudates = _regions(3)
+        soft_exudates = _regions(4)
         return {
             "microaneurysms": _regions(1),
-            "hemorrhages": _regions(4),
+            "hemorrhages": _regions(2),
             "hard_exudates": hard_exudates,
-            "cotton_wool_spots": cotton_wool_spots,
-            "neovascularization": _regions(5),
-            "laser_scars": _regions(6),
-            "exudates": hard_exudates + cotton_wool_spots,
+            "soft_exudates": soft_exudates,
+            "exudates": hard_exudates + soft_exudates,
             "pixel_counts": {
                 "microaneurysms": int(np.sum(data == 1)),
-                "hard_exudates": int(np.sum(data == 2)),
-                "cotton_wool_spots": int(np.sum(data == 3)),
-                "hemorrhages": int(np.sum(data == 4)),
-                "neovascularization": int(np.sum(data == 5)),
-                "laser_scars": int(np.sum(data == 6)),
+                "hard_exudates": int(np.sum(data == 3)),
+                "soft_exudates": int(np.sum(data == 4)),
+                "hemorrhages": int(np.sum(data == 2)),
             },
             "coverage_pct": round(any_lesion / total * 100, 2) if total else 0.0,
-            "model_id": "Janga-Lab/BigEye@c09dbc164507872eb7c8b7f57c91b7ba4fdd289f",
+            "model_id": "DDR-DeepLabV3Plus-EfficientNetB3",
             "model_commit": "c09dbc164507872eb7c8b7f57c91b7ba4fdd289f",
             "checkpoint_sha256": "f4c3c89a4da02b84af6cc85b4ee9cd4be35bf2c836cf230b0a6d06a3805b646b",
         }

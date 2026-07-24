@@ -3,6 +3,7 @@ import os
 from typing import Any, Dict, Optional, Union
 
 import lib.infers
+import segmentation_models_pytorch as smp
 from monailabel.interfaces.config import TaskConfig
 from monailabel.interfaces.tasks.infer_v2 import InferTask
 from monailabel.interfaces.tasks.scoring import ScoringMethod
@@ -21,24 +22,25 @@ class LesionSeg(TaskConfig):
 
         self.labels = {
             "microaneurysms": 1,
-            "hard_exudates": 2,
-            "cotton_wool_spots": 3,
-            "hemorrhages": 4,
-            "neovascularization": 5,
-            "laser_scars": 6,
+            "hemorrhages": 2,
+            "hard_exudates": 3,
+            "soft_exudates": 4,
         }
         self.path = [
-            os.environ.get(
-                "BIGEYE_MODEL_PATH",
-                "/opt/monai/models/bigeye/deeplab_lesion_segmentation.hdf5",
-            ),
-            os.path.join(self.model_dir, "deeplab_lesion_segmentation.hdf5"),
+            os.environ.get("LESION_SEG_MODEL_PATH", "/opt/monai/apps/radiology/model/lesion_seg_ddr.pt"),
+            os.path.join(self.model_dir, "lesion_seg_ddr.pt"),
         ]
+        self.network = smp.DeepLabV3Plus(
+            encoder_name="efficientnet-b3",
+            in_channels=3,
+            classes=5,
+            encoder_weights=None,
+        )
 
     def infer(self) -> Union[InferTask, Dict[str, InferTask]]:
         task: InferTask = lib.infers.LesionSeg(
             path=self.path,
-            network=None,
+            network=self.network,
             labels=self.labels,
             preload=strtobool(self.conf.get("preload", "false")),
         )

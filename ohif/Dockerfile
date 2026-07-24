@@ -25,13 +25,6 @@ COPY ohif/extensions/iframe-bridge /sources/Viewers/extensions/iframe-bridge
 COPY MONAILabel/plugins/ohifv3/extensions/monai-label /sources/MONAILabel/plugins/ohifv3/extensions/monai-label
 COPY MONAILabel/plugins/ohifv3/modes/monai-label /sources/MONAILabel/plugins/ohifv3/modes/monai-label
 
-# Show the two additional BigEye lesion classes in the analysis panel.
-COPY ohif/patches/bigeye-lesion-fields.patch /tmp/bigeye-lesion-fields.patch
-RUN cd /sources/MONAILabel && \
-    (git apply --check /tmp/bigeye-lesion-fields.patch && \
-     git apply /tmp/bigeye-lesion-fields.patch || \
-     git apply --reverse --check /tmp/bigeye-lesion-fields.patch)
-
 # Keep per-eye reports isolated and reserve the bottom editor for the bilateral summary.
 COPY ohif/patches/per-eye-report-isolation.patch /tmp/per-eye-report-isolation.patch
 RUN cd /sources/MONAILabel && \

@@ -20,13 +20,10 @@ from monailabel.interfaces.tasks.infer_v2 import InferTask, InferType
 from monailabel.utils.others.generic import device_list
 from transformers import SegformerForSemanticSegmentation, AutoImageProcessor
 from .fovea_detection import detect_fovea_rgb, loaded_image_to_rgb
-from .bigeye import (
-    LESION_COLORS,
-    LESION_NAMES,
-    load_bigeye_model,
-    model_metadata,
-    predict_bigeye,
-)
+LESION_NAMES = {1: "microaneurysms", 2: "hemorrhages", 3: "hard_exudates", 4: "soft_exudates"}
+LESION_COLORS = {
+    1: (255, 50, 50), 2: (50, 50, 255), 3: (160, 160, 160), 4: (0, 255, 0)
+}
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +43,7 @@ class CompositeSegmenter(InferTask):
         lesion_model_path: Union[str, Sequence[str]],
         vessel_model_path: Union[str, Sequence[str]],
         vessel_network: torch.nn.Module,
+        lesion_network: torch.nn.Module,
         lesion_labels: Dict[Any, Any],
         vessel_labels: Dict[Any, Any],
         odoc_labels: Dict[Any, Any],
@@ -61,6 +59,7 @@ class CompositeSegmenter(InferTask):
         self.lesion_model_path = lesion_model_path if isinstance(lesion_model_path, list) else [lesion_model_path]
         self.vessel_model_path = vessel_model_path if isinstance(vessel_model_path, list) else [vessel_model_path]
         self.vessel_network = vessel_network
+        self.lesion_network = lesion_network
         self.lesion_labels = lesion_labels
         self.vessel_labels = vessel_labels
         self.odoc_labels = odoc_labels
@@ -107,7 +106,7 @@ class CompositeSegmenter(InferTask):
         logger.info("Loading all models for composite segmentation")
         odoc = self._load_odoc(device)
         if self._lesion_model is None:
-            self._lesion_model = load_bigeye_model(self.lesion_model_path)
+            self._lesion_model = self._load_checkpoint(self.lesion_model_path, self.lesion_network, device)
         lesion = self._lesion_model
         vessel = self._load_checkpoint(self.vessel_model_path, self.vessel_network, device)
         return odoc, lesion, vessel
@@ -131,6 +130,11 @@ class CompositeSegmenter(InferTask):
             img = np.repeat(img, 3, axis=0)
         while img.ndim > 3 and img.shape[-1] == 1:
             img = img.squeeze(-1)
+        # MONAI loads a multi-instance OP series as C×H×W×N. The composite
+        # models operate on one 2D fundus photograph at a time, matching the
+        # source image selected in OHIF.
+        if img.ndim > 3 and img.shape[0] in (1, 3, 4):
+            img = img.reshape(img.shape[0], img.shape[1], img.shape[2], -1)[..., 0]
         return img
 
     def _preprocess(self, image: np.ndarray, size=512):
@@ -143,7 +147,10 @@ class CompositeSegmenter(InferTask):
         data = {"image": img}
         data = scale(data)
         data = resized(data)
-        return data["image"]
+        processed = data["image"]
+        if isinstance(processed, torch.Tensor):
+            processed = processed.detach().cpu().numpy()
+        return np.asarray(processed)
 
     def _run_odoc(self, image_np: np.ndarray, device):
         model = self._load_odoc(device)
@@ -160,7 +167,11 @@ class CompositeSegmenter(InferTask):
         return pred
 
     def _run_lesion(self, image_np: np.ndarray, model, device):
-        return predict_bigeye(model, image_np)
+        if model is None:
+            return np.zeros(image_np.shape[1:], dtype=np.uint8)
+        tensor = torch.from_numpy(image_np).unsqueeze(0).float().to(device)
+        with torch.no_grad():
+            return torch.softmax(model(tensor), dim=1).argmax(dim=1)[0].cpu().numpy().astype(np.uint8)
 
     def _run_vessel(self, image_np: np.ndarray, model, device):
         if model is None:
@@ -346,7 +357,10 @@ class CompositeSegmenter(InferTask):
                 "vessel": "loaded" if vessel_model is not None else "not_found",
                 "fovea": "loaded" if fovea is not None else f"failed: {fovea_error}",
             },
-            "lesion_model": model_metadata(),
+            "lesion_model": {
+                "model_id": "DDR-DeepLabV3Plus-EfficientNetB3",
+                "dataset": "DDR",
+            },
         }
 
         return None, result_json

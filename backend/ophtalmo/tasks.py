@@ -446,6 +446,14 @@ def _collect_op_series(orthanc_url, orthanc_study_id):
         tags = series.get('MainDicomTags', {}) or {}
         if str(tags.get('Modality', '')).upper() != 'OP':
             continue
+        # Lesion segmentation is trained on true color fundus photographs. Opacity-
+        # suppression/infrared OP series produce large false-positive masks
+        # and must not enter the lesion/DR analysis pipeline.
+        protocol = str(tags.get('ProtocolName', '') or '').lower()
+        description = str(tags.get('SeriesDescription', '') or '').lower()
+        if 'opacitysuppression' in protocol or 'opacitysuppression' in description:
+            logger.info("[OPSeries] Skipping non-color series %s (%s)", sid, description)
+            continue
         series_uid = tags.get('SeriesInstanceUID')
         if not series_uid:
             logger.warning("[OPSeries] Skipping OP series %s without SeriesInstanceUID", sid)
@@ -1844,7 +1852,7 @@ def tache_auto_segmentation(exam_id=None):
                             json={
                                 "image": op_series_uid,
                                 "run_segmentation": True,
-                                "push_dicom_seg": False,
+                                "push_dicom_seg": True,
                                 "study_uid": op_study_uid or study_id,
                                 "source_sop_instance_uid": sop_uid,
                             },
