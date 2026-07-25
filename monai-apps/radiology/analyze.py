@@ -95,17 +95,17 @@ def quantify_lesions(label_path):
         data, header = nrrd.read(label_path)
         if data.ndim == 3:
             data = data[0] if data.shape[0] == 1 else data.squeeze()
-        names = {1: "microaneurysms", 2: "hemorrhages", 3: "hard_exudates", 4: "soft_exudates"}
+        names = {1: "hard_exudates", 2: "hemorrhages", 3: "microaneurysms", 4: "soft_exudates"}
         result = {name: 0 for name in names.values()}
         result["exudates"] = 0
         for class_id, name in names.items():
             mask = np.ascontiguousarray(data == class_id, dtype=np.uint8)
             components, _ = cv2.connectedComponents(mask, connectivity=8)
             result[name] = max(0, int(components) - 1)
-            result["exudates"] += result[name] if class_id in (3, 4) else 0
+            result["exudates"] += result[name] if class_id in (1, 4) else 0
         result["pixel_counts"] = {name: int(np.sum(data == cid)) for cid, name in names.items()}
         result["coverage_pct"] = round(float(np.sum(data > 0)) / data.size * 100, 2) if data.size else 0.0
-        result["model_id"] = "DDR-DeepLabV3Plus-EfficientNetB3"
+        result["model_id"] = "SEBNet-DDR"
         return result
     except Exception as e:
         logger.error(f"quantify_lesions failed: {e}")

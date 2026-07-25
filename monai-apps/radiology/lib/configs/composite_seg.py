@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional, Union
 
 import lib.infers
 import segmentation_models_pytorch as smp
+from lib.infers.sebnet_model.sebnet import SEBNet
 from monailabel.interfaces.config import TaskConfig
 from monailabel.interfaces.tasks.infer_v2 import InferTask
 from monailabel.interfaces.tasks.scoring import ScoringMethod
@@ -23,9 +24,9 @@ class CompositeSeg(TaskConfig):
         self.labels = {
             "optic_disc": 1,
             "optic_cup": 2,
-            "microaneurysms": 1,
+            "hard_exudates": 1,
             "hemorrhages": 2,
-            "hard_exudates": 3,
+            "microaneurysms": 3,
             "soft_exudates": 4,
             "vessel": 1,
         }
@@ -33,9 +34,9 @@ class CompositeSeg(TaskConfig):
         self.lesion_path = [
             os.environ.get(
                 "LESION_SEG_MODEL_PATH",
-                "/opt/monai/apps/radiology/model/lesion_seg_ddr.pt",
+                "/opt/monai/apps/radiology/model/sebnet_ddr.pth",
             ),
-            os.path.join(self.model_dir, "lesion_seg_ddr.pt"),
+            os.path.join(self.model_dir, "sebnet_ddr.pth"),
         ]
         self.vessel_path = [
             os.path.join(self.model_dir, "vessel_seg.pt"),
@@ -51,9 +52,7 @@ class CompositeSeg(TaskConfig):
             classes=1,
             encoder_weights=None,
         )
-        self.lesion_network = smp.DeepLabV3Plus(
-            encoder_name="efficientnet-b3", in_channels=3, classes=5, encoder_weights=None
-        )
+        self.lesion_network = SEBNet(n_channels=3, n_classes=5)
 
     def infer(self) -> Union[InferTask, Dict[str, InferTask]]:
         task: InferTask = lib.infers.CompositeSegmenter(
@@ -62,9 +61,9 @@ class CompositeSeg(TaskConfig):
             vessel_network=self.vessel_network,
             lesion_network=self.lesion_network,
             lesion_labels={
-                "microaneurysms": 1,
+                "hard_exudates": 1,
                 "hemorrhages": 2,
-                "hard_exudates": 3,
+                "microaneurysms": 3,
                 "soft_exudates": 4,
             },
             vessel_labels={"vessel": 1},

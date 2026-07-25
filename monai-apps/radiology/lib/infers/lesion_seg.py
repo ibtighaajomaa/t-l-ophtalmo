@@ -9,8 +9,8 @@ from monai.transforms import (
     EnsureChannelFirstd,
     EnsureTyped,
     LoadImaged,
+    MapTransform,
     Resized,
-    ScaleIntensityRanged,
 )
 
 from monailabel.interfaces.tasks.infer_v2 import InferType
@@ -18,6 +18,16 @@ from monailabel.tasks.infer.basic_infer import BasicInferTask
 from .optic_disc_cup import Ensure3ChannelRGBd, SqueezeDepthd
 
 logger = logging.getLogger(__name__)
+
+
+class CaptureOriginalSpatialShaped(MapTransform):
+    """Retain the source OP dimensions before resizing for SEBNet."""
+
+    def __call__(self, data):
+        result = dict(data)
+        image = result[self.keys[0]]
+        result["lesion_original_shape"] = tuple(int(v) for v in image.shape[-2:])
+        return result
 
 
 class LesionSeg(BasicInferTask):
@@ -28,7 +38,7 @@ class LesionSeg(BasicInferTask):
         type=InferType.SEGMENTATION,
         labels=None,
         dimension=2,
-        description="DDR DeepLabV3+ EfficientNet-B3 retinal lesion segmentation",
+        description="SEBNet DDR retinal multi-lesion segmentation",
         **kwargs,
     ):
         super().__init__(
@@ -53,13 +63,13 @@ class LesionSeg(BasicInferTask):
             EnsureChannelFirstd(keys="image"),
             Ensure3ChannelRGBd(keys="image"),
             SqueezeDepthd(keys="image"),
+            CaptureOriginalSpatialShaped(keys="image"),
             Resized(keys="image", spatial_size=(512, 512), mode="bilinear"),
-            ScaleIntensityRanged(keys="image", a_min=0, a_max=255, b_min=0.0, b_max=1.0, clip=True),
         ]
 
     def run_inferer(self, data, convert_to_batch=True, device="cuda"):
         image = data[self.input_key]
-        original_shape = tuple(image.shape[-2:])
+        original_shape = tuple(data.get("lesion_original_shape") or image.shape[-2:])
         network = self._get_network(device, data)
         inputs = image if torch.is_tensor(image) else torch.as_tensor(image)
         inputs = inputs.unsqueeze(0) if convert_to_batch else inputs
@@ -78,14 +88,14 @@ class LesionSeg(BasicInferTask):
         )
         data[self.output_json_key] = {
             "label_info": [
-                {"name": "microaneurysms", "color": [255, 50, 50]},
-                {"name": "hemorrhages", "color": [50, 50, 255]},
-                {"name": "hard_exudates", "color": [160, 160, 160]},
-                {"name": "soft_exudates", "color": [0, 255, 0]},
+                {"label": 1, "name": "hard_exudates", "color": [160, 160, 160]},
+                {"label": 2, "name": "hemorrhages", "color": [50, 50, 255]},
+                {"label": 3, "name": "microaneurysms", "color": [255, 50, 50]},
+                {"label": 4, "name": "soft_exudates", "color": [0, 255, 0]},
             ],
-            "model_id": "DDR-DeepLabV3Plus-EfficientNetB3",
+            "model_id": "SEBNet-DDR",
             "dataset": "DDR",
-            "preprocessing": "512x512 RGB, intensity scaled to [0,1]",
+            "preprocessing": "512x512 RGB, original [0,255] intensity range",
         }
         return data
 

@@ -20,9 +20,9 @@ from monailabel.interfaces.tasks.infer_v2 import InferTask, InferType
 from monailabel.utils.others.generic import device_list
 from transformers import SegformerForSemanticSegmentation, AutoImageProcessor
 from .fovea_detection import detect_fovea_rgb, loaded_image_to_rgb
-LESION_NAMES = {1: "microaneurysms", 2: "hemorrhages", 3: "hard_exudates", 4: "soft_exudates"}
+LESION_NAMES = {1: "hard_exudates", 2: "hemorrhages", 3: "microaneurysms", 4: "soft_exudates"}
 LESION_COLORS = {
-    1: (255, 50, 50), 2: (50, 50, 255), 3: (160, 160, 160), 4: (0, 255, 0)
+    1: (160, 160, 160), 2: (50, 50, 255), 3: (255, 50, 50), 4: (0, 255, 0)
 }
 
 logger = logging.getLogger(__name__)
@@ -137,15 +137,16 @@ class CompositeSegmenter(InferTask):
             img = img.reshape(img.shape[0], img.shape[1], img.shape[2], -1)[..., 0]
         return img
 
-    def _preprocess(self, image: np.ndarray, size=512):
+    def _preprocess(self, image: np.ndarray, size=512, normalize=True):
         img = image.copy()
         img = img.astype(np.float32)
-        scale = ScaleIntensityRanged(
-            keys="image", a_min=0, a_max=255, b_min=0.0, b_max=1.0, clip=True
-        )
         resized = Resized(keys="image", spatial_size=(size, size), mode="bilinear")
         data = {"image": img}
-        data = scale(data)
+        if normalize:
+            scale = ScaleIntensityRanged(
+                keys="image", a_min=0, a_max=255, b_min=0.0, b_max=1.0, clip=True
+            )
+            data = scale(data)
         data = resized(data)
         processed = data["image"]
         if isinstance(processed, torch.Tensor):
@@ -276,16 +277,17 @@ class CompositeSegmenter(InferTask):
         orig_h, orig_w = image_np.shape[1], image_np.shape[2]
 
         # Preprocess for lesion/vessel models (monai transforms)
-        proc = self._preprocess(image_np, size=512)
+        lesion_proc = self._preprocess(image_np, size=512, normalize=False)
+        vessel_proc = self._preprocess(image_np, size=512, normalize=True)
 
         # Preprocess for OD/OC (uses raw image via odoc_processor internally)
         odoc_pred = self._run_odoc(image_np, device)
 
         # Lesions
-        lesion_pred = self._run_lesion(proc, lesion_model, device)
+        lesion_pred = self._run_lesion(lesion_proc, lesion_model, device)
 
         # Vessels
-        vessel_mask, vessel_prob = self._run_vessel(proc, vessel_model, device)
+        vessel_mask, vessel_prob = self._run_vessel(vessel_proc, vessel_model, device)
 
         # Resize masks back to original for overlay
         od_mask = (odoc_pred == 1).astype(np.uint8)
@@ -358,7 +360,7 @@ class CompositeSegmenter(InferTask):
                 "fovea": "loaded" if fovea is not None else f"failed: {fovea_error}",
             },
             "lesion_model": {
-                "model_id": "DDR-DeepLabV3Plus-EfficientNetB3",
+                "model_id": "SEBNet-DDR",
                 "dataset": "DDR",
             },
         }
