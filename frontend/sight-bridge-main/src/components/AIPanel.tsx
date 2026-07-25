@@ -11,8 +11,16 @@ import {
   FileText,
   Plus,
   MessageSquare,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
-import type { AnalysisResult, DoctorNote, DRModelResult, MedicalReport } from "@/lib/exam-api";
+import type {
+  AnalysisResult,
+  DoctorNote,
+  DRModelResult,
+  MedicalReport,
+  SelectedDRClassification,
+} from "@/lib/exam-api";
 import type { EyeSide, PerEyeAnalysis } from "@/lib/exam-api";
 import {
   runAIAnalysis,
@@ -53,6 +61,56 @@ const DR_LABELS: Record<string, string> = {
   "proliferative dr": "Proliferative DR",
 };
 const DR_ORDER = ["no_dr", "mild_npdr", "moderate_npdr", "severe_npdr", "proliferative_dr"];
+const DR_MODEL_ORDER = ["vit", "clip_dr", "flair"] as const;
+const DR_MODEL_NAMES: Record<(typeof DR_MODEL_ORDER)[number], string> = {
+  vit: "ViT actuel",
+  clip_dr: "CLIP-DR",
+  flair: "FLAIR (zéro-shot)",
+};
+
+function getDRGradeIndex(result: DRModelResult) {
+  if (result.grade_index != null && result.grade_index >= 0 && result.grade_index <= 4) {
+    return result.grade_index;
+  }
+  const normalized = result.grade.trim().toLowerCase().replace(/[_-]/g, " ");
+  if (normalized.includes("proliferative")) return 4;
+  if (normalized.includes("severe")) return 3;
+  if (normalized.includes("moderate")) return 2;
+  if (normalized.includes("mild")) return 1;
+  if (normalized.includes("no dr") || normalized.includes("normal")) return 0;
+  return -1;
+}
+
+function selectCriticalDR(
+  models: Array<{ key: (typeof DR_MODEL_ORDER)[number]; result: DRModelResult }>,
+): SelectedDRClassification | null {
+  const available = models
+    .map((model, priority) => ({
+      ...model,
+      priority,
+      gradeIndex: getDRGradeIndex(model.result),
+    }))
+    .filter((model) => model.result.status === "ok" && model.gradeIndex >= 0);
+  if (available.length === 0) return null;
+
+  available.sort((a, b) =>
+    b.gradeIndex - a.gradeIndex
+    || Number(b.result.confidence || 0) - Number(a.result.confidence || 0)
+    || a.priority - b.priority,
+  );
+  const selected = available[0];
+  const indexes = available.map((model) => model.gradeIndex);
+  const spread = Math.max(...indexes) - Math.min(...indexes);
+  return {
+    ...selected.result,
+    model_key: selected.key,
+    model_name: DR_MODEL_NAMES[selected.key],
+    grade_index: selected.gradeIndex,
+    selection_method: "highest_predicted_grade_then_confidence",
+    model_grade_spread: spread,
+    requires_review: spread >= 2,
+  };
+}
 
 function formatDRLabel(label: string) {
   const key = label.trim().toLowerCase();
@@ -134,6 +192,10 @@ export function AIPanel({
   const [loadingNotes, setLoadingNotes] = useState(false);
   const [savingNote, setSavingNote] = useState(false);
   const [notesError, setNotesError] = useState<string | null>(null);
+  const [showOtherDRModels, setShowOtherDRModels] = useState<Record<EyeSide, boolean>>({
+    right: false,
+    left: false,
+  });
 
   const eyeAnalysis = isPerEyeAnalysis(analysis) ? analysis : null;
   const activeAnalysis =
@@ -148,6 +210,63 @@ export function AIPanel({
         ...activeAnalysis.dr_classification,
       }
     : null;
+  const vitDR = activeAnalysis
+    ? activeAnalysis.dr_classification_models?.vit ?? {
+        status: activeAnalysis.dr_classification.grade === "Unknown" ? "unavailable" : "ok",
+        ...activeAnalysis.dr_classification,
+      }
+    : null;
+  const flairDR = activeAnalysis?.dr_classification_models?.flair ?? null;
+  const drModels = activeAnalysis ? [
+    {
+      key: "vit" as const,
+      result: vitDR ?? {
+        status: "unavailable" as const,
+        grade: "Unknown",
+        confidence: 0,
+        probabilities: [],
+        calibration_status: "not_locally_calibrated",
+        reason: "Résultat ViT absent de cette analyse",
+      },
+    },
+    {
+      key: "clip_dr" as const,
+      result: clipDR ?? {
+        status: "unavailable" as const,
+        grade: "Unknown",
+        confidence: 0,
+        probabilities: [],
+        calibration_status: "not_locally_calibrated",
+        reason: "Résultat CLIP-DR absent de cette analyse",
+      },
+    },
+    {
+      key: "flair" as const,
+      result: flairDR ?? {
+        status: "unavailable" as const,
+        grade: "Unknown",
+        confidence: 0,
+        probabilities: [],
+        calibration_status: "not_locally_calibrated",
+        reason: "Résultat FLAIR absent de cette analyse",
+      },
+    },
+  ] : [];
+  const fallbackSelectedDR = selectCriticalDR(drModels);
+  const persistedSelectedDR = activeAnalysis?.selected_dr_classification;
+  const selectedDR = persistedSelectedDR
+    && drModels.some((model) => model.key === persistedSelectedDR.model_key)
+    ? persistedSelectedDR
+    : fallbackSelectedDR;
+  const selectedModel = selectedDR
+    ? drModels.find((model) => model.key === selectedDR.model_key)
+    : null;
+  const otherDRModels = selectedModel
+    ? drModels.filter((model) => model.key !== selectedModel.key)
+    : drModels;
+  const hasMultipleAvailableDRModels = drModels.filter(
+    (model) => model.result.status === "ok",
+  ).length > 1;
 
   const loadMedicalReport = useCallback(async () => {
     if (!examinationId) return;
@@ -174,6 +293,7 @@ export function AIPanel({
 
   useEffect(() => {
     if (!studyInstanceUid) return;
+    setShowOtherDRModels({ right: false, left: false });
     const requestedStudyUid = studyInstanceUid;
     let cancelled = false;
     let attempts = 0;
@@ -437,20 +557,61 @@ export function AIPanel({
             <section className="space-y-2">
               <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
                 <Activity className="h-3.5 w-3.5 text-emerald-400" />
-                DR Classification
+                Classification RD — résultat le plus critique
               </h3>
               <div className="grid grid-cols-1 gap-2">
-                <DRResultCard
-                  title="CLIP-DR"
-                  result={clipDR ?? {
-                    status: "unavailable",
-                    grade: "Unknown",
-                    confidence: 0,
-                    probabilities: [],
-                    calibration_status: "not_locally_calibrated",
-                    reason: "Résultat CLIP-DR absent de cette analyse",
-                  }}
-                />
+                {selectedModel ? (
+                  <>
+                    <DRResultCard
+                      title={DR_MODEL_NAMES[selectedModel.key]}
+                      canonical
+                      result={selectedModel.result}
+                    />
+                    <p className="px-1 text-[10px] text-slate-400">
+                      Sélection conservatrice : grade maximal prédit parmi les modèles.
+                    </p>
+                    {selectedDR?.requires_review && (
+                      <div className="flex items-start gap-1.5 rounded-md border border-amber-700/70 bg-amber-950/30 p-2 text-[10px] text-amber-300">
+                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                        Désaccord important entre les modèles — validation ophtalmologique requise.
+                      </div>
+                    )}
+                    {hasMultipleAvailableDRModels && otherDRModels.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowOtherDRModels((current) => ({
+                          ...current,
+                          [activeEye]: !current[activeEye],
+                        }))}
+                        aria-expanded={showOtherDRModels[activeEye]}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-md border border-cyan-700/70 bg-cyan-950/20 px-3 py-2 text-xs font-medium text-cyan-300 transition-colors hover:bg-cyan-900/30"
+                      >
+                        {showOtherDRModels[activeEye] ? (
+                          <>
+                            <ChevronUp className="h-3.5 w-3.5" />
+                            Masquer les résultats des autres modèles
+                          </>
+                        ) : (
+                          <>
+                            <ChevronDown className="h-3.5 w-3.5" />
+                            Voir les résultats des autres modèles ({otherDRModels.length})
+                          </>
+                        )}
+                      </button>
+                    )}
+                    {hasMultipleAvailableDRModels && showOtherDRModels[activeEye] && otherDRModels.map((model) => (
+                      <DRResultCard
+                        key={model.key}
+                        title={DR_MODEL_NAMES[model.key]}
+                        result={model.result}
+                      />
+                    ))}
+                  </>
+                ) : (
+                  <div className="rounded-lg border border-amber-700/70 bg-amber-950/20 p-3 text-xs text-amber-300">
+                    Classification indisponible
+                  </div>
+                )}
               </div>
             </section>
 

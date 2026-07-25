@@ -996,6 +996,7 @@ async def analyze(request: dict):
             "status", "model_id", "model_commit", "backbone", "backbone_revision",
             "checkpoint_name", "checkpoint_sha256",
             "calibration_status", "temperature", "preprocessing_version",
+            "classification_method", "zero_shot_prompts", "domain_knowledge_prompts",
             "inference_time_ms", "device",
         ):
             if key in params:
@@ -1018,17 +1019,89 @@ async def analyze(request: dict):
         return instance.infer(req)
 
     labels = {}
+    label_infos = {}
     for model in ("optic_disc_cup", "vessel_seg", "lesion_seg", "neovascularization_seg"):
         try:
             result = _run_model(model)
             path = result.get("file") or result.get("label")
             if path and os.path.exists(path):
                 labels[model] = path
+                label_info = (result.get("params") or {}).get("label_info")
+                if label_info:
+                    label_infos[model] = label_info
                 logger.info("Analyze segmentation %s -> %s", model, path)
             else:
                 logger.warning("Analyze segmentation %s returned no label file", model)
         except Exception as e:
             logger.error("Analyze segmentation %s failed: %s", model, e)
+
+    # Persist the generated masks as DICOM-SEG objects so OHIF can discover and
+    # display them.  instance.infer() only returns temporary NRRD files.
+    if labels and request.get("push_dicom_seg", True):
+        try:
+            import copy
+            import pathlib
+            import requests
+            from monailabel.datastore.utils.convert import nifti_to_dicom_seg
+
+            image_uri = datastore.get_image_uri(image)
+            image_path = next(
+                (image_uri[:-len(suffix)] for suffix in (".nii.gz", ".nii", ".nrrd") if image_uri.endswith(suffix)),
+                image_uri,
+            )
+            if image_path and os.path.isdir(image_path):
+                for model, result_image in labels.items():
+                    label_info = copy.deepcopy(label_infos.get(model))
+                    if not label_info:
+                        logger.warning("Analyze DICOM-SEG skipped for %s: missing label_info", model)
+                        continue
+                    if isinstance(label_info, list):
+                        for segment in label_info:
+                            if isinstance(segment, dict):
+                                segment["model_name"] = model
+                    try:
+                        dicom_seg_file = nifti_to_dicom_seg(
+                            image_path, result_image, label_info, use_itk=False
+                        )
+                        if dicom_seg_file and os.path.exists(dicom_seg_file):
+                            with open(dicom_seg_file, "rb") as stream:
+                                response = requests.post(
+                                    "http://orthanc-container:8042/instances",
+                                    data=stream,
+                                    headers={"Content-Type": "application/dicom"},
+                                    timeout=60,
+                                )
+                            response.raise_for_status()
+                            logger.info("Pushed DICOM-SEG to Orthanc from analyze/%s: %s", model, response.status_code)
+                            os.unlink(dicom_seg_file)
+                        else:
+                            logger.info("Analyze DICOM-SEG not created for %s (empty mask)", model)
+                    except Exception as push_error:
+                        logger.error("Analyze DICOM-SEG push failed for %s: %s", model, push_error)
+            else:
+                logger.warning("Analyze DICOM-SEG source directory not found: %s", image_path)
+        except Exception as push_error:
+            logger.error("Analyze DICOM-SEG export failed: %s", push_error)
+
+    vit_dr = {
+        "status": "unavailable",
+        "grade": "Unknown",
+        "confidence": 0.0,
+        "probabilities": {},
+        "calibration_status": "not_locally_calibrated",
+    }
+    try:
+        vit_result = _run_model(
+            "dr_classification",
+            {"result_extension": ".json", "device": "cpu"},
+        )
+        vit_dr = _normalize_dr(vit_result.get("params") or {})
+        vit_dr.setdefault("status", "ok")
+        vit_dr.setdefault("model_id", "Kontawat/vit-diabetic-retinopathy-classification")
+        vit_dr.setdefault("calibration_status", "not_locally_calibrated")
+    except Exception as e:
+        logger.warning("Analyze ViT DR unavailable: %s", e)
+        vit_dr["reason"] = str(e)[:240]
 
     clip_dr = {
         "status": "unavailable",
@@ -1055,8 +1128,29 @@ async def analyze(request: dict):
             else message[:240]
         )
 
-    dr = clip_dr
-    dr_classification_models = {"clip_dr": clip_dr}
+    flair_dr = {
+        "status": "unavailable",
+        "grade": "Unknown",
+        "confidence": 0.0,
+        "probabilities": {},
+        "calibration_status": "not_locally_calibrated",
+    }
+    try:
+        flair_result = _run_model(
+            "flair_dr_classification",
+            {"result_extension": ".json", "device": "cpu"},
+        )
+        flair_dr = _normalize_dr(flair_result.get("params") or {})
+        flair_dr.setdefault("status", "ok")
+        flair_dr.setdefault("model_id", "jusiro2/FLAIR")
+        flair_dr.setdefault("calibration_status", "not_locally_calibrated")
+    except Exception as e:
+        logger.warning("Analyze FLAIR DR unavailable: %s", e)
+        flair_dr["reason"] = str(e)[:240]
+
+    # ViT remains canonical; CLIP-DR and FLAIR are independent comparators.
+    dr = vit_dr
+    dr_classification_models = {"vit": vit_dr, "clip_dr": clip_dr, "flair": flair_dr}
 
     fovea = None
     try:

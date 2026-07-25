@@ -1,0 +1,47 @@
+diff --git a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
+--- a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
++++ b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
+@@ -841,6 +841,8 @@ class AiAnalysisPanel extends Component<Props, State> {
+     const dr = report.dr_classification || {};
+     const drModels = report.dr_classification_models || {};
+-    const clipDr = drModels.clip_dr || (dr.grade ? { status: 'ok', ...dr } : null);
++    const vitDr = drModels.vit || (dr.grade ? { status: 'ok', ...dr } : null);
++    const clipDr = drModels.clip_dr || null;
++    const flairDr = drModels.flair || null;
+     const lesions = report.lesions || {};
+     const vessels = report.vessels || {};
+     const glaucoma = report.glaucoma || {};
+@@ -861,16 +863,30 @@ class AiAnalysisPanel extends Component<Props, State> {
+           AI ANALYSIS REPORT{eyeLabel ? ` (${eyeLabel})` : ''}
+         </div>
+ 
+-        {(dr.grade || clipDr) && (
++        {(dr.grade || vitDr || clipDr || flairDr) && (
+           <div className="section drClassification">
+-            <div className="sectionTitle">Classification RD — CLIP-DR</div>
++            <div className="sectionTitle">Classification RD — ViT, CLIP-DR et FLAIR</div>
+             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
++              {this.renderDrModelCard('ViT actuel', vitDr || {
++                status: 'unavailable',
++                grade: 'Unknown',
++                confidence: 0,
++                probabilities: {},
++                reason: 'Résultat ViT non disponible dans cet ancien rapport',
++              }, report)}
+               {this.renderDrModelCard('CLIP-DR', clipDr || {
+                 status: 'unavailable',
+                 grade: 'Unknown',
+                 confidence: 0,
+                 probabilities: {},
+-                reason: 'Résultat non disponible dans cet ancien rapport',
++                reason: 'Résultat CLIP-DR non disponible dans cet ancien rapport',
++              }, report)}
++              {this.renderDrModelCard('FLAIR (zéro-shot)', flairDr || {
++                status: 'unavailable',
++                grade: 'Unknown',
++                confidence: 0,
++                probabilities: {},
++                reason: 'Résultat FLAIR non disponible dans cet ancien rapport',
+               }, report)}
+             </div>
+           </div>

@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 
 SEGMENTATION_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
 CLIP_DR_MODEL = "clip_dr_classification"
+VIT_DR_MODEL = "dr_classification"
+FLAIR_DR_MODEL = "flair_dr_classification"
 LATERALITY_MODEL = "eye_laterality"
 
 
@@ -112,11 +114,11 @@ def quantify_lesions(label_path):
         raise RuntimeError("Lesion quantification failed") from e
 
 
-def classify_dr(app, image_id):
-    """Run the CLIP-DR classification model."""
+def classify_dr_model(app, image_id, model_name, display_name):
+    """Run one five-grade diabetic-retinopathy classifier."""
     try:
         req = {
-            "model": CLIP_DR_MODEL,
+            "model": model_name,
             "image": image_id,
             "result_extension": ".json",
             "restore_label_idx": False,
@@ -134,11 +136,11 @@ def classify_dr(app, image_id):
                 "calibration_status": params.get(
                     "calibration_status", "not_locally_calibrated"
                 ),
-                "model_id": params.get("model_id", "Qinkaiyu/CLIP-DR"),
+                "model_id": params.get("model_id", display_name),
             }
-        logger.warning("CLIP-DR classification returned no params")
+        logger.warning("%s classification returned no params", display_name)
     except Exception as e:
-        logger.error(f"CLIP-DR classification failed: {e}")
+        logger.error("%s classification failed: %s", display_name, e)
         return {
             "status": "unavailable",
             "grade": "Unknown",
@@ -157,9 +159,11 @@ def classify_dr(app, image_id):
 
 
 def classify_dr_models(app, image_id):
-    """Run CLIP-DR as the sole diabetic-retinopathy classifier."""
-    clip_dr = classify_dr(app, image_id)
-    return clip_dr, {"clip_dr": clip_dr}, {}
+    """Run ViT as canonical classifier, with CLIP-DR and FLAIR as comparators."""
+    vit = classify_dr_model(app, image_id, VIT_DR_MODEL, "Kontawat/vit-diabetic-retinopathy-classification")
+    clip_dr = classify_dr_model(app, image_id, CLIP_DR_MODEL, "Qinkaiyu/CLIP-DR")
+    flair = classify_dr_model(app, image_id, FLAIR_DR_MODEL, "jusiro2/FLAIR")
+    return vit, {"vit": vit, "clip_dr": clip_dr, "flair": flair}, {}
 
 
 def detect_laterality(app, image_id):

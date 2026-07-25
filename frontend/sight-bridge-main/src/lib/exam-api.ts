@@ -370,6 +370,15 @@ export interface DRModelResult {
   inference_time_ms?: number;
 }
 
+export interface SelectedDRClassification extends DRModelResult {
+  model_key: "vit" | "clip_dr" | "flair" | string;
+  model_name: string;
+  grade_index: number;
+  selection_method: "highest_predicted_grade_then_confidence";
+  model_grade_spread: number;
+  requires_review: boolean;
+}
+
 export interface DeepSeeNetFactor {
   class_index: number;
   label: string;
@@ -404,7 +413,9 @@ export interface PerInstanceResult {
   severity_score: number;
   dr_classification?: { grade: string; confidence: number; probabilities: DRProbabilities };
   dr_classification_models?: {
+    vit?: DRModelResult;
     clip_dr: DRModelResult;
+    flair?: DRModelResult;
   };
   gradcam_image?: string | null;
   clahe_image?: string | null;
@@ -416,7 +427,9 @@ export interface CriticalEyeAnalysis {
   severity_score: number;
   dr_classification: { grade: string; confidence: number; probabilities: DRProbabilities };
   dr_classification_models?: {
+    vit?: DRModelResult;
     clip_dr: DRModelResult;
+    flair?: DRModelResult;
   };
   lesions: LesionMetrics;
   glaucoma: PerEyeGlaucoma;
@@ -434,8 +447,11 @@ export interface AnalysisResult {
     probabilities: DRProbabilities;
   };
   dr_classification_models?: {
+    vit?: DRModelResult;
     clip_dr: DRModelResult;
+    flair?: DRModelResult;
   };
+  selected_dr_classification?: SelectedDRClassification | null;
   lesions: LesionMetrics;
   optic_disc_cup: {
     disc_area_px: number;

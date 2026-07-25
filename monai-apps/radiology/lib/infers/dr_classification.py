@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Callable, Sequence
 
 import torch
@@ -82,12 +83,17 @@ class DRClassification(BasicInferTask):
     def inferer(self, data=None) -> Inferer:
         return SimpleInferer()
 
-    def run_inferer(self, data, convert_to_batch=True, device="cuda"):
+    def run_inferer(self, data, convert_to_batch=True, device="cpu"):
+        started = time.perf_counter()
         network = self._get_network(device, data)
         inputs = data[self.input_key]
         inputs = inputs if torch.is_tensor(inputs) else torch.from_numpy(inputs)
         inputs = inputs[None] if convert_to_batch else inputs
-        inputs = inputs.to(torch.device(device))
+        inputs = inputs.to(torch.device(device), dtype=torch.float32)
+        # Match the normalization declared by the Hugging Face image processor.
+        mean = torch.as_tensor(self._hf_processor.image_mean, device=inputs.device).view(1, 3, 1, 1)
+        std = torch.as_tensor(self._hf_processor.image_std, device=inputs.device).view(1, 3, 1, 1)
+        inputs = (inputs - mean) / std
 
         with torch.no_grad():
             outputs = network(inputs)
@@ -107,6 +113,12 @@ class DRClassification(BasicInferTask):
             "dr_label": dr_label,
             "dr_probability": dr_prob,
             "dr_all_probabilities": all_probs,
+            "status": "ok",
+            "model_id": self.model_id,
+            "calibration_status": "not_locally_calibrated",
+            "preprocessing_version": "hf-vit-processor-normalization-v1",
+            "inference_time_ms": round((time.perf_counter() - started) * 1000, 2),
+            "device": str(device),
             "label_info": [
                 {"name": "no_dr", "color": [0, 255, 0]},
                 {"name": "mild_npdr", "color": [255, 255, 0]},

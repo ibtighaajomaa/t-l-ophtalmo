@@ -1,0 +1,125 @@
+--- a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
++++ b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
+@@ -28,6 +28,7 @@
+       reportGenerationError: '',
+       reportError: null,
+       savingReport: false,
++      expandedDrModelsByEye: { right: false, left: false },
+     };
+     this.serverURI = (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1') + '/monai/';
+   }
+@@ -844,6 +845,46 @@
+     const vitDr = drModels.vit || (dr.grade ? { status: 'ok', ...dr } : null);
+     const clipDr = drModels.clip_dr || null;
+     const flairDr = drModels.flair || null;
++    const modelEntries = [
++      ['vit', 'ViT actuel', vitDr || {
++        status: 'unavailable', grade: 'Unknown', confidence: 0, probabilities: {},
++        reason: 'Résultat ViT non disponible dans cet ancien rapport',
++      }],
++      ['clip_dr', 'CLIP-DR', clipDr || {
++        status: 'unavailable', grade: 'Unknown', confidence: 0, probabilities: {},
++        reason: 'Résultat CLIP-DR non disponible dans cet ancien rapport',
++      }],
++      ['flair', 'FLAIR (zéro-shot)', flairDr || {
++        status: 'unavailable', grade: 'Unknown', confidence: 0, probabilities: {},
++        reason: 'Résultat FLAIR non disponible dans cet ancien rapport',
++      }],
++    ];
++    const gradeIndex = model => {
++      const explicit = Number(model?.grade_index);
++      if (Number.isInteger(explicit) && explicit >= 0 && explicit <= 4) return explicit;
++      const grade = String(model?.grade || '').toLowerCase().replace(/[_-]/g, ' ');
++      if (grade.includes('proliferative')) return 4;
++      if (grade.includes('severe')) return 3;
++      if (grade.includes('moderate')) return 2;
++      if (grade.includes('mild')) return 1;
++      if (grade.includes('no dr') || grade.includes('normal')) return 0;
++      return -1;
++    };
++    const availableModels = modelEntries.filter(([, , model]) => model.status === 'ok' && gradeIndex(model) >= 0);
++    const fallbackSelected = [...availableModels].sort((a, b) =>
++      gradeIndex(b[2]) - gradeIndex(a[2]) ||
++      Number(b[2].confidence || 0) - Number(a[2].confidence || 0)
++    )[0];
++    const persistedKey = report.selected_dr_classification?.model_key;
++    const selectedModel = modelEntries.find(([key]) => key === persistedKey) || fallbackSelected;
++    const otherModels = selectedModel ? modelEntries.filter(([key]) => key !== selectedModel[0]) : [];
++    const gradeSpread = availableModels.length
++      ? Math.max(...availableModels.map(([, , model]) => gradeIndex(model))) -
++        Math.min(...availableModels.map(([, , model]) => gradeIndex(model)))
++      : 0;
++    const requiresReview = report.selected_dr_classification?.requires_review ?? gradeSpread >= 2;
++    const eyeKey = side || this.sideFromReport(report);
++    const showOtherModels = !!this.state.expandedDrModelsByEye?.[eyeKey];
+     const lesions = report.lesions || {};
+     const vessels = report.vessels || {};
+     const glaucoma = report.glaucoma || {};
+@@ -865,29 +906,45 @@
+ 
+         {(dr.grade || vitDr || clipDr || flairDr) && (
+           <div className="section drClassification">
+-            <div className="sectionTitle">Classification RD — ViT, CLIP-DR et FLAIR</div>
++            <div className="sectionTitle">Classification RD — résultat le plus critique</div>
+             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+-              {this.renderDrModelCard('ViT actuel', vitDr || {
+-                status: 'unavailable',
+-                grade: 'Unknown',
+-                confidence: 0,
+-                probabilities: {},
+-                reason: 'Résultat ViT non disponible dans cet ancien rapport',
+-              }, report)}
+-              {this.renderDrModelCard('CLIP-DR', clipDr || {
+-                status: 'unavailable',
+-                grade: 'Unknown',
+-                confidence: 0,
+-                probabilities: {},
+-                reason: 'Résultat CLIP-DR non disponible dans cet ancien rapport',
+-              }, report)}
+-              {this.renderDrModelCard('FLAIR (zéro-shot)', flairDr || {
+-                status: 'unavailable',
+-                grade: 'Unknown',
+-                confidence: 0,
+-                probabilities: {},
+-                reason: 'Résultat FLAIR non disponible dans cet ancien rapport',
+-              }, report)}
++              {selectedModel && this.renderDrModelCard(selectedModel[1], selectedModel[2], report)}
++              {selectedModel && (
++                <div style={{ width: '100%', color: '#94a3b8', fontSize: '10px' }}>
++                  Sélection conservatrice : grade maximal prédit parmi les modèles.
++                </div>
++              )}
++              {requiresReview && (
++                <div style={{ width: '100%', color: '#fbbf24', fontSize: '11px' }}>
++                  ⚠ Désaccord important entre les modèles — validation ophtalmologique requise.
++                </div>
++              )}
++              {availableModels.length > 1 && otherModels.length > 0 && (
++                <button
++                  type="button"
++                  onClick={() => this.setState(state => ({
++                    expandedDrModelsByEye: {
++                      ...state.expandedDrModelsByEye,
++                      [eyeKey]: !state.expandedDrModelsByEye?.[eyeKey],
++                    },
++                  }))}
++                  aria-expanded={showOtherModels}
++                  style={{
++                    width: '100%', padding: '7px 10px', borderRadius: '6px',
++                    border: '1px solid #0891b2', background: '#08334455',
++                    color: '#67e8f9', cursor: 'pointer', fontSize: '11px',
++                  }}
++                >
++                  {showOtherModels
++                    ? 'Masquer les résultats des autres modèles'
++                    : `Voir les résultats des autres modèles (${otherModels.length})`}
++                </button>
++              )}
++              {availableModels.length > 1 && showOtherModels && otherModels.map(([key, title, model]) => (
++                <React.Fragment key={key}>
++                  {this.renderDrModelCard(title, model, report)}
++                </React.Fragment>
++              ))}
+             </div>
+           </div>
+         )}

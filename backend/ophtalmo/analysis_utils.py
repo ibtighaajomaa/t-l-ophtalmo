@@ -13,6 +13,81 @@ DR_SEVERITY = {
     "pdr": 4,
 }
 
+DR_MODEL_NAMES = {
+    "vit": "ViT actuel",
+    "clip_dr": "CLIP-DR",
+    "flair": "FLAIR (zéro-shot)",
+}
+DR_MODEL_PRIORITY = {"vit": 0, "clip_dr": 1, "flair": 2}
+
+
+def _dr_grade_index(result):
+    """Return the normalized ordinal DR grade for one model result."""
+    if not isinstance(result, dict):
+        return -1
+    try:
+        explicit = result.get("grade_index")
+        if explicit is not None and 0 <= int(explicit) <= 4:
+            return int(explicit)
+    except (TypeError, ValueError):
+        pass
+    grade = str(result.get("grade") or result.get("label") or "unknown")
+    normalized = grade.strip().lower().replace("_", " ").replace("-", " ")
+    for marker, index in (
+        ("proliferative", 4),
+        ("severe", 3),
+        ("moderate", 2),
+        ("mild", 1),
+        ("no dr", 0),
+        ("normal", 0),
+    ):
+        if marker in normalized:
+            return index
+    return -1
+
+
+def select_critical_dr_classification(models):
+    """Select the highest main grade, using confidence only as a tie-breaker."""
+    available = []
+    for model_key, model_result in (models or {}).items():
+        if not isinstance(model_result, dict) or model_result.get("status") != "ok":
+            continue
+        grade_index = _dr_grade_index(model_result)
+        if grade_index < 0:
+            continue
+        try:
+            confidence = float(model_result.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        available.append((model_key, model_result, grade_index, confidence))
+
+    if not available:
+        return None
+
+    selected_key, selected, selected_grade, confidence = max(
+        available,
+        key=lambda item: (
+            item[2],
+            item[3],
+            -DR_MODEL_PRIORITY.get(item[0], len(DR_MODEL_PRIORITY)),
+        ),
+    )
+    grade_indexes = [item[2] for item in available]
+    spread = max(grade_indexes) - min(grade_indexes)
+    return {
+        "status": "ok",
+        "model_key": selected_key,
+        "model_name": DR_MODEL_NAMES.get(selected_key, selected_key),
+        "grade": selected.get("grade") or "Unknown",
+        "grade_index": selected_grade,
+        "confidence": confidence,
+        "probabilities": selected.get("probabilities") or {},
+        "calibration_status": selected.get("calibration_status"),
+        "selection_method": "highest_predicted_grade_then_confidence",
+        "model_grade_spread": spread,
+        "requires_review": spread >= 2,
+    }
+
 GLAUCOMA_RISK = {
     "n/a": -1,
     "faible": 0,
@@ -45,8 +120,7 @@ def side_from_laterality(value):
 
 def _dr_score(report):
     dr = report.get("dr_classification") or {}
-    grade = str(dr.get("grade") or dr.get("label") or "Unknown").strip().lower()
-    return DR_SEVERITY.get(grade, -1)
+    return _dr_grade_index(dr)
 
 
 def _glaucoma_score(report):
@@ -65,6 +139,13 @@ def _blank_eye(side):
             "probabilities": [],
         },
         "dr_classification_models": {
+            "vit": {
+                "status": "unavailable",
+                "grade": "Unknown",
+                "confidence": 0.0,
+                "probabilities": [],
+                "calibration_status": "not_locally_calibrated",
+            },
             "clip_dr": {
                 "status": "unavailable",
                 "grade": "Unknown",
@@ -72,7 +153,15 @@ def _blank_eye(side):
                 "probabilities": [],
                 "calibration_status": "not_locally_calibrated",
             },
+            "flair": {
+                "status": "unavailable",
+                "grade": "Unknown",
+                "confidence": 0.0,
+                "probabilities": [],
+                "calibration_status": "not_locally_calibrated",
+            },
         },
+        "selected_dr_classification": None,
         "lesions": {
             "microaneurysms": 0,
             "hemorrhages": 0,
@@ -119,6 +208,9 @@ def _copy_report_fields(target, report, include_visuals=True):
     target["dr_classification"] = report.get("dr_classification") or target["dr_classification"]
     target["dr_classification_models"] = (
         report.get("dr_classification_models") or target["dr_classification_models"]
+    )
+    target["selected_dr_classification"] = select_critical_dr_classification(
+        target["dr_classification_models"]
     )
     target["optic_disc_cup"] = report.get("optic_disc_cup") or target["optic_disc_cup"]
     target["glaucoma"] = report.get("glaucoma") or target["glaucoma"]
