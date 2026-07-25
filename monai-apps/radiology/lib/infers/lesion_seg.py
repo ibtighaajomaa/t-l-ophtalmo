@@ -88,10 +88,10 @@ class LesionSeg(BasicInferTask):
         )
         data[self.output_json_key] = {
             "label_info": [
-                {"label": 1, "name": "hard_exudates", "color": [160, 160, 160]},
-                {"label": 2, "name": "hemorrhages", "color": [50, 50, 255]},
-                {"label": 3, "name": "microaneurysms", "color": [255, 50, 50]},
-                {"label": 4, "name": "soft_exudates", "color": [0, 255, 0]},
+                {"label": 1, "name": "Exsudats solides", "color": [160, 160, 160]},
+                {"label": 2, "name": "Hemorragies", "color": [50, 50, 255]},
+                {"label": 3, "name": "Microanevrismes", "color": [106, 13, 173]},
+                {"label": 4, "name": "Exsudats cotonneux", "color": [255, 0, 140]},
             ],
             "model_id": "SEBNet-DDR",
             "dataset": "DDR",

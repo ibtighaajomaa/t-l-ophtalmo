@@ -22,7 +22,7 @@ from transformers import SegformerForSemanticSegmentation, AutoImageProcessor
 from .fovea_detection import detect_fovea_rgb, loaded_image_to_rgb
 LESION_NAMES = {1: "hard_exudates", 2: "hemorrhages", 3: "microaneurysms", 4: "soft_exudates"}
 LESION_COLORS = {
-    1: (160, 160, 160), 2: (50, 50, 255), 3: (255, 50, 50), 4: (0, 255, 0)
+    1: (160, 160, 160), 2: (50, 50, 255), 3: (106, 13, 173), 4: (255, 0, 140)
 }
 
 logger = logging.getLogger(__name__)

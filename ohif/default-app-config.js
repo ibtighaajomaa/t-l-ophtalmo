@@ -44,14 +44,53 @@ window.config = {
       'viewportOverlay.topLeft': {
         $push: [
           {
-            id: 'RetinalLesionColorLegend',
+            id: 'RetinalLegendHemorrhages',
             inheritsFrom: 'ohif.overlayItem',
             label: '',
             title: 'Légende des lésions rétiniennes',
             condition: ({ referenceInstance }) =>
               referenceInstance?.Modality === 'OP',
-            contentF: () =>
-              '🟥 Hémorragies  ·  🟨 Exsudats  ·  🟪 Microanévrismes  ·  🟩 Disque optique  ·  🟥 Cupule optique',
+            contentF: () => '🟦 Hémorragies',
+          },
+          {
+            id: 'RetinalLegendSolidExudates',
+            inheritsFrom: 'ohif.overlayItem',
+            label: '',
+            condition: ({ referenceInstance }) =>
+              referenceInstance?.Modality === 'OP',
+            contentF: () => '⬜ Exsudats solides',
+          },
+          {
+            id: 'RetinalLegendMicroaneurysms',
+            inheritsFrom: 'ohif.overlayItem',
+            label: '',
+            condition: ({ referenceInstance }) =>
+              referenceInstance?.Modality === 'OP',
+            contentF: () => '🟪 Microanévrismes',
+          },
+          {
+            id: 'RetinalLegendCottonWoolExudates',
+            inheritsFrom: 'ohif.overlayItem',
+            label: '',
+            condition: ({ referenceInstance }) =>
+              referenceInstance?.Modality === 'OP',
+            contentF: () => '🟥 Exsudats cotonneux',
+          },
+          {
+            id: 'RetinalLegendOpticDisc',
+            inheritsFrom: 'ohif.overlayItem',
+            label: '',
+            condition: ({ referenceInstance }) =>
+              referenceInstance?.Modality === 'OP',
+            contentF: () => '🟩 Disque optique',
+          },
+          {
+            id: 'RetinalLegendOpticCup',
+            inheritsFrom: 'ohif.overlayItem',
+            label: '',
+            condition: ({ referenceInstance }) =>
+              referenceInstance?.Modality === 'OP',
+            contentF: () => '🟥 Cupule optique',
           },
         ],
       },

@@ -959,16 +959,20 @@ function ExamDetail() {
                           Lésions
                         </div>
                         <div className="flex items-center gap-2">
-                          <div className="w-3 h-3 rounded-full border border-red-400 bg-red-400/40" />
+                          <div className="w-3 h-3 rounded-full border border-[#3232ff] bg-[#3232ff]/40" />
                           <span>Hémorragies</span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <div className="w-3 h-3 rounded-full border border-yellow-400 bg-yellow-400/40" />
-                          <span>Exsudats</span>
+                          <div className="w-3 h-3 rounded-full border border-[#a0a0a0] bg-[#a0a0a0]/40" />
+                          <span>Exsudats solides</span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <div className="w-3 h-3 rounded-full border border-purple-400 bg-purple-400/40" />
+                          <div className="w-3 h-3 rounded-full border border-[#6a0dad] bg-[#6a0dad]/40" />
                           <span>Microanévrismes</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full border border-[#ff008c] bg-[#ff008c]/40" />
+                          <span>Exsudats cotonneux</span>
                         </div>
                       </>
                     )}
@@ -1069,9 +1073,10 @@ function ExamDetail() {
                   </h3>
                   <div className="space-y-2">
                     {[
-                      { label: "Hémorragies", type: "lesion", color: "#ff6b6b", count: 5 },
-                      { label: "Exsudats", type: "lesion", color: "#ffd93d", count: 7 },
-                      { label: "Microanévrismes", type: "lesion", color: "#a855f7", count: 9 },
+                      { label: "Hémorragies", type: "lesion", color: "#3232ff", count: 5 },
+                      { label: "Exsudats solides", type: "lesion", color: "#a0a0a0", count: 7 },
+                      { label: "Microanévrismes", type: "lesion", color: "#6a0dad", count: 9 },
+                      { label: "Exsudats cotonneux", type: "lesion", color: "#ff008c", count: 1 },
                       { label: "Vaisseaux", type: "vessel", color: "#00bcd4", count: 1 },
                       { label: "Disque optique", type: "optic-disc", color: "#4caf50", count: 1 },
                     ].map((seg) => (
