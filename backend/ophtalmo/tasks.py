@@ -274,7 +274,12 @@ def _snapshot_seg_series(orthanc_url):
     return seg_ids
 
 
-AI_SEG_SERIES_DESCRIPTIONS = {"optic_disc_cup", "vessel_seg", "lesion_seg"}
+AI_SEG_SERIES_DESCRIPTIONS = {
+    "optic_disc_cup",
+    "vessel_seg",
+    "lesion_seg",
+    "neovascularization_seg",
+}
 
 
 def _delete_prior_ai_seg_series(
@@ -1404,7 +1409,12 @@ def tache_auto_segmentation(exam_id=None):
     from .models import AnalysisReport, Exam, ImageQualityAssessment
 
     MAX_RETRIES = 3
-    SEG_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
+    SEG_MODELS = [
+        "optic_disc_cup",
+        "vessel_seg",
+        "lesion_seg",
+        "neovascularization_seg",
+    ]
     FOVEA_MODEL = "fovea_detection"
     DEEPSEENET_MODEL = "deepseenet_plus"
     MONAI_LABEL = "http://monai-label:8000"

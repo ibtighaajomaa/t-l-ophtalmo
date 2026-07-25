@@ -366,7 +366,7 @@ services:
       monailabel start_server
       --app /opt/monai/apps/radiology
       --studies http://orthanc-container:8042/dicom-web
-      --conf models eye_laterality,fovea_detection,deepseenet_plus,optic_disc_cup,vessel_seg,lesion_seg,clip_dr_classification,composite_seg
+      --conf models eye_laterality,fovea_detection,deepseenet_plus,optic_disc_cup,vessel_seg,lesion_seg,neovascularization_seg,clip_dr_classification,composite_seg
       --conf sam2 false
       --host 0.0.0.0
       --port 8000
@@ -376,6 +376,7 @@ services:
       VASCX_FOVEA_MODEL_PATH: /opt/monai/models/vascx/fovea/fovea_may26.pt
       DEEPSEENET_MODEL_FOLDER: /opt/monai/models/deepseenet-plus
       CLIP_DR_CHECKPOINT_PATH: /opt/monai/models/clip-dr/APTOS.ckpt
+      BIGEYE_SEG_MODEL_PATH: /opt/monai/apps/radiology/model/deeplab_lesion_segmentation.hdf5
       CLIP_DR_CHECKPOINT_SHA256: e787ba51e334f7038c57e72b49e13c60e507f8de543df88180daab55d0e96fd5
       CLIP_DR_TEMPERATURE: ${CLIP_DR_TEMPERATURE:-1.0}
       CLIP_DR_CALIBRATION_STATUS: ${CLIP_DR_CALIBRATION_STATUS:-not_locally_calibrated}

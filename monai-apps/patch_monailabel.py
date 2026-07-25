@@ -1018,7 +1018,7 @@ async def analyze(request: dict):
         return instance.infer(req)
 
     labels = {}
-    for model in ("optic_disc_cup", "vessel_seg", "lesion_seg"):
+    for model in ("optic_disc_cup", "vessel_seg", "lesion_seg", "neovascularization_seg"):
         try:
             result = _run_model(model)
             path = result.get("file") or result.get("label")
@@ -1068,7 +1068,7 @@ async def analyze(request: dict):
     except Exception as e:
         logger.error("Analyze fovea detection failed: %s", e)
 
-    optic_data = vessel_data = lesion_data = None
+    optic_data = vessel_data = lesion_data = neovascularization_data = None
     try:
         optic_data = _read_label(labels["optic_disc_cup"]) if "optic_disc_cup" in labels else None
     except Exception as e:
@@ -1081,11 +1081,33 @@ async def analyze(request: dict):
         lesion_data = _read_label(labels["lesion_seg"]) if "lesion_seg" in labels else None
     except Exception as e:
         logger.error("Analyze lesion label read failed: %s", e)
+    try:
+        neovascularization_data = (
+            _read_label(labels["neovascularization_seg"])
+            if "neovascularization_seg" in labels
+            else None
+        )
+    except Exception as e:
+        logger.error("Analyze neovascularization label read failed: %s", e)
 
     optic = _optic_metrics(optic_data)
     glaucoma = _glaucoma_metrics(optic_data)
     vessels = _vessel_metrics(vessel_data)
     lesions = _lesion_metrics(lesion_data)
+    if neovascularization_data is not None:
+        import cv2
+        neovascularization_mask = np.ascontiguousarray(
+            neovascularization_data > 0,
+            dtype=np.uint8,
+        )
+        components, _ = cv2.connectedComponents(neovascularization_mask, connectivity=8)
+        neovascularization_pixels = int(np.sum(neovascularization_mask))
+        lesions["neovascularization"] = max(0, int(components) - 1)
+        lesions.setdefault("pixel_counts", {})["neovascularization"] = neovascularization_pixels
+        lesions["neovascularization_model_id"] = "hmgill/BigEye"
+    else:
+        lesions["neovascularization"] = 0
+        lesions.setdefault("pixel_counts", {})["neovascularization"] = 0
 
     def _normalize_uint8(arr):
         arr = np.asarray(arr)

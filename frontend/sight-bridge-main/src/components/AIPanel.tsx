@@ -471,6 +471,10 @@ export function AIPanel({
                   label="Cotton-wool spots"
                   value={activeAnalysis.lesions.soft_exudates ?? activeAnalysis.lesions.cotton_wool_spots ?? 0}
                 />
+                <LesionRow
+                  label="Neovascularization"
+                  value={activeAnalysis.lesions.neovascularization ?? 0}
+                />
                 <div className="flex items-center justify-between pt-1 border-t border-slate-700">
                   <span className="text-xs text-slate-400">Coverage</span>
                   <span className="text-xs text-amber-400 font-mono">

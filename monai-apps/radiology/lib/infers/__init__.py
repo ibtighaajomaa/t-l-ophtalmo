@@ -17,6 +17,7 @@ from .clip_dr_classification import CLIPDRClassification
 from .eye_laterality import EyeLaterality
 from .fovea_detection import FoveaDetection
 from .lesion_seg import LesionSeg
+from .neovascularization_seg import NeovascularizationSeg
 from .localization_spine import LocalizationSpine
 from .localization_vertebra import LocalizationVertebra
 from .optic_disc_cup import OpticDiscCup
