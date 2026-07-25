@@ -77,6 +77,14 @@ window.config = {
             contentF: () => '🟥 Exsudats cotonneux',
           },
           {
+            id: 'RetinalLegendNeovascularization',
+            inheritsFrom: 'ohif.overlayItem',
+            label: '',
+            condition: ({ referenceInstance }) =>
+              referenceInstance?.Modality === 'OP',
+            contentF: () => '🟨 Néovascularisation',
+          },
+          {
             id: 'RetinalLegendOpticDisc',
             inheritsFrom: 'ohif.overlayItem',
             label: '',

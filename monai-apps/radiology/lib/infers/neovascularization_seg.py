@@ -108,7 +108,7 @@ class NeovascularizationSeg(BasicInferTask):
         data[self.output_label_key] = MetaTensor(torch.from_numpy(neovascularization), meta=meta)
         data[self.output_json_key] = {
             "label_info": [
-                {"label": 1, "name": "Neovascularisation", "color": [252, 5, 38]},
+                {"label": 1, "name": "Neovascularisation", "color": [255, 215, 0]},
             ],
             "model_id": "hmgill/BigEye",
             "model_task": "class_5_neovascularization",
