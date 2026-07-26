@@ -4,6 +4,7 @@ from typing import Callable, Sequence
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 from monai.data import MetaTensor
 from monai.transforms import (
     EnsureChannelFirstd,
@@ -16,8 +17,72 @@ from monai.transforms import (
 from monailabel.interfaces.tasks.infer_v2 import InferType
 from monailabel.tasks.infer.basic_infer import BasicInferTask
 from .optic_disc_cup import Ensure3ChannelRGBd, SqueezeDepthd
+from transformers import AutoImageProcessor, SegformerForSemanticSegmentation
 
 logger = logging.getLogger(__name__)
+
+ODOC_MODEL_ID = "pamixsun/segformer_for_optic_disc_cup_segmentation"
+
+
+def suppress_optic_disc_lesions(prediction, odoc_prediction, margin_ratio=0.015):
+    """Remove lesion labels on and immediately around the optic disc/cup."""
+    lesions = np.asarray(prediction).copy()
+    odoc = np.asarray(odoc_prediction)
+    if lesions.ndim != 2 or odoc.ndim != 2:
+        raise ValueError("Lesion and optic-disc predictions must both be 2D")
+    if odoc.shape != lesions.shape:
+        odoc = cv2.resize(
+            odoc.astype(np.uint8),
+            (lesions.shape[1], lesions.shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        )
+
+    exclusion = (odoc > 0).astype(np.uint8)
+    if not exclusion.any():
+        return lesions
+
+    margin = max(1, int(round(min(lesions.shape) * margin_ratio)))
+    kernel_size = margin * 2 + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    exclusion = cv2.dilate(exclusion, kernel, iterations=1).astype(bool)
+    removed = int(np.count_nonzero(lesions[exclusion]))
+    lesions[exclusion] = 0
+    logger.info("Suppressed %s lesion pixels overlapping the optic disc/cup", removed)
+    return lesions
+
+
+def suppress_macular_zone_lesions(prediction, radius_ratio=0.08):
+    """Remove complete lesion components that intersect the macular zone."""
+    lesions = np.asarray(prediction).copy()
+    if lesions.ndim != 2:
+        raise ValueError("Lesion prediction must be 2D")
+
+    height, width = lesions.shape
+    center_x = (width - 1) / 2.0
+    center_y = (height - 1) / 2.0
+    radius = max(1.0, min(height, width) * float(radius_ratio))
+    yy, xx = np.ogrid[:height, :width]
+    macular_zone = (xx - center_x) ** 2 + (yy - center_y) ** 2 <= radius ** 2
+    removed = 0
+    removed_components = 0
+    for class_id in np.unique(lesions):
+        if class_id == 0:
+            continue
+        count, components = cv2.connectedComponents(
+            (lesions == class_id).astype(np.uint8), connectivity=8
+        )
+        for component_id in range(1, count):
+            component = components == component_id
+            if np.any(component & macular_zone):
+                removed += int(np.count_nonzero(component))
+                removed_components += 1
+                lesions[component] = 0
+    logger.info(
+        "Suppressed %s macular lesion components (%s pixels)",
+        removed_components,
+        removed,
+    )
+    return lesions
 
 
 class CaptureOriginalSpatialShaped(MapTransform):
@@ -51,6 +116,33 @@ class LesionSeg(BasicInferTask):
             load_strict=False,
             **kwargs,
         )
+        self._odoc_model = None
+        self._odoc_processor = None
+
+    def _load_odoc_model(self, device):
+        if self._odoc_model is None:
+            logger.info("Loading optic-disc model for lesion false-positive suppression")
+            self._odoc_processor = AutoImageProcessor.from_pretrained(ODOC_MODEL_ID)
+            self._odoc_model = SegformerForSemanticSegmentation.from_pretrained(ODOC_MODEL_ID)
+            self._odoc_model.eval()
+        self._odoc_model.to(device)
+        return self._odoc_model
+
+    def _predict_optic_disc(self, image, device):
+        array = image.detach().float().cpu().numpy() if torch.is_tensor(image) else np.asarray(image)
+        array = np.transpose(array[:3], (1, 2, 0))
+        if array.size and float(array.max()) <= 1.0:
+            array = array * 255.0
+        array = np.clip(array, 0, 255).astype(np.uint8)
+        model = self._load_odoc_model(device)
+        inputs = self._odoc_processor(images=array, return_tensors="pt")
+        inputs = {key: value.to(device) for key, value in inputs.items()}
+        with torch.no_grad():
+            logits = model(**inputs).logits
+        logits = F.interpolate(
+            logits, size=image.shape[-2:], mode="bilinear", align_corners=False
+        )
+        return logits.argmax(dim=1)[0].cpu().numpy().astype(np.uint8)
 
     def is_valid(self) -> bool:
         # Missing or invalid checkpoints are reported explicitly during load.
@@ -76,6 +168,9 @@ class LesionSeg(BasicInferTask):
         with torch.no_grad():
             logits = network(inputs.to(torch.device(device)))
             prediction = torch.softmax(logits, dim=1).argmax(dim=1)[0].cpu().numpy().astype(np.uint8)
+        odoc_prediction = self._predict_optic_disc(image, torch.device(device))
+        prediction = suppress_optic_disc_lesions(prediction, odoc_prediction)
+        prediction = suppress_macular_zone_lesions(prediction)
         if prediction.shape != original_shape:
             prediction = cv2.resize(
                 prediction,

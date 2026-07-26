@@ -1,8 +1,9 @@
 import json
-from datetime import date
+from datetime import date, timedelta
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from unittest.mock import patch, MagicMock
 from rest_framework.test import APIRequestFactory, force_authenticate
 from ophtalmo.models import AnalysisReport, Exam, ImageQualityAssessment, MedicalReport
@@ -11,6 +12,7 @@ from ophtalmo.tasks import (
     _run_eye_laterality,
     tache_auto_quality,
     tache_auto_segmentation,
+    tache_watchdog_traitements,
 )
 from ophtalmo.views import (
     latest_analysis,
@@ -24,6 +26,63 @@ from ophtalmo.analysis_utils import aggregate_per_eye, calculate_deepseenet_pati
 
 
 TODAY = date.today()
+
+
+class ProcessingWatchdogTest(TestCase):
+    @patch('ophtalmo.tasks._inspected_task_ids', return_value={'seg-active'})
+    def test_does_not_reset_a_live_long_running_segmentation(self, _known):
+        exam = Exam.objects.create(
+            study_instance_uid='watchdog-live-seg',
+            patient_name='Live Segmentation',
+            exam_type='Rétinographie',
+            date=TODAY,
+            segmentation_status='in_progress',
+            segmentation_task_id='seg-active',
+            segmentation_heartbeat_at=timezone.now() - timedelta(hours=2),
+        )
+
+        tache_watchdog_traitements()
+
+        exam.refresh_from_db()
+        self.assertEqual(exam.segmentation_status, 'in_progress')
+
+    @patch('ophtalmo.tasks.tache_auto_segmentation.delay')
+    @patch('ophtalmo.tasks._inspected_task_ids', return_value=set())
+    def test_recovers_an_orphaned_segmentation(self, _known, mock_delay):
+        exam = Exam.objects.create(
+            study_instance_uid='watchdog-orphan-seg',
+            patient_name='Orphan Segmentation',
+            exam_type='Rétinographie',
+            date=TODAY,
+            segmentation_status='in_progress',
+            segmentation_task_id='seg-missing',
+            segmentation_heartbeat_at=timezone.now() - timedelta(hours=2),
+        )
+
+        tache_watchdog_traitements()
+
+        exam.refresh_from_db()
+        self.assertEqual(exam.segmentation_status, 'pending')
+        self.assertEqual(exam.segmentation_retries, 1)
+        mock_delay.assert_called_once_with(exam.id)
+
+    @patch('ophtalmo.tasks._inspected_task_ids', return_value={'report-active'})
+    def test_never_resets_a_live_report_based_on_duration(self, _known):
+        exam = Exam.objects.create(
+            study_instance_uid='watchdog-live-report',
+            patient_name='Live Report',
+            exam_type='Rétinographie',
+            date=TODAY,
+            report_generation_status='in_progress',
+            report_generation_task_id='report-active',
+            report_generation_heartbeat_at=timezone.now() - timedelta(hours=6),
+        )
+
+        tache_watchdog_traitements()
+
+        exam.refresh_from_db()
+        self.assertEqual(exam.report_generation_status, 'in_progress')
+        self.assertEqual(exam.report_generation_task_id, 'report-active')
 
 
 class FoveaAggregationTest(TestCase):
@@ -221,6 +280,7 @@ class SegmentationModelTest(TestCase):
         self.assertEqual(result['laterality_source'], 'dicom')
         self.assertEqual(result['dicom_laterality'], 'L')
         self.assertEqual(result['model_laterality'], 'R')
+        self.assertEqual(mock_post.call_args.kwargs['timeout'], (10, None))
 
 
 class SegmentationCleanupTest(TestCase):

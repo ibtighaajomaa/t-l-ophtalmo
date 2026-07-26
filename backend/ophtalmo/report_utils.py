@@ -79,7 +79,7 @@ def build_ai_report_text(patient_id, report_data, eye, patient_age=None, series_
                         )
                     },
                     data=form_data,
-                    timeout=600,
+                    timeout=(10, None),
                 )
                 resp.raise_for_status()
                 result = resp.json()
@@ -101,7 +101,7 @@ def build_ai_report_text(patient_id, report_data, eye, patient_age=None, series_
         "report_data": report_data,
         "max_new_tokens": 1024,
     }
-    resp = requests.post(f"{url}/report", json=payload, timeout=600)
+    resp = requests.post(f"{url}/report", json=payload, timeout=(10, None))
     resp.raise_for_status()
     result = resp.json().get("report", {})
     return {
@@ -120,7 +120,7 @@ def build_ai_summary_report(patient_id, reports_by_eye, per_eye, patient_age=Non
         "per_eye": per_eye or {},
         "max_new_tokens": 1024,
     }
-    resp = requests.post(f"{url}/summary-report", json=payload, timeout=600)
+    resp = requests.post(f"{url}/summary-report", json=payload, timeout=(10, None))
     resp.raise_for_status()
     result = resp.json().get("report", {})
     return {

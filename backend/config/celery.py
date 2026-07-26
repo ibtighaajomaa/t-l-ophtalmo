@@ -4,6 +4,7 @@ Auto-discovers tasks from all installed Django apps.
 """
 import os
 from celery import Celery
+from celery.signals import worker_ready
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 
@@ -14,6 +15,12 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 
 # Auto-discover tasks.py in each installed app
 app.autodiscover_tasks()
+
+
+@worker_ready.connect
+def recover_orphaned_processing(sender=None, **kwargs):
+    """Schedule a safe orphan audit whenever a worker comes online."""
+    app.send_task('ophtalmo.tasks.tache_watchdog_traitements')
 
 
 @app.task(bind=True, ignore_result=True)

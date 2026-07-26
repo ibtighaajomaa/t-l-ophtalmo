@@ -20,6 +20,7 @@ from monailabel.interfaces.tasks.infer_v2 import InferTask, InferType
 from monailabel.utils.others.generic import device_list
 from transformers import SegformerForSemanticSegmentation, AutoImageProcessor
 from .fovea_detection import detect_fovea_rgb, loaded_image_to_rgb
+from .lesion_seg import suppress_macular_zone_lesions, suppress_optic_disc_lesions
 LESION_NAMES = {1: "hard_exudates", 2: "hemorrhages", 3: "microaneurysms", 4: "soft_exudates"}
 LESION_COLORS = {
     1: (160, 160, 160), 2: (50, 50, 255), 3: (106, 13, 173), 4: (255, 0, 140)
@@ -285,6 +286,8 @@ class CompositeSegmenter(InferTask):
 
         # Lesions
         lesion_pred = self._run_lesion(lesion_proc, lesion_model, device)
+        lesion_pred = suppress_optic_disc_lesions(lesion_pred, odoc_pred)
+        lesion_pred = suppress_macular_zone_lesions(lesion_pred)
 
         # Vessels
         vessel_mask, vessel_prob = self._run_vessel(vessel_proc, vessel_model, device)

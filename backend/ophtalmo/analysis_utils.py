@@ -14,11 +14,10 @@ DR_SEVERITY = {
 }
 
 DR_MODEL_NAMES = {
-    "vit": "ViT actuel",
     "clip_dr": "CLIP-DR",
     "flair": "FLAIR (zéro-shot)",
 }
-DR_MODEL_PRIORITY = {"vit": 0, "clip_dr": 1, "flair": 2}
+DR_MODEL_PRIORITY = {"clip_dr": 0, "flair": 1}
 
 
 def _dr_grade_index(result):
@@ -50,6 +49,8 @@ def select_critical_dr_classification(models):
     """Select the highest main grade, using confidence only as a tie-breaker."""
     available = []
     for model_key, model_result in (models or {}).items():
+        if model_key == "vit":
+            continue
         if not isinstance(model_result, dict) or model_result.get("status") != "ok":
             continue
         grade_index = _dr_grade_index(model_result)
@@ -98,6 +99,8 @@ def select_closest_dr_model(models, adjudication):
         return None
     candidates = []
     for model_key, model_result in (models or {}).items():
+        if model_key == "vit":
+            continue
         if not isinstance(model_result, dict) or model_result.get("status") != "ok":
             continue
         grade_index = _dr_grade_index(model_result)
@@ -184,13 +187,6 @@ def _blank_eye(side):
             "probabilities": [],
         },
         "dr_classification_models": {
-            "vit": {
-                "status": "unavailable",
-                "grade": "Unknown",
-                "confidence": 0.0,
-                "probabilities": [],
-                "calibration_status": "not_locally_calibrated",
-            },
             "clip_dr": {
                 "status": "unavailable",
                 "grade": "Unknown",
@@ -253,9 +249,10 @@ def _blank_eye(side):
 
 def _copy_report_fields(target, report, include_visuals=True):
     target["dr_classification"] = report.get("dr_classification") or target["dr_classification"]
-    target["dr_classification_models"] = (
-        report.get("dr_classification_models") or target["dr_classification_models"]
-    )
+    incoming_models = report.get("dr_classification_models") or {}
+    target["dr_classification_models"] = {
+        key: value for key, value in incoming_models.items() if key != "vit"
+    } or target["dr_classification_models"]
     target["selected_dr_classification"] = select_critical_dr_classification(
         target["dr_classification_models"]
     )

@@ -87,6 +87,10 @@ class Exam(models.Model):
     segmentation_retries = models.IntegerField(default=0)
     segmentation_error = models.TextField(blank=True, default="")
     segmentation_models_status = models.JSONField(null=True, blank=True)
+    segmentation_task_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    segmentation_started_at = models.DateTimeField(null=True, blank=True)
+    segmentation_heartbeat_at = models.DateTimeField(null=True, blank=True)
+    segmentation_current_step = models.CharField(max_length=255, blank=True, default="")
 
     quality_status = models.CharField(
         max_length=20,
@@ -104,6 +108,10 @@ class Exam(models.Model):
     )
     report_generation_error = models.TextField(blank=True, default="")
     report_generated_at = models.DateTimeField(null=True, blank=True)
+    report_generation_task_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    report_generation_started_at = models.DateTimeField(null=True, blank=True)
+    report_generation_heartbeat_at = models.DateTimeField(null=True, blank=True)
+    report_generation_current_step = models.CharField(max_length=255, blank=True, default="")
 
     is_reassigned_24h = models.BooleanField(default=False)
     reassigned_from = models.ForeignKey(

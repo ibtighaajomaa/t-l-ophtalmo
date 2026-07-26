@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 SEGMENTATION_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
 CLIP_DR_MODEL = "clip_dr_classification"
-VIT_DR_MODEL = "dr_classification"
 FLAIR_DR_MODEL = "flair_dr_classification"
 LATERALITY_MODEL = "eye_laterality"
 
@@ -159,11 +158,20 @@ def classify_dr_model(app, image_id, model_name, display_name):
 
 
 def classify_dr_models(app, image_id):
-    """Run ViT as canonical classifier, with CLIP-DR and FLAIR as comparators."""
-    vit = classify_dr_model(app, image_id, VIT_DR_MODEL, "Kontawat/vit-diabetic-retinopathy-classification")
+    """Run the supported CLIP-DR and FLAIR classifiers."""
     clip_dr = classify_dr_model(app, image_id, CLIP_DR_MODEL, "Qinkaiyu/CLIP-DR")
     flair = classify_dr_model(app, image_id, FLAIR_DR_MODEL, "jusiro2/FLAIR")
-    return vit, {"vit": vit, "clip_dr": clip_dr, "flair": flair}, {}
+    models = {"clip_dr": clip_dr, "flair": flair}
+    available = [result for result in models.values() if result.get("status") == "ok"]
+    selected = max(
+        available,
+        key=lambda result: (
+            int(result.get("grade_index", -1)),
+            float(result.get("confidence", 0.0)),
+        ),
+        default={"status": "unavailable", "grade": "Unknown", "confidence": 0.0},
+    )
+    return selected, models, {}
 
 
 def detect_laterality(app, image_id):

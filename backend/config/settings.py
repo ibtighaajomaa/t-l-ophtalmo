@@ -240,6 +240,9 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Tunis'
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_TRACK_STARTED = True
+CELERY_BROKER_TRANSPORT_OPTIONS = {'visibility_timeout': 24 * 60 * 60}
 
 # Celery Beat — Tâches planifiées
 CELERY_BEAT_SCHEDULE = {
@@ -262,6 +265,10 @@ CELERY_BEAT_SCHEDULE = {
     'auto-report-generation': {
         'task': 'ophtalmo.tasks.tache_auto_report_generation',
         'schedule': timedelta(seconds=60),
+    },
+    'processing-watchdog': {
+        'task': 'ophtalmo.tasks.tache_watchdog_traitements',
+        'schedule': timedelta(minutes=5),
     },
 }
 

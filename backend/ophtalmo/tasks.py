@@ -11,7 +11,7 @@ import os
 import json
 import hashlib
 import logging
-from datetime import date
+from datetime import date, timedelta
 import requests
 from celery import shared_task
 from django.core.cache import cache
@@ -23,6 +23,10 @@ from .orthanc_origin import resolve_study_origin
 logger = logging.getLogger(__name__)
 
 ORTHANC_URL = os.environ.get('ORTHANC_URL', 'http://orthanc-container:8042')
+
+# CPU inference can legitimately take many minutes. Keep connection setup
+# bounded, but never impose a response/read deadline on an active AI model.
+AI_INFERENCE_TIMEOUT = (10, None)
 
 
 def _monai_label_ready(monai_label_url, timeout=5):
@@ -670,7 +674,7 @@ def _run_eye_laterality(monai_label_url, series_instance_uid, base_params, dicom
         f"{monai_label_url}/infer/eye_laterality",
         params={"image": series_instance_uid},
         data={"params": json.dumps(base_params)},
-        timeout=120,
+        timeout=AI_INFERENCE_TIMEOUT,
     )
     if resp.status_code != 200:
         return {'status': f'failed (HTTP {resp.status_code})'}
@@ -748,11 +752,15 @@ def _retry_or_fail_segmentation(exam, max_retries, error, models_status=None):
     else:
         exam.segmentation_status = 'pending'
         exam.segmentation_error = str(error)[:1000]
+    exam.segmentation_task_id = ""
+    exam.segmentation_current_step = ""
     exam.save(update_fields=[
         'segmentation_status',
         'segmentation_retries',
         'segmentation_error',
         'segmentation_models_status',
+        'segmentation_task_id',
+        'segmentation_current_step',
     ])
 
 
@@ -761,10 +769,17 @@ def _set_exam_report_status(exam, status, error=""):
     exam.report_generation_error = error or ""
     if status == "completed":
         exam.report_generated_at = timezone.now()
+    if status in ("completed", "failed"):
+        exam.report_generation_task_id = ""
+        exam.report_generation_heartbeat_at = timezone.now()
+        exam.report_generation_current_step = ""
     update_fields = [
         "report_generation_status",
         "report_generation_error",
         "report_generated_at",
+        "report_generation_task_id",
+        "report_generation_heartbeat_at",
+        "report_generation_current_step",
         "updated_at",
     ]
     exam.save(update_fields=update_fields)
@@ -783,6 +798,30 @@ def _merge_analysis_report_status(study_uid, **updates):
     return analysis_report
 
 
+def _report_heartbeat(exam, step):
+    now = timezone.now()
+    exam.report_generation_heartbeat_at = now
+    exam.report_generation_current_step = step
+    exam.save(update_fields=[
+        "report_generation_heartbeat_at",
+        "report_generation_current_step",
+        "updated_at",
+    ])
+
+
+def _segmentation_heartbeat(exam, step, lock_key=None, lock_timeout=20 * 60):
+    now = timezone.now()
+    exam.segmentation_heartbeat_at = now
+    exam.segmentation_current_step = step
+    exam.save(update_fields=[
+        "segmentation_heartbeat_at",
+        "segmentation_current_step",
+        "updated_at",
+    ])
+    if lock_key:
+        cache.touch(lock_key, timeout=lock_timeout)
+
+
 @shared_task(
     name='ophtalmo.tasks.tache_generate_ai_report',
     bind=True,
@@ -790,6 +829,8 @@ def _merge_analysis_report_status(study_uid, **updates):
     autoretry_for=(requests.RequestException,),
     retry_backoff=True,
     retry_kwargs={'max_retries': 2},
+    acks_late=True,
+    reject_on_worker_lost=True,
 )
 def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
     """
@@ -818,7 +859,19 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
         _set_exam_report_status(exam, "completed", "")
         return {"status": "completed", "skipped": True}
 
-    _set_exam_report_status(exam, "in_progress", "")
+    now = timezone.now()
+    exam.report_generation_status = "in_progress"
+    exam.report_generation_error = ""
+    exam.report_generation_task_id = self.request.id or exam.report_generation_task_id
+    exam.report_generation_started_at = exam.report_generation_started_at or now
+    exam.report_generation_heartbeat_at = now
+    exam.report_generation_current_step = "préparation"
+    exam.save(update_fields=[
+        "report_generation_status", "report_generation_error",
+        "report_generation_task_id", "report_generation_started_at",
+        "report_generation_heartbeat_at", "report_generation_current_step",
+        "updated_at",
+    ])
     _merge_analysis_report_status(
         analysis_report.series_instance_uid,
         report_generation_status="in_progress",
@@ -836,7 +889,7 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
         )
         return {"status": "failed", "error": message}
 
-    reports_by_eye = {}
+    reports_by_eye = dict(report_json.get("reports_by_eye") or {})
     eye_texts = []
     report_errors = []
     patient_id = exam.patient_id or "inconnu"
@@ -846,6 +899,11 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
         if not eye_report:
             continue
         eye_label = "Œil droit" if side == "right" else "Œil gauche"
+        existing_eye = reports_by_eye.get(side) or {}
+        if existing_eye.get("status") == "generated" and existing_eye.get("report_text"):
+            eye_texts.append(f"{eye_label}:\n{existing_eye['report_text']}")
+            continue
+        _report_heartbeat(exam, f"génération {eye_label.lower()}")
         try:
             generated = build_ai_report_text(
                 patient_id,
@@ -883,6 +941,13 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
         text = generated.get("report_text") or ""
         if text:
             eye_texts.append(f"{eye_label}:\n{text}")
+        _merge_analysis_report_status(
+            analysis_report.series_instance_uid,
+            reports_by_eye=reports_by_eye,
+            report_generation_status="in_progress",
+            report_generation_current_step=f"{eye_label} terminé",
+        )
+        _report_heartbeat(exam, f"{eye_label} terminé")
 
     if not eye_texts:
         message = "; ".join(report_errors) or "Le générateur de rapport a renvoyé un contenu vide."
@@ -896,6 +961,7 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
         return {"status": "failed", "error": message}
 
     summary_error = ""
+    _report_heartbeat(exam, "synthèse bilatérale")
     try:
         summary = build_ai_summary_report(
             patient_id,
@@ -1048,16 +1114,150 @@ def tache_auto_report_generation(limit=20):
             "updated_at",
         ])
 
-        tache_generate_ai_report.apply_async(
+        queued_task = tache_generate_ai_report.apply_async(
             args=[exam.id, analysis_report.series_instance_uid],
             queue="reports",
         )
+        exam.report_generation_task_id = queued_task.id
+        exam.report_generation_started_at = timezone.now()
+        exam.report_generation_heartbeat_at = timezone.now()
+        exam.report_generation_current_step = "en file"
+        exam.save(update_fields=[
+            "report_generation_task_id", "report_generation_started_at",
+            "report_generation_heartbeat_at", "report_generation_current_step",
+            "updated_at",
+        ])
+        report_json["report_generation_task_id"] = queued_task.id
+        analysis_report.report_json = report_json
+        analysis_report.save(update_fields=["report_json"])
         queued += 1
 
         if queued >= limit:
             break
 
     return {"queued": queued, "skipped": skipped}
+
+
+def _inspected_task_ids(inspect):
+    """Return task ids visible on live workers, or None if inspection failed."""
+    snapshots = []
+    for getter in (inspect.active, inspect.reserved, inspect.scheduled):
+        data = getter()
+        if data is None:
+            return None
+        snapshots.append(data)
+
+    task_ids = set()
+    for snapshot in snapshots:
+        for tasks in snapshot.values():
+            for item in tasks:
+                request = item.get("request") if isinstance(item, dict) else None
+                task_id = (request or item).get("id") if isinstance(item, dict) else None
+                if task_id:
+                    task_ids.add(task_id)
+    return task_ids
+
+
+@shared_task(name="ophtalmo.tasks.tache_watchdog_traitements")
+def tache_watchdog_traitements():
+    """Recover orphaned work without imposing a duration limit on live reports."""
+    from celery import current_app
+    from .models import AnalysisReport, Exam
+
+    watchdog_lock = "ophtalmo:processing_watchdog"
+    if not cache.add(watchdog_lock, "1", timeout=4 * 60):
+        return {"status": "already_running"}
+
+    try:
+        known_ids = _inspected_task_ids(current_app.control.inspect(timeout=2))
+        if known_ids is None:
+            logger.warning("[Watchdog] Inspection Celery indisponible; aucune reprise risquée.")
+            return {"status": "inspect_unavailable"}
+
+        now = timezone.now()
+        segmentation_cutoff = now - timedelta(minutes=60)
+        recovered_segmentations = 0
+        recovered_reports = 0
+        repaired_pending_reports = 0
+
+        stale_segmentations = Exam.objects.filter(
+            segmentation_status="in_progress",
+            segmentation_heartbeat_at__lt=segmentation_cutoff,
+        )
+        for exam in stale_segmentations:
+            if exam.segmentation_task_id and exam.segmentation_task_id in known_ids:
+                continue
+            _retry_or_fail_segmentation(
+                exam,
+                3,
+                "Tâche de segmentation interrompue; reprise par le watchdog.",
+            )
+            if exam.segmentation_status == "pending":
+                tache_auto_segmentation.delay(exam.id)
+            recovered_segmentations += 1
+
+        # A report is recovered only when it is old AND Celery confirms that its
+        # task id is absent. Runtime alone never interrupts a live CPU inference.
+        stale_reports = Exam.objects.filter(
+            report_generation_status="in_progress",
+            report_generation_heartbeat_at__lt=segmentation_cutoff,
+        )
+        for exam in stale_reports:
+            if exam.report_generation_task_id and exam.report_generation_task_id in known_ids:
+                continue
+            analysis_report = AnalysisReport.objects.filter(
+                series_instance_uid=exam.study_instance_uid
+            ).first()
+            if not analysis_report:
+                analysis_report = AnalysisReport.objects.filter(
+                    report_json__study_instance_uid=exam.study_instance_uid
+                ).first()
+            if not analysis_report:
+                _set_exam_report_status(exam, "failed", "Analyse IA introuvable à la reprise.")
+                continue
+            queued_task = tache_generate_ai_report.apply_async(
+                args=[exam.id, analysis_report.series_instance_uid],
+                queue="reports",
+            )
+            exam.report_generation_status = "pending"
+            exam.report_generation_task_id = queued_task.id
+            exam.report_generation_started_at = now
+            exam.report_generation_heartbeat_at = now
+            exam.report_generation_current_step = "reprise en file"
+            exam.save(update_fields=[
+                "report_generation_status", "report_generation_task_id",
+                "report_generation_started_at", "report_generation_heartbeat_at",
+                "report_generation_current_step", "updated_at",
+            ])
+            recovered_reports += 1
+
+        # Repair legacy/incomplete queue markers. Existing task ids are never
+        # duplicated because Redis does not expose all waiting tasks to inspect.
+        pending_without_task = Exam.objects.filter(
+            report_generation_status="pending",
+            report_generation_task_id="",
+        )
+        for exam in pending_without_task:
+            reports = AnalysisReport.objects.filter(series_instance_uid=exam.study_instance_uid)
+            for analysis_report in reports:
+                report_json = analysis_report.report_json or {}
+                if report_json.get("report_generation_task_queued"):
+                    report_json["report_generation_task_queued"] = False
+                    analysis_report.report_json = report_json
+                    analysis_report.save(update_fields=["report_json"])
+                    repaired_pending_reports += 1
+
+        if repaired_pending_reports:
+            tache_auto_report_generation.delay()
+
+        return {
+            "status": "ok",
+            "recovered_segmentations": recovered_segmentations,
+            "recovered_reports": recovered_reports,
+            "repaired_pending_reports": repaired_pending_reports,
+        }
+    finally:
+        cache.delete(watchdog_lock)
 
 
 @shared_task(name='ophtalmo.tasks.tache_distribution')
@@ -1406,8 +1606,13 @@ def tache_auto_quality(exam_id=None):
     return {'processed': processed, 'images_analyzed': images_analyzed}
 
 
-@shared_task(name='ophtalmo.tasks.tache_auto_segmentation')
-def tache_auto_segmentation(exam_id=None):
+@shared_task(
+    name='ophtalmo.tasks.tache_auto_segmentation',
+    bind=True,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def tache_auto_segmentation(self, exam_id=None):
     """
     Parcourt les examens OP en segmentation_status='pending' et déclenche
     la segmentation MONAI Label (OD/OC, vaisseaux, lésions), la classification
@@ -1438,7 +1643,8 @@ def tache_auto_segmentation(exam_id=None):
     # ÉTAPE 1 : Gestion du verrou de concurrence
     # ==========================================
     lock_key = 'ophtalmo:auto_segmentation_running'
-    if not cache.add(lock_key, '1', timeout=20 * 60):
+    lock_token = self.request.id or f"manual-{os.getpid()}"
+    if not cache.add(lock_key, lock_token, timeout=20 * 60):
         logger.warning("[AutoSeg] Tâche déjà en cours d'exécution (verrou actif). Annulation de cette instance.")
         return {'status': 'already_running'}
 
@@ -1494,7 +1700,16 @@ def tache_auto_segmentation(exam_id=None):
 
             # Passage du statut à "En cours" pour verrouiller l'examen en base de données
             exam.segmentation_status = 'in_progress'
-            exam.save(update_fields=['segmentation_status'])
+            now = timezone.now()
+            exam.segmentation_task_id = self.request.id or exam.segmentation_task_id
+            exam.segmentation_started_at = now
+            exam.segmentation_heartbeat_at = now
+            exam.segmentation_current_step = 'préparation'
+            exam.save(update_fields=[
+                'segmentation_status', 'segmentation_task_id',
+                'segmentation_started_at', 'segmentation_heartbeat_at',
+                'segmentation_current_step', 'updated_at',
+            ])
             logger.debug(f"[Examen {exam.id}] Statut mis à jour à 'in_progress' en base de données.")
 
             # Récupération des séries de type rétinographie (OP) depuis Orthanc
@@ -1543,6 +1758,7 @@ def tache_auto_segmentation(exam_id=None):
             # ==========================================
             for op_series_item in op_series:
                 op_series_uid = op_series_item['series_instance_uid']
+                _segmentation_heartbeat(exam, f'série {op_series_uid}', lock_key)
                 op_orthanc_series_id = op_series_item['orthanc_series_id']
                 series_status = {}
                 source_instances = op_series_item.get('instances') or []
@@ -1664,6 +1880,11 @@ def tache_auto_segmentation(exam_id=None):
                 segmented_instances = []
 
                 for instance_index, source_instance in enumerate(source_instances, start=1):
+                    _segmentation_heartbeat(
+                        exam,
+                        f'segmentation image {instance_index}/{len(source_instances)}',
+                        lock_key,
+                    )
                     instance_id = source_instance.get('orthanc_instance_id')
                     sop_uid = source_instance.get('sop_instance_uid')
 
@@ -1712,7 +1933,7 @@ def tache_auto_segmentation(exam_id=None):
                                         "source_sop_instance_uid": sop_uid,
                                     })
                                 },
-                                timeout=300,
+                                timeout=AI_INFERENCE_TIMEOUT,
                             )
                             if resp.status_code == 200:
                                 model_results[model].append('ok')
@@ -1757,7 +1978,7 @@ def tache_auto_segmentation(exam_id=None):
                                     "source_sop_instance_uid": sop_uid,
                                 })
                             },
-                            timeout=300,
+                            timeout=AI_INFERENCE_TIMEOUT,
                         )
                         if fovea_resp.status_code == 200:
                             fovea_payload = fovea_resp.json()
@@ -1800,7 +2021,7 @@ def tache_auto_segmentation(exam_id=None):
                                     "fovea_error": fovea_error,
                                 })
                             },
-                            timeout=300,
+                            timeout=AI_INFERENCE_TIMEOUT,
                         )
                         if deepseenet_resp.status_code == 200:
                             deepseenet_payload = deepseenet_resp.json()
@@ -1855,6 +2076,11 @@ def tache_auto_segmentation(exam_id=None):
                 analysis_instances = []
                 analysis_failures = []
                 for instance_index, source_instance in enumerate(source_instances, start=1):
+                    _segmentation_heartbeat(
+                        exam,
+                        f'analyse DR image {instance_index}/{len(source_instances)}',
+                        lock_key,
+                    )
                     instance_id = source_instance.get('orthanc_instance_id')
                     sop_uid = source_instance.get('sop_instance_uid')
                     try:
@@ -1879,7 +2105,7 @@ def tache_auto_segmentation(exam_id=None):
                                 "study_uid": op_study_uid or study_id,
                                 "source_sop_instance_uid": sop_uid,
                             },
-                            timeout=300,
+                            timeout=AI_INFERENCE_TIMEOUT,
                         )
                         if analyze_resp.status_code == 200:
                             analysis = analyze_resp.json()
@@ -2036,10 +2262,19 @@ def tache_auto_segmentation(exam_id=None):
                     "report_generated_at",
                     "updated_at",
                 ])
-                tache_generate_ai_report.apply_async(
+                queued_task = tache_generate_ai_report.apply_async(
                     args=[exam.id, study_id],
                     queue="reports",
                 )
+                exam.report_generation_task_id = queued_task.id
+                exam.report_generation_started_at = timezone.now()
+                exam.report_generation_heartbeat_at = timezone.now()
+                exam.report_generation_current_step = "en file"
+                exam.save(update_fields=[
+                    "report_generation_task_id", "report_generation_started_at",
+                    "report_generation_heartbeat_at", "report_generation_current_step",
+                    "updated_at",
+                ])
                 logger.info(f"[Examen {exam.id}] Tâche de génération de rapport IA mise en file.")
 
             # ==========================================
@@ -2069,9 +2304,14 @@ def tache_auto_segmentation(exam_id=None):
                         f"pour une nouvelle tentative (Essai {exam.segmentation_retries}/{MAX_RETRIES})"
                     )
 
+            exam.segmentation_task_id = ''
+            exam.segmentation_current_step = ''
+            exam.segmentation_heartbeat_at = timezone.now()
             exam.save(update_fields=[
                 'segmentation_status', 'segmentation_retries',
                 'segmentation_error', 'segmentation_models_status',
+                'segmentation_task_id', 'segmentation_current_step',
+                'segmentation_heartbeat_at',
             ])
             processed += 1
 

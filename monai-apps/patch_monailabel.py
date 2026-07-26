@@ -1083,26 +1083,6 @@ async def analyze(request: dict):
         except Exception as push_error:
             logger.error("Analyze DICOM-SEG export failed: %s", push_error)
 
-    vit_dr = {
-        "status": "unavailable",
-        "grade": "Unknown",
-        "confidence": 0.0,
-        "probabilities": {},
-        "calibration_status": "not_locally_calibrated",
-    }
-    try:
-        vit_result = _run_model(
-            "dr_classification",
-            {"result_extension": ".json", "device": "cpu"},
-        )
-        vit_dr = _normalize_dr(vit_result.get("params") or {})
-        vit_dr.setdefault("status", "ok")
-        vit_dr.setdefault("model_id", "Kontawat/vit-diabetic-retinopathy-classification")
-        vit_dr.setdefault("calibration_status", "not_locally_calibrated")
-    except Exception as e:
-        logger.warning("Analyze ViT DR unavailable: %s", e)
-        vit_dr["reason"] = str(e)[:240]
-
     clip_dr = {
         "status": "unavailable",
         "grade": "Unknown",
@@ -1148,9 +1128,24 @@ async def analyze(request: dict):
         logger.warning("Analyze FLAIR DR unavailable: %s", e)
         flair_dr["reason"] = str(e)[:240]
 
-    # ViT remains canonical; CLIP-DR and FLAIR are independent comparators.
-    dr = vit_dr
-    dr_classification_models = {"vit": vit_dr, "clip_dr": clip_dr, "flair": flair_dr}
+    dr_classification_models = {"clip_dr": clip_dr, "flair": flair_dr}
+    available_dr = [
+        result for result in dr_classification_models.values()
+        if result.get("status") == "ok"
+    ]
+    dr = max(
+        available_dr,
+        key=lambda result: (
+            int(result.get("grade_index", -1)),
+            float(result.get("confidence", 0.0)),
+        ),
+        default={
+            "status": "unavailable",
+            "grade": "Unknown",
+            "confidence": 0.0,
+            "probabilities": {},
+        },
+    )
 
     fovea = None
     try:
@@ -1291,9 +1286,9 @@ async def analyze(request: dict):
             import cv2
             import torch
             from PIL import Image
-            dr_task = instance._infers.get("dr_classification")
-            processor = getattr(dr_task, "_hf_processor", None)
-            model = getattr(dr_task, "_hf_model", None)
+            dr_task = instance._infers.get("clip_dr_classification")
+            processor = getattr(dr_task, "_processor", None)
+            model = getattr(dr_task, "_model", None)
             if processor is None or model is None:
                 return None
             try:
