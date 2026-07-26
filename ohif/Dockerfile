@@ -46,6 +46,13 @@ RUN cd /sources/MONAILabel && \
      git apply /tmp/dr-medgemma-adjudication.patch || \
      git apply --reverse --check /tmp/dr-medgemma-adjudication.patch || true)
 
+# Render the MedGemma status and evidence in a dedicated AI Analysis card.
+COPY ohif/patches/medgemma-result-card.patch /tmp/medgemma-result-card.patch
+RUN cd /sources/MONAILabel && \
+    (git apply --check /tmp/medgemma-result-card.patch && \
+     git apply /tmp/medgemma-result-card.patch || \
+     git apply --reverse --check /tmp/medgemma-result-card.patch)
+
 # Keep per-eye reports isolated and reserve the bottom editor for the bilateral summary.
 COPY ohif/patches/per-eye-report-isolation.patch /tmp/per-eye-report-isolation.patch
 RUN cd /sources/MONAILabel && \

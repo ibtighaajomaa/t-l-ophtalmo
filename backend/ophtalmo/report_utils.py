@@ -1,6 +1,10 @@
 import os
 import json
+import logging
+import time
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 def _find_orthanc_series_id(orthanc_url, series_uid):
@@ -58,9 +62,12 @@ def build_ai_report_text(patient_id, report_data, eye, patient_age=None, series_
     series_uid = series_uid or _normalize_source_series_uid(report_data)
 
     if series_uid:
-        try:
-            rendered = _fetch_rendered_series_image(orthanc_url, series_uid)
-            if rendered:
+        last_image_error = None
+        for attempt in range(3):
+            try:
+                rendered = _fetch_rendered_series_image(orthanc_url, series_uid)
+                if not rendered:
+                    raise RuntimeError(f"Image Orthanc introuvable pour la série {series_uid}")
                 form_data = {
                     "patient_id": patient_id or "inconnu",
                     "eye": eye or "Non spécifié",
@@ -91,8 +98,15 @@ def build_ai_report_text(patient_id, report_data, eye, patient_age=None, series_
                         {"report_engine": "medgemma-1.5-4b-it", "used_image": True},
                     ),
                 }
-        except Exception:
-            pass
+            except Exception as exc:
+                last_image_error = exc
+                if attempt < 2:
+                    time.sleep(1)
+        logger.warning(
+            "Génération MedGemma sans image après 3 tentatives pour %s: %s",
+            series_uid,
+            last_image_error,
+        )
 
     payload = {
         "patient_id": patient_id or "inconnu",

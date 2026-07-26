@@ -1,0 +1,90 @@
+--- a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
++++ b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
+@@ -930,36 +930,22 @@
+           AI ANALYSIS REPORT{eyeLabel ? ` (${eyeLabel})` : ''}
+         </div>
+ 
++        {hasMedGemmaAdjudication && (
++          <div className="section medGemmaResultCard" aria-label="Résultat MedGemma">
++            <div className="sectionTitle">Résultat MedGemma</div>
++            <div className="medGemmaResultField">
++              <span className="medGemmaResultLabel">Grade :</span>
++              <span className="medGemmaGrade">
++                {String(adjudication.grade || 'Unknown').replace(/_/g, ' ')}
++              </span>
++            </div>
++          </div>
++        )}
++
+         {(dr.grade || clipDr || flairDr) && (
+           <div className="section drClassification">
+             <div className="sectionTitle">Classification de la rétinopathie diabétique</div>
+             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+-              {hasMedGemmaAdjudication && (
+-                <div style={{ width: '100%', padding: '8px', borderRadius: '6px', background: '#172554', border: '1px solid #38bdf8' }}>
+-                  <div style={{ color: '#7dd3fc', fontSize: '11px', fontWeight: 700 }}>
+-                    {hasMultimodalMedGemma
+-                      ? 'Grade proposé par MedGemma'
+-                      : 'Grade de repli — MedGemma indisponible'}
+-                  </div>
+-                  <div style={{ color: '#fbbf24', fontSize: '13px', fontWeight: 700, marginTop: '3px' }}>
+-                    {String(adjudication.grade || 'Unknown').replace(/_/g, ' ')} — {Math.round(Number(adjudication.confidence || 0) * 100)}%
+-                  </div>
+-                  <div style={{
+-                    color: reviewRequired ? '#fca5a5' : '#86efac',
+-                    fontSize: '11px',
+-                    fontWeight: 700,
+-                    marginTop: '4px',
+-                  }}>
+-                    Statut : {concordanceLabel}
+-                    {reviewRequired ? ' — validation ophtalmologique requise' : ''}
+-                  </div>
+-                  {(adjudication.evidence || []).length > 0 && (
+-                    <div style={{ color: '#cbd5e1', fontSize: '10px', marginTop: '4px' }}>
+-                      Arguments : {adjudication.evidence.join(' ; ')}
+-                    </div>
+-                  )}
+-                </div>
+-              )}
+               {modelEntries.map(([key, title, model]) => (
+                 <React.Fragment key={key}>
+                   {this.renderDrModelCard(title, model, report)}
+--- a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.css
++++ b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.css
+@@ -133,6 +133,36 @@
+   padding: 12px;
+ }
+ 
++.aiAnalysisPanel .medGemmaResultCard {
++  padding: 12px;
++  background: #172554;
++  border: 1px solid #38bdf8;
++}
++
++.aiAnalysisPanel .medGemmaResultCard .sectionTitle {
++  color: #7dd3fc;
++}
++
++.aiAnalysisPanel .medGemmaResultField {
++  display: flex;
++  align-items: baseline;
++  gap: 5px;
++  margin-top: 8px;
++  line-height: 1.45;
++}
++
++.aiAnalysisPanel .medGemmaResultLabel {
++  flex: 0 0 auto;
++  color: #f8fafc;
++  font-weight: 700;
++}
++
++.aiAnalysisPanel .medGemmaGrade {
++  color: #fbbf24;
++  font-size: 14px;
++  font-weight: 700;
++}
++
+ .aiAnalysisPanel .drPrediction {
+   display: grid;
+   grid-template-columns: 1fr auto auto;

@@ -582,19 +582,10 @@ class MedGemmaEngine:
                 inputs[key] = value.to(dtype=_torch_dtype())
 
         input_len = inputs["input_ids"].shape[-1]
-        bad_words_ids = None
-        tokenizer = getattr(self.processor, "tokenizer", None)
-        if tokenizer is not None:
-            thought_token_id = tokenizer.convert_tokens_to_ids("<unused94>")
-            if isinstance(thought_token_id, int) and thought_token_id >= 0:
-                bad_words_ids = [[thought_token_id]]
-
         generation_kwargs = {
             "max_new_tokens": _generation_token_limit(max_new_tokens),
             "do_sample": False,
         }
-        if bad_words_ids:
-            generation_kwargs["bad_words_ids"] = bad_words_ids
 
         with torch.inference_mode():
             outputs = self.model.generate(
@@ -622,17 +613,34 @@ class MedGemmaEngine:
                 "Image couleur indisponible pour l'arbitrage multimodal MedGemma",
             )
         else:
-            try:
-                adjudication_text = self.generate_text(
-                    _adjudication_prompt(patient_id, patient_age, eye, working_report_data),
-                    image=image,
-                    max_new_tokens=min(_generation_token_limit(max_new_tokens), 768),
-                )
-                adjudication = _normalize_adjudication(_extract_json(adjudication_text))
-            except Exception as exc:
+            adjudication = None
+            adjudication_error = None
+            for attempt in range(2):
+                try:
+                    prompt = _adjudication_prompt(
+                        patient_id, patient_age, eye, working_report_data
+                    )
+                    if attempt:
+                        prompt += (
+                            "\nRAPPEL: réponds immédiatement avec le caractère {, "
+                            "puis uniquement l'objet JSON demandé."
+                        )
+                    adjudication_text = self.generate_text(
+                        prompt,
+                        image=image,
+                        max_new_tokens=min(_generation_token_limit(max_new_tokens), 512),
+                    )
+                    adjudication = _normalize_adjudication(
+                        _extract_json(adjudication_text)
+                    )
+                    break
+                except Exception as exc:
+                    adjudication_error = exc
+            if adjudication is None:
                 adjudication = _fallback_adjudication(
                     working_report_data,
-                    f"Arbitrage MedGemma indisponible: {str(exc)[:180]}",
+                    f"Arbitrage MedGemma indisponible après 2 tentatives: "
+                    f"{str(adjudication_error)[:160]}",
                 )
         working_report_data["medgemma_dr_adjudication"] = adjudication
         prompt = _report_prompt(

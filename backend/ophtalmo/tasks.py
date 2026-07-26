@@ -900,7 +900,17 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
             continue
         eye_label = "Œil droit" if side == "right" else "Œil gauche"
         existing_eye = reports_by_eye.get(side) or {}
-        if existing_eye.get("status") == "generated" and existing_eye.get("report_text"):
+        existing_adjudication = (
+            (existing_eye.get("report_json") or {}).get("medgemma_dr_adjudication") or {}
+        )
+        if (
+            existing_eye.get("status") == "generated"
+            and existing_eye.get("report_text")
+            and (
+                not force
+                or existing_adjudication.get("method") == "medgemma_multimodal_two_stage"
+            )
+        ):
             eye_texts.append(f"{eye_label}:\n{existing_eye['report_text']}")
             continue
         _report_heartbeat(exam, f"génération {eye_label.lower()}")
