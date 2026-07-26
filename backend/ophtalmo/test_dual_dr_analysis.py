@@ -1,6 +1,7 @@
 from ophtalmo.analysis_utils import (
     _blank_eye,
     _copy_report_fields,
+    select_closest_dr_model,
     select_critical_dr_classification,
 )
 
@@ -108,3 +109,24 @@ def test_unavailable_model_is_excluded():
         "clip_dr": _model(1, 0.60),
     })
     assert selected["model_key"] == "clip_dr"
+
+
+def test_closest_model_prefers_exact_grade():
+    selected = select_closest_dr_model({
+        "vit": _model(2, 0.46),
+        "clip_dr": _model(1, 0.80),
+        "flair": _model(0, 0.90),
+    }, {"grade": "moderate_npdr", "grade_index": 2})
+    assert selected["model_key"] == "vit"
+    assert selected["exact_grade_match"] is True
+
+
+def test_closest_model_tie_prefers_more_severe_grade():
+    selected = select_closest_dr_model({
+        "vit": _model(1, 0.95),
+        "clip_dr": _model(3, 0.40),
+        "flair": _model(0, 0.99),
+    }, {"grade": "moderate_npdr", "grade_index": 2})
+    assert selected["model_key"] == "clip_dr"
+    assert selected["distance_from_medgemma_grade"] == 1
+    assert selected["exact_grade_match"] is False

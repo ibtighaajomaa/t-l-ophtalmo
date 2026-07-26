@@ -795,7 +795,11 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
     """
     Generate and persist the MedGemma report without blocking segmentation or UI.
     """
-    from .analysis_utils import aggregate_per_eye, worst_dr_confidence
+    from .analysis_utils import (
+        aggregate_per_eye,
+        select_closest_dr_model,
+        worst_dr_confidence,
+    )
     from .models import AnalysisReport, Exam, MedicalReport, MedicalReportVersion
     from .report_utils import build_ai_report_text, build_ai_summary_report
 
@@ -860,11 +864,20 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
             )
             continue
 
+        generated_json = generated.get("report_json") or {}
+        adjudication = generated_json.get("medgemma_dr_adjudication")
+        if adjudication:
+            eye_report["medgemma_dr_adjudication"] = adjudication
+            eye_report["closest_dr_model"] = select_closest_dr_model(
+                eye_report.get("dr_classification_models") or {},
+                adjudication,
+            )
+
         reports_by_eye[side] = {
             "eye": eye_label,
             "report_text": generated.get("report_text") or "",
             "report_html": generated.get("report_html") or "",
-            "report_json": generated.get("report_json") or {},
+            "report_json": generated_json,
             "status": "generated",
         }
         text = generated.get("report_text") or ""

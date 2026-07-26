@@ -88,6 +88,51 @@ def select_critical_dr_classification(models):
         "requires_review": spread >= 2,
     }
 
+
+def select_closest_dr_model(models, adjudication):
+    """Select the model closest to MedGemma; prefer severity, then confidence."""
+    if not isinstance(adjudication, dict):
+        return None
+    target_grade = _dr_grade_index(adjudication)
+    if target_grade < 0:
+        return None
+    candidates = []
+    for model_key, model_result in (models or {}).items():
+        if not isinstance(model_result, dict) or model_result.get("status") != "ok":
+            continue
+        grade_index = _dr_grade_index(model_result)
+        if grade_index < 0:
+            continue
+        try:
+            confidence = float(model_result.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        candidates.append((model_key, model_result, grade_index, confidence))
+    if not candidates:
+        return None
+    model_key, model_result, grade_index, confidence = min(
+        candidates,
+        key=lambda item: (
+            abs(item[2] - target_grade),
+            -item[2],
+            -item[3],
+            DR_MODEL_PRIORITY.get(item[0], len(DR_MODEL_PRIORITY)),
+        ),
+    )
+    distance = abs(grade_index - target_grade)
+    return {
+        "model_key": model_key,
+        "model_name": DR_MODEL_NAMES.get(model_key, model_key),
+        "grade": model_result.get("grade") or "Unknown",
+        "grade_index": grade_index,
+        "confidence": confidence,
+        "probabilities": model_result.get("probabilities") or {},
+        "calibration_status": model_result.get("calibration_status"),
+        "distance_from_medgemma_grade": distance,
+        "exact_grade_match": distance == 0,
+        "selection_method": "closest_to_medgemma_then_severity_then_confidence",
+    }
+
 GLAUCOMA_RISK = {
     "n/a": -1,
     "faible": 0,
@@ -162,6 +207,8 @@ def _blank_eye(side):
             },
         },
         "selected_dr_classification": None,
+        "medgemma_dr_adjudication": None,
+        "closest_dr_model": None,
         "lesions": {
             "microaneurysms": 0,
             "hemorrhages": 0,

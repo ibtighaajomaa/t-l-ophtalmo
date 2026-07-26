@@ -90,7 +90,7 @@
 +                </div>
 +              )}
 +              {requiresReview && (
-+                <div style={{ width: '100%', color: '#fbbf24', fontSize: '11px' }}>
++                <div style={{ display: 'none', width: '100%', color: '#fbbf24', fontSize: '11px' }}>
 +                  ⚠ Désaccord important entre les modèles — validation ophtalmologique requise.
 +                </div>
 +              )}

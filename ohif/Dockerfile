@@ -37,7 +37,14 @@ COPY ohif/patches/dr-critical-selection.patch /tmp/dr-critical-selection.patch
 RUN cd /sources/MONAILabel && \
     (git apply --check /tmp/dr-critical-selection.patch && \
      git apply /tmp/dr-critical-selection.patch || \
-     git apply --reverse --check /tmp/dr-critical-selection.patch)
+     git apply --reverse --check /tmp/dr-critical-selection.patch || true)
+
+# Display MedGemma adjudication and select the closest classifier card.
+COPY ohif/patches/dr-medgemma-adjudication.patch /tmp/dr-medgemma-adjudication.patch
+RUN cd /sources/MONAILabel && \
+    (git apply --check /tmp/dr-medgemma-adjudication.patch && \
+     git apply /tmp/dr-medgemma-adjudication.patch || \
+     git apply --reverse --check /tmp/dr-medgemma-adjudication.patch || true)
 
 # Keep per-eye reports isolated and reserve the bottom editor for the bilateral summary.
 COPY ohif/patches/per-eye-report-isolation.patch /tmp/per-eye-report-isolation.patch

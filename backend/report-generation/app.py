@@ -147,7 +147,14 @@ def _probability_items(probabilities):
 
 def format_analysis_data(report_data: dict) -> str:
     lines = []
-    cls = report_data.get("dr_classification") or report_data.get("classification") or {}
+    cls = (
+        report_data.get("medgemma_dr_adjudication")
+        or report_data.get("selected_dr_classification")
+        or report_data.get("dr_classification")
+        or report_data.get("classification")
+        or {}
+    )
+    dr_models = report_data.get("dr_classification_models") or {}
     lesions = report_data.get("lesions") or report_data.get("quantification") or {}
     optic = report_data.get("optic_disc_cup") or {}
     glaucoma = report_data.get("glaucoma") or {}
@@ -155,7 +162,7 @@ def format_analysis_data(report_data: dict) -> str:
     deepseenet = report_data.get("deepseenet_plus") or {}
 
     if cls:
-        lines.append("## Sortie du modele DR classification")
+        lines.append("## Classification RD principale")
         lines.append(f"- Grade predit: {cls.get('predicted_grade') or cls.get('grade') or 'N/A'}")
         lines.append(f"- Confiance: {_format_percent(cls.get('confidence'))}")
         probabilities = cls.get("probabilities") or []
@@ -164,6 +171,16 @@ def format_analysis_data(report_data: dict) -> str:
             for label, score in _probability_items(probabilities):
                 score = _format_percent(score)
                 lines.append(f"  - {label}: {score}")
+
+    if dr_models:
+        lines.append("## Resultats individuels des classifieurs RD")
+        for model_key, model_name in (("vit", "ViT"), ("clip_dr", "CLIP-DR"), ("flair", "FLAIR")):
+            model = dr_models.get(model_key) or {}
+            if model.get("status") == "ok":
+                lines.append(
+                    f"- {model_name}: {model.get('grade', 'N/A')} "
+                    f"(confiance: {_format_percent(model.get('confidence'))})"
+                )
 
     if lesions:
         lines.append("## Quantification des lesions")
@@ -287,7 +304,12 @@ def _summary_prompt(
     for side, label in (("right", "Oeil droit"), ("left", "Oeil gauche")):
         eye_report = (reports_by_eye or {}).get(side) or {}
         eye_data = (per_eye or {}).get(side) or {}
-        dr = eye_data.get("dr_classification") or {}
+        dr = (
+            eye_data.get("medgemma_dr_adjudication")
+            or eye_data.get("selected_dr_classification")
+            or eye_data.get("dr_classification")
+            or {}
+        )
         glaucoma = eye_data.get("glaucoma") or {}
         vessels = eye_data.get("vessels") or {}
         lesions = eye_data.get("lesions") or {}
@@ -342,6 +364,108 @@ Retourne uniquement un objet JSON valide, sans texte avant ni apres, avec cette 
   "vessels": {"coverage_pct": 0.0}
 }
 Si une mesure ne peut pas etre estimee de maniere fiable, utilise null."""
+
+
+DR_GRADES = ["no_dr", "mild_npdr", "moderate_npdr", "severe_npdr", "proliferative_dr"]
+
+
+def _adjudication_prompt(patient_id, patient_age, eye, report_data) -> str:
+    payload = {
+        "patient": {"patient_id": patient_id, "age": patient_age, "eye": eye},
+        "selected_dr_classification": report_data.get("selected_dr_classification"),
+        "dr_classification_models": report_data.get("dr_classification_models"),
+        "lesions": report_data.get("lesions"),
+        "optic_disc_cup": report_data.get("optic_disc_cup"),
+        "glaucoma": report_data.get("glaucoma"),
+        "vessels": report_data.get("vessels"),
+        "deepseenet_plus": report_data.get("deepseenet_plus"),
+    }
+    return f"""Tu es un ophtalmologiste arbitre. Analyse l'image couleur du fond d'oeil et les sorties IA ci-dessous.
+Retourne uniquement un objet JSON valide, sans markdown ni texte supplémentaire.
+Ne modifie jamais les sorties originales. Le champ confidence est ton score interne non calibre entre 0 et 1.
+Si les donnees sont insuffisantes, utilise status=\"insufficient_data\" et conserve comme grade le grade selected_dr_classification.
+
+Structure obligatoire:
+{{
+  "status": "supported|discordant|insufficient_data",
+  "grade": "no_dr|mild_npdr|moderate_npdr|severe_npdr|proliferative_dr",
+  "grade_index": 0,
+  "confidence": 0.0,
+  "evidence": ["string"],
+  "contradictions": ["string"],
+  "limitations": ["string"],
+  "requires_ophthalmologist_review": true
+}}
+
+Donnees:
+{json.dumps(payload, ensure_ascii=False, default=str)}"""
+
+
+def _normalize_adjudication(value: dict) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError("MedGemma adjudication is not an object")
+    grade = str(value.get("grade") or "").strip().lower().replace(" ", "_").replace("-", "_")
+    aliases = {
+        "normal": "no_dr", "no_dr": "no_dr", "mild": "mild_npdr",
+        "moderate": "moderate_npdr", "severe": "severe_npdr",
+        "proliferative": "proliferative_dr", "pdr": "proliferative_dr",
+    }
+    grade = aliases.get(grade, grade)
+    if grade not in DR_GRADES:
+        raise ValueError(f"Unsupported MedGemma DR grade: {grade}")
+    status = str(value.get("status") or "discordant")
+    if status not in {"supported", "discordant", "insufficient_data"}:
+        status = "discordant"
+    try:
+        confidence = max(0.0, min(1.0, float(value.get("confidence") or 0.0)))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    normalized = {
+        "status": status,
+        "grade": grade,
+        "grade_index": DR_GRADES.index(grade),
+        "confidence": confidence,
+        "calibration_status": "not_locally_calibrated",
+        "evidence": [str(item) for item in (value.get("evidence") or []) if item],
+        "contradictions": [str(item) for item in (value.get("contradictions") or []) if item],
+        "limitations": [str(item) for item in (value.get("limitations") or []) if item],
+        "requires_ophthalmologist_review": bool(value.get("requires_ophthalmologist_review", True)),
+        "model_id": MODEL_ID,
+        "method": "medgemma_multimodal_two_stage",
+    }
+    if status != "supported" or normalized["contradictions"]:
+        normalized["requires_ophthalmologist_review"] = True
+    return normalized
+
+
+def _fallback_adjudication(report_data: dict, reason: str) -> dict:
+    selected = (
+        report_data.get("selected_dr_classification")
+        or report_data.get("dr_classification")
+        or {}
+    )
+    grade_index = selected.get("grade_index")
+    try:
+        grade_index = int(grade_index)
+    except (TypeError, ValueError):
+        grade_index = None
+    if grade_index not in range(5):
+        raw = str(selected.get("grade") or "no_dr").lower().replace(" ", "_").replace("-", "_")
+        raw = {"normal": "no_dr", "mild": "mild_npdr", "moderate": "moderate_npdr", "severe": "severe_npdr", "proliferative": "proliferative_dr", "pdr": "proliferative_dr"}.get(raw, raw)
+        grade_index = DR_GRADES.index(raw) if raw in DR_GRADES else 0
+    return {
+        "status": "insufficient_data",
+        "grade": DR_GRADES[grade_index],
+        "grade_index": grade_index,
+        "confidence": float(selected.get("confidence") or 0.0),
+        "calibration_status": "not_locally_calibrated",
+        "evidence": ["Repli sur la sélection conservatrice des classifieurs"],
+        "contradictions": [],
+        "limitations": [reason],
+        "requires_ophthalmologist_review": True,
+        "model_id": MODEL_ID,
+        "method": "conservative_fallback",
+    }
 
 
 def _extract_json(text: str) -> dict:
@@ -491,9 +615,29 @@ class MedGemmaEngine:
         image: Image.Image | None = None,
         max_new_tokens: int | None = None,
     ) -> dict:
+        working_report_data = dict(report_data or {})
+        if image is None:
+            adjudication = _fallback_adjudication(
+                working_report_data,
+                "Image couleur indisponible pour l'arbitrage multimodal MedGemma",
+            )
+        else:
+            try:
+                adjudication_text = self.generate_text(
+                    _adjudication_prompt(patient_id, patient_age, eye, working_report_data),
+                    image=image,
+                    max_new_tokens=min(_generation_token_limit(max_new_tokens), 768),
+                )
+                adjudication = _normalize_adjudication(_extract_json(adjudication_text))
+            except Exception as exc:
+                adjudication = _fallback_adjudication(
+                    working_report_data,
+                    f"Arbitrage MedGemma indisponible: {str(exc)[:180]}",
+                )
+        working_report_data["medgemma_dr_adjudication"] = adjudication
         prompt = _report_prompt(
             patient_id=patient_id,
-            report_data=report_data,
+            report_data=working_report_data,
             patient_age=patient_age,
             eye=eye,
             has_image=image is not None,
@@ -512,6 +656,7 @@ class MedGemmaEngine:
                 "used_image": image is not None,
                 "generation_time_seconds": round(generation_time_seconds, 3),
                 "max_new_tokens": token_limit,
+                "medgemma_dr_adjudication": adjudication,
             },
         }
 

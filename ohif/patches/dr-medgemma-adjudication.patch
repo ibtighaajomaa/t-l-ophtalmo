@@ -1,0 +1,71 @@
+--- a/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
++++ b/plugins/ohifv3/extensions/monai-label/src/components/AiAnalysisPanel.tsx
+@@ -879,7 +879,20 @@
+       Number(b[2].confidence || 0) - Number(a[2].confidence || 0)
+     )[0];
+     const persistedKey = report.selected_dr_classification?.model_key;
+-    const selectedModel = modelEntries.find(([key]) => key === persistedKey) || fallbackSelected;
++    const adjudication = report.medgemma_dr_adjudication || null;
++    const hasMedGemmaAdjudication = adjudication?.method === 'medgemma_multimodal_two_stage';
++    const adjudicatedGrade = hasMedGemmaAdjudication ? gradeIndex(adjudication) : -1;
++    const calculatedClosest = adjudicatedGrade >= 0
++      ? [...availableModels].sort((a, b) =>
++          Math.abs(gradeIndex(a[2]) - adjudicatedGrade) - Math.abs(gradeIndex(b[2]) - adjudicatedGrade) ||
++          gradeIndex(b[2]) - gradeIndex(a[2]) ||
++          Number(b[2].confidence || 0) - Number(a[2].confidence || 0)
++        )[0]
++      : null;
++    const closestKey = report.closest_dr_model?.model_key;
++    const selectedModel = (
++      hasMedGemmaAdjudication && modelEntries.find(([key]) => key === closestKey)
++    ) || calculatedClosest || modelEntries.find(([key]) => key === persistedKey) || fallbackSelected;
+     const otherModels = selectedModel ? modelEntries.filter(([key]) => key !== selectedModel[0]) : [];
+     const gradeSpread = availableModels.length
+       ? Math.max(...availableModels.map(([, , model]) => gradeIndex(model))) -
+@@ -887,6 +900,9 @@
+         Math.min(...availableModels.map(([, , model]) => gradeIndex(model)))
+       : 0;
+-    const requiresReview = report.selected_dr_classification?.requires_review ?? gradeSpread >= 2;
++    const requiresReview = adjudication?.requires_ophthalmologist_review ??
++      report.selected_dr_classification?.requires_review ?? gradeSpread >= 2;
++    const exactGradeMatch = !hasMedGemmaAdjudication ||
++      (selectedModel && gradeIndex(selectedModel[2]) === adjudicatedGrade);
+     const eyeKey = side || this.sideFromReport(report);
+     const showOtherModels = !!this.state.expandedDrModelsByEye?.[eyeKey];
+     const lesions = report.lesions || {};
+@@ -910,12 +926,34 @@
+           <div className="section drClassification">
+             <div className="sectionTitle">Classification RD — résultat le plus critique</div>
+             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
++              {hasMedGemmaAdjudication && (
++                <div style={{ width: '100%', padding: '8px', borderRadius: '6px', background: '#172554', border: '1px solid #38bdf8' }}>
++                  <div style={{ color: '#7dd3fc', fontSize: '11px', fontWeight: 700 }}>
++                    Grade final assisté par MedGemma
++                  </div>
++                  <div style={{ color: '#fbbf24', fontSize: '13px', fontWeight: 700, marginTop: '3px' }}>
++                    {String(adjudication.grade || 'Unknown').replace(/_/g, ' ')} — {Math.round(Number(adjudication.confidence || 0) * 100)}%
++                  </div>
++                  {(adjudication.evidence || []).length > 0 && (
++                    <div style={{ color: '#cbd5e1', fontSize: '10px', marginTop: '4px' }}>
++                      Arguments : {adjudication.evidence.join(' ; ')}
++                    </div>
++                  )}
++                </div>
++              )}
+               {selectedModel && this.renderDrModelCard(selectedModel[1], selectedModel[2], report)}
+               {selectedModel && (
+                 <div style={{ width: '100%', color: '#94a3b8', fontSize: '10px' }}>
+-                  Sélection conservatrice : grade maximal prédit parmi les modèles.
++                  {hasMedGemmaAdjudication
++                    ? 'Classifieur le plus proche du grade assisté MedGemma.'
++                    : 'Sélection conservatrice : grade maximal prédit parmi les modèles.'}
+                 </div>
+               )}
++              {!exactGradeMatch && (
++                <div style={{ width: '100%', color: '#fbbf24', fontSize: '10px' }}>
++                  Aucun classifieur ne prédit exactement ce grade — modèle le plus proche affiché.
++                </div>
++              )}
+               {requiresReview && (
+                 <div style={{ display: 'none', width: '100%', color: '#fbbf24', fontSize: '11px' }}>
+                   ⚠ Désaccord important entre les modèles — validation ophtalmologique requise.
