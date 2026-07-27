@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 SEGMENTATION_MODELS = ["optic_disc_cup", "vessel_seg", "lesion_seg"]
 CLIP_DR_MODEL = "clip_dr_classification"
-FLAIR_DR_MODEL = "flair_dr_classification"
 LATERALITY_MODEL = "eye_laterality"
 
 
@@ -158,10 +157,9 @@ def classify_dr_model(app, image_id, model_name, display_name):
 
 
 def classify_dr_models(app, image_id):
-    """Run the supported CLIP-DR and FLAIR classifiers."""
+    """Run the supported CLIP-DR classifier."""
     clip_dr = classify_dr_model(app, image_id, CLIP_DR_MODEL, "Qinkaiyu/CLIP-DR")
-    flair = classify_dr_model(app, image_id, FLAIR_DR_MODEL, "jusiro2/FLAIR")
-    models = {"clip_dr": clip_dr, "flair": flair}
+    models = {"clip_dr": clip_dr}
     available = [result for result in models.values() if result.get("status") == "ok"]
     selected = max(
         available,

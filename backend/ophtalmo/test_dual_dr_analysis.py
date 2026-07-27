@@ -20,10 +20,8 @@ def test_legacy_report_keeps_comparison_models_unavailable():
     )
 
     assert eye["dr_classification"]["grade"] == "Moderate NPDR"
-    assert eye["dr_classification_models"]["vit"]["status"] == "unavailable"
     assert eye["dr_classification_models"]["clip_dr"]["status"] == "unavailable"
-    assert eye["dr_classification_models"]["flair"]["status"] == "unavailable"
-    assert set(eye["dr_classification_models"]) == {"vit", "clip_dr", "flair"}
+    assert set(eye["dr_classification_models"]) == {"clip_dr"}
 
 
 def test_clip_dr_report_is_propagated():
@@ -48,14 +46,6 @@ def test_clip_dr_report_is_propagated():
                 "grade": "Severe NPDR",
                 "grade_index": 3,
                 "confidence": 0.7,
-                "probabilities": {},
-                "calibration_status": "not_locally_calibrated",
-            },
-            "flair": {
-                "status": "ok",
-                "grade": "Moderate NPDR",
-                "grade_index": 2,
-                "confidence": 0.6,
                 "probabilities": {},
                 "calibration_status": "not_locally_calibrated",
             },
@@ -85,19 +75,17 @@ def test_selects_highest_grade_before_confidence():
     selected = select_critical_dr_classification({
         "vit": _model(2, 0.46),
         "clip_dr": _model(1, 0.65),
-        "flair": _model(0, 0.58),
     })
     assert selected["model_key"] == "vit"
     assert selected["grade_index"] == 2
-    assert selected["model_grade_spread"] == 2
-    assert selected["requires_review"] is True
+    assert selected["model_grade_spread"] == 1
+    assert selected["requires_review"] is False
 
 
 def test_confidence_breaks_same_grade_tie():
     selected = select_critical_dr_classification({
         "vit": _model(2, 0.46),
         "clip_dr": _model(2, 0.71),
-        "flair": _model(1, 0.80),
     })
     assert selected["model_key"] == "clip_dr"
     assert selected["confidence"] == 0.71
@@ -115,7 +103,6 @@ def test_closest_model_prefers_exact_grade():
     selected = select_closest_dr_model({
         "vit": _model(2, 0.46),
         "clip_dr": _model(1, 0.80),
-        "flair": _model(0, 0.90),
     }, {"grade": "moderate_npdr", "grade_index": 2})
     assert selected["model_key"] == "vit"
     assert selected["exact_grade_match"] is True
@@ -125,7 +112,6 @@ def test_closest_model_tie_prefers_more_severe_grade():
     selected = select_closest_dr_model({
         "vit": _model(1, 0.95),
         "clip_dr": _model(3, 0.40),
-        "flair": _model(0, 0.99),
     }, {"grade": "moderate_npdr", "grade_index": 2})
     assert selected["model_key"] == "clip_dr"
     assert selected["distance_from_medgemma_grade"] == 1

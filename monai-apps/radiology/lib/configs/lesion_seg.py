@@ -3,7 +3,7 @@ import os
 from typing import Any, Dict, Optional, Union
 
 import lib.infers
-from lib.infers.sebnet_model.sebnet import SEBNet
+import segmentation_models_pytorch as smp
 from monailabel.interfaces.config import TaskConfig
 from monailabel.interfaces.tasks.infer_v2 import InferTask
 from monailabel.interfaces.tasks.scoring import ScoringMethod
@@ -21,16 +21,24 @@ class LesionSeg(TaskConfig):
         super().init(name, model_dir, conf, planner, **kwargs)
 
         self.labels = {
-            "hard_exudates": 1,
+            "microaneurysms": 1,
             "hemorrhages": 2,
-            "microaneurysms": 3,
+            "hard_exudates": 3,
             "soft_exudates": 4,
         }
         self.path = [
-            os.environ.get("LESION_SEG_MODEL_PATH", "/opt/monai/apps/radiology/model/sebnet_ddr.pth"),
-            os.path.join(self.model_dir, "sebnet_ddr.pth"),
+            os.environ.get(
+                "LESION_SEG_MODEL_PATH",
+                "/opt/monai/apps/radiology/model/lesion_seg_ddr.pt",
+            ),
+            os.path.join(self.model_dir, "lesion_seg_ddr.pt"),
         ]
-        self.network = SEBNet(n_channels=3, n_classes=5)
+        self.network = smp.DeepLabV3Plus(
+            encoder_name="efficientnet-b3",
+            in_channels=3,
+            classes=5,
+            encoder_weights=None,
+        )
 
     def infer(self) -> Union[InferTask, Dict[str, InferTask]]:
         task: InferTask = lib.infers.LesionSeg(

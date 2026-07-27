@@ -15,9 +15,8 @@ DR_SEVERITY = {
 
 DR_MODEL_NAMES = {
     "clip_dr": "CLIP-DR",
-    "flair": "FLAIR (zéro-shot)",
 }
-DR_MODEL_PRIORITY = {"clip_dr": 0, "flair": 1}
+DR_MODEL_PRIORITY = {"clip_dr": 0}
 
 
 def _dr_grade_index(result):
@@ -49,8 +48,6 @@ def select_critical_dr_classification(models):
     """Select the highest main grade, using confidence only as a tie-breaker."""
     available = []
     for model_key, model_result in (models or {}).items():
-        if model_key == "vit":
-            continue
         if not isinstance(model_result, dict) or model_result.get("status") != "ok":
             continue
         grade_index = _dr_grade_index(model_result)
@@ -99,8 +96,6 @@ def select_closest_dr_model(models, adjudication):
         return None
     candidates = []
     for model_key, model_result in (models or {}).items():
-        if model_key == "vit":
-            continue
         if not isinstance(model_result, dict) or model_result.get("status") != "ok":
             continue
         grade_index = _dr_grade_index(model_result)
@@ -188,13 +183,6 @@ def _blank_eye(side):
         },
         "dr_classification_models": {
             "clip_dr": {
-                "status": "unavailable",
-                "grade": "Unknown",
-                "confidence": 0.0,
-                "probabilities": [],
-                "calibration_status": "not_locally_calibrated",
-            },
-            "flair": {
                 "status": "unavailable",
                 "grade": "Unknown",
                 "confidence": 0.0,

@@ -25,20 +25,6 @@ COPY ohif/extensions/iframe-bridge /sources/Viewers/extensions/iframe-bridge
 COPY MONAILabel/plugins/ohifv3/extensions/monai-label /sources/MONAILabel/plugins/ohifv3/extensions/monai-label
 COPY MONAILabel/plugins/ohifv3/modes/monai-label /sources/MONAILabel/plugins/ohifv3/modes/monai-label
 
-# Ensure the AI panel exposes ViT, CLIP-DR and FLAIR even from a clean source checkout.
-COPY ohif/patches/dr-three-models.patch /tmp/dr-three-models.patch
-RUN cd /sources/MONAILabel && \
-    (git apply --check /tmp/dr-three-models.patch && \
-     git apply /tmp/dr-three-models.patch || \
-     git apply --reverse --check /tmp/dr-three-models.patch || true)
-
-# Select the most critical DR grade by eye and collapse the remaining models.
-COPY ohif/patches/dr-critical-selection.patch /tmp/dr-critical-selection.patch
-RUN cd /sources/MONAILabel && \
-    (git apply --check /tmp/dr-critical-selection.patch && \
-     git apply /tmp/dr-critical-selection.patch || \
-     git apply --reverse --check /tmp/dr-critical-selection.patch || true)
-
 # Display MedGemma adjudication and select the closest classifier card.
 COPY ohif/patches/dr-medgemma-adjudication.patch /tmp/dr-medgemma-adjudication.patch
 RUN cd /sources/MONAILabel && \

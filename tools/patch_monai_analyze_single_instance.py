@@ -320,29 +320,9 @@ async def analyze(request: dict):
             else message[:240]
         )
 
-    flair_dr = {
-        "status": "unavailable",
-        "grade": "Unknown",
-        "confidence": 0.0,
-        "probabilities": {},
-        "calibration_status": "not_locally_calibrated",
-    }
-    try:
-        flair_result = _run_model(
-            "flair_dr_classification",
-            {"result_extension": ".json", "device": "cpu"},
-        )
-        flair_dr = _normalize_dr(flair_result.get("params") or {})
-        flair_dr.setdefault("status", "ok")
-        flair_dr.setdefault("model_id", "jusiro2/FLAIR")
-        flair_dr.setdefault("calibration_status", "not_locally_calibrated")
-    except Exception as e:
-        logger.warning("Analyze FLAIR DR unavailable: %s", e)
-        flair_dr["reason"] = str(e)[:240]
-
-    # ViT remains canonical; CLIP-DR and FLAIR are independent comparators.
+    # ViT remains canonical; CLIP-DR is an independent comparator.
     dr = vit_dr
-    dr_classification_models = {"vit": vit_dr, "clip_dr": clip_dr, "flair": flair_dr}
+    dr_classification_models = {"vit": vit_dr, "clip_dr": clip_dr}
 
     optic_data = vessel_data = lesion_data = None
     try:

@@ -371,7 +371,7 @@ export interface DRModelResult {
 }
 
 export interface SelectedDRClassification extends DRModelResult {
-  model_key: "vit" | "clip_dr" | "flair" | string;
+  model_key: "vit" | "clip_dr" | string;
   model_name: string;
   grade_index: number;
   selection_method: "highest_predicted_grade_then_confidence";
@@ -415,7 +415,6 @@ export interface PerInstanceResult {
   dr_classification_models?: {
     vit?: DRModelResult;
     clip_dr: DRModelResult;
-    flair?: DRModelResult;
   };
   gradcam_image?: string | null;
   clahe_image?: string | null;
@@ -429,7 +428,6 @@ export interface CriticalEyeAnalysis {
   dr_classification_models?: {
     vit?: DRModelResult;
     clip_dr: DRModelResult;
-    flair?: DRModelResult;
   };
   lesions: LesionMetrics;
   glaucoma: PerEyeGlaucoma;
@@ -449,7 +447,6 @@ export interface AnalysisResult {
   dr_classification_models?: {
     vit?: DRModelResult;
     clip_dr: DRModelResult;
-    flair?: DRModelResult;
   };
   selected_dr_classification?: SelectedDRClassification | null;
   lesions: LesionMetrics;

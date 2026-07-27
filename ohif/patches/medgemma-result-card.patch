@@ -16,7 +16,7 @@
 +          </div>
 +        )}
 +
-         {(dr.grade || clipDr || flairDr) && (
+         {(dr.grade || clipDr) && (
            <div className="section drClassification">
              <div className="sectionTitle">Classification de la rétinopathie diabétique</div>
              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>

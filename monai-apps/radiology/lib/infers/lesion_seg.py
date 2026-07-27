@@ -12,6 +12,7 @@ from monai.transforms import (
     LoadImaged,
     MapTransform,
     Resized,
+    ScaleIntensityRanged,
 )
 
 from monailabel.interfaces.tasks.infer_v2 import InferType
@@ -103,7 +104,7 @@ class LesionSeg(BasicInferTask):
         type=InferType.SEGMENTATION,
         labels=None,
         dimension=2,
-        description="SEBNet DDR retinal multi-lesion segmentation",
+        description="DDR DeepLabV3+ EfficientNet-B3 retinal lesion segmentation",
         **kwargs,
     ):
         super().__init__(
@@ -157,6 +158,14 @@ class LesionSeg(BasicInferTask):
             SqueezeDepthd(keys="image"),
             CaptureOriginalSpatialShaped(keys="image"),
             Resized(keys="image", spatial_size=(512, 512), mode="bilinear"),
+            ScaleIntensityRanged(
+                keys="image",
+                a_min=0,
+                a_max=255,
+                b_min=0.0,
+                b_max=1.0,
+                clip=True,
+            ),
         ]
 
     def run_inferer(self, data, convert_to_batch=True, device="cuda"):
@@ -183,14 +192,14 @@ class LesionSeg(BasicInferTask):
         )
         data[self.output_json_key] = {
             "label_info": [
-                {"label": 1, "name": "Exsudats solides", "color": [160, 160, 160]},
+                {"label": 1, "name": "Microanevrismes", "color": [106, 13, 173]},
                 {"label": 2, "name": "Hemorragies", "color": [50, 50, 255]},
-                {"label": 3, "name": "Microanevrismes", "color": [106, 13, 173]},
+                {"label": 3, "name": "Exsudats solides", "color": [160, 160, 160]},
                 {"label": 4, "name": "Exsudats cotonneux", "color": [255, 0, 140]},
             ],
-            "model_id": "SEBNet-DDR",
+            "model_id": "DDR-DeepLabV3Plus-EfficientNetB3",
             "dataset": "DDR",
-            "preprocessing": "512x512 RGB, original [0,255] intensity range",
+            "preprocessing": "512x512 RGB, intensity scaled to [0,1]",
         }
         return data
 

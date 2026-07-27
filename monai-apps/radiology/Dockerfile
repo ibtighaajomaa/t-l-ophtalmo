@@ -16,10 +16,6 @@ RUN pip3 install --no-cache-dir \
     "regex>=2022,<2027" \
     "git+https://github.com/openai/CLIP.git@d05afc436d78f1c48dc0dbf8e5980a9d471f35f6"
 
-# FLAIR foundation model; pin the official source revision for reproducibility.
-RUN pip3 install --no-cache-dir \
-    "git+https://github.com/jusiro/FLAIR.git@d6652d53389ff49e5f73efaccf4246e9de88d1a3"
-
 # VascX is AGPL-3.0.  Keep MONAI's NumPy 1.x ABI for TensorFlow and install
 # the inference package without its overly strict NumPy 2 metadata pin.
 RUN pip3 install --no-cache-dir \

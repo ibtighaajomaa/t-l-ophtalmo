@@ -61,11 +61,10 @@ const DR_LABELS: Record<string, string> = {
   "proliferative dr": "Proliferative DR",
 };
 const DR_ORDER = ["no_dr", "mild_npdr", "moderate_npdr", "severe_npdr", "proliferative_dr"];
-const DR_MODEL_ORDER = ["vit", "clip_dr", "flair"] as const;
+const DR_MODEL_ORDER = ["vit", "clip_dr"] as const;
 const DR_MODEL_NAMES: Record<(typeof DR_MODEL_ORDER)[number], string> = {
   vit: "ViT actuel",
   clip_dr: "CLIP-DR",
-  flair: "FLAIR (zéro-shot)",
 };
 
 function getDRGradeIndex(result: DRModelResult) {
@@ -216,7 +215,6 @@ export function AIPanel({
         ...activeAnalysis.dr_classification,
       }
     : null;
-  const flairDR = activeAnalysis?.dr_classification_models?.flair ?? null;
   const drModels = activeAnalysis ? [
     {
       key: "vit" as const,
@@ -238,17 +236,6 @@ export function AIPanel({
         probabilities: [],
         calibration_status: "not_locally_calibrated",
         reason: "Résultat CLIP-DR absent de cette analyse",
-      },
-    },
-    {
-      key: "flair" as const,
-      result: flairDR ?? {
-        status: "unavailable" as const,
-        grade: "Unknown",
-        confidence: 0,
-        probabilities: [],
-        calibration_status: "not_locally_calibrated",
-        reason: "Résultat FLAIR absent de cette analyse",
       },
     },
   ] : [];

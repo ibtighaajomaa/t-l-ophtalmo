@@ -174,7 +174,7 @@ def format_analysis_data(report_data: dict) -> str:
 
     if dr_models:
         lines.append("## Resultats individuels des classifieurs RD")
-        for model_key, model_name in (("vit", "ViT"), ("clip_dr", "CLIP-DR"), ("flair", "FLAIR")):
+        for model_key, model_name in (("vit", "ViT"), ("clip_dr", "CLIP-DR")):
             model = dr_models.get(model_key) or {}
             if model.get("status") == "ok":
                 lines.append(
