@@ -58,7 +58,7 @@ window.config = {
             label: '',
             condition: ({ referenceInstance }) =>
               referenceInstance?.Modality === 'OP',
-            contentF: () => '⬜ Exsudats solides',
+            contentF: () => '🩶 Exsudats solides',
           },
           {
             id: 'RetinalLegendMicroaneurysms',
@@ -66,7 +66,7 @@ window.config = {
             label: '',
             condition: ({ referenceInstance }) =>
               referenceInstance?.Modality === 'OP',
-            contentF: () => '🟪 Microanévrismes',
+            contentF: () => '🟥 Microanévrismes',
           },
           {
             id: 'RetinalLegendCottonWoolExudates',
@@ -74,7 +74,7 @@ window.config = {
             label: '',
             condition: ({ referenceInstance }) =>
               referenceInstance?.Modality === 'OP',
-            contentF: () => '🟥 Exsudats cotonneux',
+            contentF: () => '🟩 Exsudats cotonneux',
           },
           {
             id: 'RetinalLegendNeovascularization',

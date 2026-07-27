@@ -197,6 +197,7 @@ def _blank_eye(side):
             "microaneurysms": 0,
             "hemorrhages": 0,
             "hard_exudates": 0,
+            "soft_exudates": 0,
             "cotton_wool_spots": 0,
             "neovascularization": 0,
             "laser_scars": 0,
@@ -205,6 +206,7 @@ def _blank_eye(side):
                 "microaneurysms": 0,
                 "hemorrhages": 0,
                 "hard_exudates": 0,
+                "soft_exudates": 0,
                 "cotton_wool_spots": 0,
                 "neovascularization": 0,
                 "laser_scars": 0,
@@ -409,20 +411,34 @@ def aggregate_per_eye(per_series, quality_scores=None):
             lesions["microaneurysms"] += int(src.get("microaneurysms") or 0)
             lesions["hemorrhages"] += int(src.get("hemorrhages") or 0)
             hard_exudates = int(src.get("hard_exudates") or 0)
-            cotton_wool_spots = int(src.get("cotton_wool_spots") or 0)
+            soft_exudates = int(
+                src.get("soft_exudates")
+                if src.get("soft_exudates") is not None
+                else src.get("cotton_wool_spots") or 0
+            )
             lesions["hard_exudates"] += hard_exudates
-            lesions["cotton_wool_spots"] += cotton_wool_spots
+            lesions["soft_exudates"] += soft_exudates
+            lesions["cotton_wool_spots"] += soft_exudates
             lesions["neovascularization"] += int(src.get("neovascularization") or 0)
             lesions["laser_scars"] += int(src.get("laser_scars") or 0)
             # Old reports only contain the aggregate `exudates` field.
             lesions["exudates"] += (
-                hard_exudates + cotton_wool_spots
-                if "hard_exudates" in src or "cotton_wool_spots" in src
+                hard_exudates + soft_exudates
+                if "hard_exudates" in src or "soft_exudates" in src or "cotton_wool_spots" in src
                 else int(src.get("exudates") or 0)
             )
             src_pixels = src.get("pixel_counts") or {}
             for lesion_name in lesions["pixel_counts"]:
+                if lesion_name in {"soft_exudates", "cotton_wool_spots"}:
+                    continue
                 lesions["pixel_counts"][lesion_name] += int(src_pixels.get(lesion_name) or 0)
+            soft_exudate_pixels = int(
+                src_pixels.get("soft_exudates")
+                if src_pixels.get("soft_exudates") is not None
+                else src_pixels.get("cotton_wool_spots") or 0
+            )
+            lesions["pixel_counts"]["soft_exudates"] += soft_exudate_pixels
+            lesions["pixel_counts"]["cotton_wool_spots"] += soft_exudate_pixels
             lesions["coverage_pct"] = max(
                 float(lesions.get("coverage_pct") or 0),
                 float(src.get("coverage_pct") or 0),

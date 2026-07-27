@@ -87,7 +87,7 @@ def suppress_macular_zone_lesions(prediction, radius_ratio=0.08):
 
 
 class CaptureOriginalSpatialShaped(MapTransform):
-    """Retain the source OP dimensions before resizing for SEBNet."""
+    """Retain the source OP dimensions before resizing for DeepLabV3+."""
 
     def __call__(self, data):
         result = dict(data)
@@ -192,10 +192,10 @@ class LesionSeg(BasicInferTask):
         )
         data[self.output_json_key] = {
             "label_info": [
-                {"label": 1, "name": "Microanevrismes", "color": [106, 13, 173]},
+                {"label": 1, "name": "Microanevrismes", "color": [255, 50, 50]},
                 {"label": 2, "name": "Hemorragies", "color": [50, 50, 255]},
                 {"label": 3, "name": "Exsudats solides", "color": [160, 160, 160]},
-                {"label": 4, "name": "Exsudats cotonneux", "color": [255, 0, 140]},
+                {"label": 4, "name": "Exsudats cotonneux", "color": [0, 255, 0]},
             ],
             "model_id": "DDR-DeepLabV3Plus-EfficientNetB3",
             "dataset": "DDR",

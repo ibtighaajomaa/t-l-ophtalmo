@@ -696,24 +696,25 @@ async def analyze(request: dict):
                     mask = np.ascontiguousarray(les_sl == class_id, dtype=np.uint8)
                     components, _ = cv2.connectedComponents(mask, connectivity=8)
                     return max(0, int(components) - 1)
-                hard_exudates = _regions(1)
+                hard_exudates = _regions(3)
                 soft_exudates = _regions(4)
                 any_lesion = int(np.sum(les_sl > 0))
                 les_metrics = {
-                    "microaneurysms": _regions(3),
+                    "microaneurysms": _regions(1),
                     "hemorrhages": _regions(2),
                     "hard_exudates": hard_exudates,
                     "soft_exudates": soft_exudates,
                     "exudates": hard_exudates + soft_exudates,
                     "pixel_counts": {
-                        "microaneurysms": int(np.sum(les_sl == 3)),
-                        "hard_exudates": int(np.sum(les_sl == 1)),
+                        "microaneurysms": int(np.sum(les_sl == 1)),
+                        "hard_exudates": int(np.sum(les_sl == 3)),
                         "soft_exudates": int(np.sum(les_sl == 4)),
                         "hemorrhages": int(np.sum(les_sl == 2)),
                     },
                     "coverage_pct": round(any_lesion / total * 100, 2) if total > 0 else 0.0,
-                    "model_id": "SEBNet-DDR",
-                    "checkpoint_sha256": "9266bf838201f70e1eddac94c38976819b814a07a6e31bb419f764c7500fd006",
+                    "cotton_wool_spots": soft_exudates,
+                    "model_id": "DDR-DeepLabV3Plus-EfficientNetB3",
+                    "checkpoint_sha256": "b2ee870f6b3df98e3c1f4b982596b7dfe93a2e617de1604edb783f17fa8cb99a",
                 }
             except Exception as e:
                 logger.error("Lesion quantification failed for slice %s: %s", i, e)
@@ -930,23 +931,24 @@ async def analyze(request: dict):
             mask = np.ascontiguousarray(data == class_id, dtype=np.uint8)
             components, _ = cv2.connectedComponents(mask, connectivity=8)
             return max(0, int(components) - 1)
-        hard_exudates = _regions(1)
+        hard_exudates = _regions(3)
         soft_exudates = _regions(4)
         return {
-            "microaneurysms": _regions(3),
+            "microaneurysms": _regions(1),
             "hemorrhages": _regions(2),
             "hard_exudates": hard_exudates,
             "soft_exudates": soft_exudates,
             "exudates": hard_exudates + soft_exudates,
             "pixel_counts": {
-                "microaneurysms": int(np.sum(data == 3)),
-                "hard_exudates": int(np.sum(data == 1)),
+                "microaneurysms": int(np.sum(data == 1)),
+                "hard_exudates": int(np.sum(data == 3)),
                 "soft_exudates": int(np.sum(data == 4)),
                 "hemorrhages": int(np.sum(data == 2)),
             },
             "coverage_pct": round(any_lesion / total * 100, 2) if total else 0.0,
-            "model_id": "SEBNet-DDR",
-            "checkpoint_sha256": "9266bf838201f70e1eddac94c38976819b814a07a6e31bb419f764c7500fd006",
+            "cotton_wool_spots": soft_exudates,
+            "model_id": "DDR-DeepLabV3Plus-EfficientNetB3",
+            "checkpoint_sha256": "b2ee870f6b3df98e3c1f4b982596b7dfe93a2e617de1604edb783f17fa8cb99a",
         }
 
     def _severity(dr_info, glaucoma):

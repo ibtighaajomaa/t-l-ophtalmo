@@ -345,6 +345,7 @@ export interface LesionMetrics {
   /** Aggregate retained for compatibility with analyses created before lesion subtype counting. */
   exudates: number;
   hard_exudates?: number;
+  soft_exudates?: number;
   cotton_wool_spots?: number;
   neovascularization?: number;
   laser_scars?: number;
@@ -352,6 +353,7 @@ export interface LesionMetrics {
     microaneurysms: number;
     hemorrhages: number;
     hard_exudates: number;
+    soft_exudates?: number;
     cotton_wool_spots: number;
     neovascularization: number;
     laser_scars: number;

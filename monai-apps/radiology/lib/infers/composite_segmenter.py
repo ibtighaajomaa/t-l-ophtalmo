@@ -23,7 +23,7 @@ from .fovea_detection import detect_fovea_rgb, loaded_image_to_rgb
 from .lesion_seg import suppress_macular_zone_lesions, suppress_optic_disc_lesions
 LESION_NAMES = {1: "microaneurysms", 2: "hemorrhages", 3: "hard_exudates", 4: "soft_exudates"}
 LESION_COLORS = {
-    1: (106, 13, 173), 2: (50, 50, 255), 3: (160, 160, 160), 4: (255, 0, 140)
+    1: (255, 50, 50), 2: (50, 50, 255), 3: (160, 160, 160), 4: (0, 255, 0)
 }
 
 logger = logging.getLogger(__name__)
@@ -363,7 +363,7 @@ class CompositeSegmenter(InferTask):
                 "fovea": "loaded" if fovea is not None else f"failed: {fovea_error}",
             },
             "lesion_model": {
-                "model_id": "SEBNet-DDR",
+                "model_id": "DDR-DeepLabV3Plus-EfficientNetB3",
                 "dataset": "DDR",
             },
         }

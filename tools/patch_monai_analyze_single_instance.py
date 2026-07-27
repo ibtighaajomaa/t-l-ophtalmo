@@ -139,7 +139,8 @@ async def analyze(request: dict):
             "coverage_pct": round(any_lesion / total * 100, 2) if total else 0.0,
             "model_id": "DDR-DeepLabV3Plus-EfficientNetB3",
             "model_commit": "c09dbc164507872eb7c8b7f57c91b7ba4fdd289f",
-            "checkpoint_sha256": "f4c3c89a4da02b84af6cc85b4ee9cd4be35bf2c836cf230b0a6d06a3805b646b",
+            "cotton_wool_spots": soft_exudates,
+            "checkpoint_sha256": "b2ee870f6b3df98e3c1f4b982596b7dfe93a2e617de1604edb783f17fa8cb99a",
         }
 
     def _severity(dr_info, glaucoma):
