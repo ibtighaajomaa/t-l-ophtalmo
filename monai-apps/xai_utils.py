@@ -24,27 +24,31 @@ def generate_clahe(image, instance):
             return None
 
         from pydicom import dcmread
-        from skimage import exposure
+        from skimage import color, exposure
 
         ds = dcmread(str(dcm_files[0]))
         img_arr = ds.pixel_array
 
         if img_arr.ndim == 2:
-            img_rgb = np.stack([img_arr] * 3, axis=-1)
+            img_rgb = np.stack([img_arr] * 3, axis=-1).astype(np.float32)
         elif img_arr.shape[2] >= 3:
             img_rgb = img_arr[:, :, :3].astype(np.float32)
         else:
-            img_rgb = np.stack([img_arr[:, :, 0]] * 3, axis=-1)
+            img_rgb = np.stack([img_arr[:, :, 0]] * 3, axis=-1).astype(np.float32)
 
-        clahe_img = np.zeros_like(img_rgb, dtype=np.float32)
-        for c in range(3):
-            ch = img_rgb[:, :, c].astype(np.float32)
-            ch_min, ch_max = ch.min(), ch.max()
-            if ch_max > ch_min:
-                ch = (ch - ch_min) / (ch_max - ch_min)
-            clahe_img[:, :, c] = exposure.equalize_adapthist(ch, kernel_size=64)
+        img_min, img_max = img_rgb.min(), img_rgb.max()
+        if img_max > img_min:
+            img_rgb = (img_rgb - img_min) / (img_max - img_min)
+        else:
+            img_rgb = np.zeros_like(img_rgb, dtype=np.float32)
 
-        clahe_img = (clahe_img * 255).clip(0, 255).astype(np.uint8)
+        lab = color.rgb2lab(img_rgb)
+        lab[:, :, 0] = exposure.equalize_adapthist(
+            lab[:, :, 0] / 100.0,
+            kernel_size=64,
+        ) * 100.0
+
+        clahe_img = (color.lab2rgb(lab) * 255).clip(0, 255).astype(np.uint8)
         buf = io.BytesIO()
         Image.fromarray(clahe_img).save(buf, format="PNG")
         return base64.b64encode(buf.getvalue()).decode("utf-8")

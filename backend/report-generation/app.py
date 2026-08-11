@@ -74,6 +74,18 @@ def _generation_token_limit(max_new_tokens: int | None = None) -> int:
 
 def _clean_generated_text(text: str) -> str:
     text = re.sub(r"<unused\d+>", "", text).strip()
+    # Some instruction-tuned models may expose a reasoning preamble despite
+    # thinking being disabled. Keep only the requested clinical report when a
+    # recognizable report heading is present.
+    report_heading = re.search(
+        r"(?im)^(?:#{1,3}\s*)?(?:\*\*)?"
+        r"(?:œil droit|oeil droit|œil gauche|oeil gauche|"
+        r"synthèse bilatérale|synthese bilaterale)\s*:?(?:\*\*)?\s*$",
+        text,
+    )
+    if report_heading:
+        text = text[report_heading.start():].strip()
+    text = re.sub(r"(?im)^\s*(?:thought|thinking process|raisonnement)\s*:?\s*$", "", text)
     return _dedupe_report_text(text)
 
 
@@ -257,20 +269,30 @@ def _report_prompt(
         else "Aucune image n'est fournie dans cet appel; base le rapport sur les sorties des modeles."
     )
 
-    return f"""Tu es un assistant medical specialise en ophtalmologie.
-Redige un compte rendu de fond d'oeil en francais medical professionnel.
+    normalized_eye = str(eye or "").strip().lower()
+    if any(value in normalized_eye for value in ("droit", "right", "od")):
+        report_title = "Œil droit :"
+    elif any(value in normalized_eye for value in ("gauche", "left", "og")):
+        report_title = "Œil gauche :"
+    else:
+        report_title = "Œil examiné :"
 
-Regles importantes:
-- Utilise les sorties des modeles fournies ci-dessous, notamment dr_classification.
-- Ne modifie pas et n'invente pas les valeurs numeriques.
-- Si l'image contredit ou nuance les sorties des modeles, explique-le prudemment.
-- Chaque section doit etre courte: 1 phrase, sauf Limitations qui contient exactement 2 phrases completes.
-- N'utilise pas de liste numerotee ni de liste a puces dans le compte rendu final.
-- N'ecris jamais deux fois la meme idee ou la meme phrase.
-- La section Recommandations ne doit pas repeter les constatations cliniques; elle doit seulement proposer la conduite a tenir.
-- Termine le rapport immediatement apres la section Limitations.
-- Longueur cible: 180 a 300 mots.
-- Le rapport doit etre utile a un ophtalmologiste, pas au patient directement.
+    return f"""Tu es un assistant médical spécialisé en ophtalmologie.
+Rédige un résumé professionnel du fond d'œil, entièrement en français.
+
+Règles obligatoires :
+- N'affiche jamais ton raisonnement, ta réflexion interne, une analyse préparatoire ou le mot « thought ».
+- Écris uniquement le compte rendu demandé, sans préambule ni commentaire après celui-ci.
+- Utilise les sorties des modèles, sans modifier ni inventer les valeurs.
+- Résume les résultats importants sans recopier toutes les données techniques.
+- N'utilise aucun mot anglais pour désigner les diagnostics ou les stades.
+- N'utilise ni liste, ni tableau, ni sous-rubrique.
+- Ne pose pas un diagnostic absent des données et ne déduis pas un œdème maculaire des seuls exsudats.
+- Présente les résultats automatisés comme des constatations à confirmer.
+- Si les classificateurs sont discordants, indique prudemment une plage de sévérité.
+- Le rapport comprend exactement un titre et un seul paragraphe de 3 à 5 phrases.
+- Termine le paragraphe par une recommandation ophtalmologique concise.
+- Longueur cible : 70 à 120 mots.
 
 {image_instruction}
 
@@ -282,18 +304,11 @@ Regles importantes:
 
 {analysis_text}
 
-Structure obligatoire avec des titres markdown:
-## Constatations Cliniques
-## Classification de la Retinopathie Diabetique
-## Quantification des Lesions
-## Evaluation du Glaucome
-## Analyse Vasculaire
-## Diagnostic Suspecte
-## Stade de Severite
-## Recommandations
-## Limitations
+Format obligatoire :
+{report_title}
+[Un unique paragraphe de 3 à 5 phrases résumant les lésions principales, le stade probable, les éventuelles anomalies maculaires et la recommandation.]
 
-Redige maintenant le rapport complet, sans repetition, avec des phrases completes."""
+Rédige maintenant uniquement ce résumé, sans répétition."""
 
 
 def _summary_prompt(
@@ -329,18 +344,22 @@ def _summary_prompt(
 {detail[:2400]}"""
         )
 
-    return f"""Tu es un ophtalmologiste redacteur.
-Redige la synthese finale bilaterale du compte rendu de fond d'oeil en francais medical professionnel.
+    return f"""Tu es un ophtalmologiste rédacteur.
+Rédige un résumé bilatéral du fond d'œil, entièrement en français médical professionnel.
 
-Regles:
-- Ne recopie pas les rapports par oeil.
-- Resume et compare les deux yeux.
-- Mentionne l'oeil le plus a risque si applicable.
-- Mentionne les limites qualite si elles ressortent des rapports.
-- Les recommandations doivent etre courtes et actionnables.
-- Pas de liste numerotee ni de liste a puces.
-- Longueur cible: 120 a 220 mots.
-- Termine apres la section Limitations.
+Règles obligatoires :
+- N'affiche jamais ton raisonnement, ta réflexion interne, une analyse préparatoire ou le mot « thought ».
+- Écris uniquement le compte rendu demandé, sans préambule ni commentaire après celui-ci.
+- Ne recopie pas successivement les rapports de chaque œil : résume et compare.
+- N'utilise aucun mot anglais pour désigner les diagnostics ou les stades.
+- N'utilise ni liste, ni tableau, ni sous-rubrique.
+- Ne pose pas un diagnostic absent des données et ne déduis pas un œdème maculaire des seuls exsudats.
+- Présente les classifications automatisées comme des résultats à confirmer.
+- En cas de discordance entre classificateurs, indique une plage prudente de sévérité.
+- Mentionne une asymétrie seulement si elle est étayée par les données.
+- Le rapport comprend exactement un titre et un seul paragraphe de 3 à 5 phrases.
+- Termine par une recommandation ophtalmologique concise.
+- Longueur cible : 80 à 130 mots.
 
 ## Patient
 - Identifiant: {patient_id}
@@ -348,13 +367,11 @@ Regles:
 
 {chr(10).join(eye_sections)}
 
-Structure obligatoire:
-## Synthese Bilaterale
-## Impression Diagnostique
-## Recommandations
-## Limitations
+Format obligatoire :
+Synthèse bilatérale :
+[Un unique paragraphe de 3 à 5 phrases donnant l'impression générale, comparant les deux yeux et indiquant les examens recommandés.]
 
-Redige maintenant uniquement la synthese finale, sans repetition."""
+Rédige maintenant uniquement ce résumé, sans répétition."""
 
 
 def _analysis_prompt() -> str:

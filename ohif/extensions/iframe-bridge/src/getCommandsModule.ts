@@ -3,8 +3,10 @@ export default function getCommandsModule({ servicesManager }) {
 
   const claheOverlays = new Map();
   const foveaOverlays = new Map();
+  const eraserSessions = new Map();
   let foveaMarkers = [];
   let foveaVisible = false;
+  let eraserBrushSize = 24;
 
   function removeFoveaOverlays() {
     foveaOverlays.forEach(({ element, render, resizeObserver, svg }) => {
@@ -208,6 +210,239 @@ export default function getCommandsModule({ servicesManager }) {
     }
   }
 
+  function getActiveViewport() {
+    const { viewportGridService, cornerstoneViewportService } = servicesManager.services;
+    const { activeViewportId } = viewportGridService.getState();
+    return {
+      activeViewportId,
+      viewport: cornerstoneViewportService.getCornerstoneViewport(activeViewportId),
+    };
+  }
+
+  function getActiveLabelmapVolume(segmentationId = '1') {
+    const { segmentationService } = servicesManager.services;
+    return segmentationService?.getLabelmapVolume?.(segmentationId);
+  }
+
+  function currentStudyInstanceUid() {
+    const query = new URLSearchParams(window.location.search);
+    return query.get('StudyInstanceUIDs') || query.get('studyInstanceUids') || '';
+  }
+
+  function scalarOffsetFromCanvas(viewport, canvasX, canvasY) {
+    const imageDataResult = viewport?.getImageData?.();
+    const imageData = imageDataResult?.imageData || imageDataResult;
+    if (!imageData) return null;
+
+    const dimensions = imageData.getDimensions?.();
+    if (!dimensions || dimensions.length < 2) return null;
+
+    const world = viewport.canvasToWorld?.([canvasX, canvasY]);
+    const index = world ? imageData.worldToIndex?.(world) : null;
+    if (!index) return null;
+
+    const i = Math.round(index[0]);
+    const j = Math.round(index[1]);
+    const k = Math.round(index[2] || 0);
+    const width = dimensions[0];
+    const height = dimensions[1];
+    const depth = dimensions[2] || 1;
+    if (i < 0 || j < 0 || k < 0 || i >= width || j >= height || k >= depth) {
+      return null;
+    }
+    return i + j * width + k * width * height;
+  }
+
+  function notifySegmentationModified(segmentationId = '1') {
+    import('@cornerstonejs/core').then(({ eventTarget, triggerEvent }) => {
+      import('@cornerstonejs/tools').then(({ Enums }) => {
+        triggerEvent(eventTarget, Enums.Events.SEGMENTATION_DATA_MODIFIED, {
+          segmentationId,
+        });
+      });
+    });
+  }
+
+  function eraseAtCanvasPoint(viewport, canvasX, canvasY, brushSize = eraserBrushSize) {
+    const volumeLoadObject = getActiveLabelmapVolume('1');
+    const scalarData = volumeLoadObject?.voxelManager?.getCompleteScalarDataArray?.();
+    if (!scalarData) return 0;
+
+    const radius = Math.max(2, brushSize / 2);
+    const radiusSquared = radius * radius;
+    let changed = 0;
+
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (dx * dx + dy * dy > radiusSquared) continue;
+        const offset = scalarOffsetFromCanvas(viewport, canvasX + dx, canvasY + dy);
+        if (offset == null || !scalarData[offset]) continue;
+        scalarData[offset] = 0;
+        changed++;
+      }
+    }
+
+    if (changed) {
+      volumeLoadObject.voxelManager?.setCompleteScalarDataArray?.(scalarData);
+      notifySegmentationModified('1');
+    }
+    return changed;
+  }
+
+  function summarizeActiveSegmentation() {
+    const volumeLoadObject = getActiveLabelmapVolume('1');
+    const scalarData = volumeLoadObject?.voxelManager?.getCompleteScalarDataArray?.();
+    if (!scalarData) return null;
+
+    const counts = {};
+    for (let i = 0; i < scalarData.length; i++) {
+      const value = scalarData[i];
+      if (!value) continue;
+      counts[value] = (counts[value] || 0) + 1;
+    }
+    return {
+      segmentation_id: '1',
+      pixel_counts_by_segment: counts,
+      total_labeled_pixels: Object.values(counts).reduce((sum, value) => sum + value, 0),
+    };
+  }
+
+  function toggleSegmentationEraser() {
+    const { activeViewportId, viewport } = getActiveViewport();
+    const element = viewport?.element;
+    if (!activeViewportId || !element) return;
+
+    const existing = eraserSessions.get(activeViewportId);
+    if (existing) {
+      existing.cleanup();
+      eraserSessions.delete(activeViewportId);
+      uiNotificationService.show({
+        title: 'Gomme segmentation',
+        message: 'Gomme désactivée.',
+        type: 'info',
+        duration: 1600,
+      });
+      return;
+    }
+
+    if (!getActiveLabelmapVolume('1')) {
+      uiNotificationService.show({
+        title: 'Gomme segmentation',
+        message: 'Aucune segmentation éditable active.',
+        type: 'warning',
+        duration: 3000,
+      });
+      return;
+    }
+
+    let drawing = false;
+    const previousCursor = element.style.cursor;
+    element.style.cursor = 'crosshair';
+
+    const pointFromEvent = event => {
+      const rect = element.getBoundingClientRect();
+      return [event.clientX - rect.left, event.clientY - rect.top];
+    };
+    const erase = event => {
+      const [x, y] = pointFromEvent(event);
+      eraseAtCanvasPoint(viewport, x, y);
+    };
+    const pointerDown = event => {
+      drawing = true;
+      element.setPointerCapture?.(event.pointerId);
+      erase(event);
+      event.preventDefault();
+    };
+    const pointerMove = event => {
+      if (!drawing) return;
+      erase(event);
+      event.preventDefault();
+    };
+    const pointerUp = event => {
+      drawing = false;
+      element.releasePointerCapture?.(event.pointerId);
+      event.preventDefault();
+    };
+    const wheel = event => {
+      if (!event.altKey) return;
+      eraserBrushSize = Math.max(4, Math.min(96, eraserBrushSize + (event.deltaY > 0 ? -4 : 4)));
+      uiNotificationService.show({
+        title: 'Gomme segmentation',
+        message: `Taille: ${eraserBrushSize}px`,
+        type: 'info',
+        duration: 900,
+      });
+      event.preventDefault();
+    };
+
+    element.addEventListener('pointerdown', pointerDown);
+    element.addEventListener('pointermove', pointerMove);
+    element.addEventListener('pointerup', pointerUp);
+    element.addEventListener('pointerleave', pointerUp);
+    element.addEventListener('wheel', wheel, { passive: false });
+
+    eraserSessions.set(activeViewportId, {
+      cleanup: () => {
+        element.style.cursor = previousCursor;
+        element.removeEventListener('pointerdown', pointerDown);
+        element.removeEventListener('pointermove', pointerMove);
+        element.removeEventListener('pointerup', pointerUp);
+        element.removeEventListener('pointerleave', pointerUp);
+        element.removeEventListener('wheel', wheel);
+      },
+    });
+
+    uiNotificationService.show({
+      title: 'Gomme segmentation',
+      message: 'Gomme active. Maintenez Alt + molette pour changer la taille.',
+      type: 'success',
+      duration: 3000,
+    });
+  }
+
+  async function saveSegmentationCorrections({ eye } = {}) {
+    const summary = summarizeActiveSegmentation();
+    const studyInstanceUid = currentStudyInstanceUid();
+    if (!summary || !studyInstanceUid) {
+      uiNotificationService.show({
+        title: 'Corrections',
+        message: 'Aucune correction sauvegardable trouvée.',
+        type: 'warning',
+        duration: 2500,
+      });
+      return;
+    }
+
+    const token = window.localStorage.getItem('teleoph.token')
+      || window.sessionStorage.getItem('teleoph.token');
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+    const response = await fetch('/api/exams/segmentation-corrections/', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        study_instance_uid: studyInstanceUid,
+        correction_type: 'eraser',
+        eye,
+        ...summary,
+      }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || 'Correction save failed');
+    }
+    const data = await response.json().catch(() => ({}));
+    uiNotificationService.show({
+      title: 'Corrections',
+      message: 'Segmentation corrigée sauvegardée.',
+      type: 'success',
+      duration: 2500,
+    });
+    return data;
+  }
+
   const actions = {
     setFoveaMarkers: ({ markers = [] } = {}) => {
       foveaMarkers = markers.filter(marker =>
@@ -265,6 +500,8 @@ export default function getCommandsModule({ servicesManager }) {
       element.appendChild(overlay);
       claheOverlays.set(activeViewportId, overlay);
     },
+    toggleSegmentationEraser,
+    saveSegmentationCorrections,
     notifyStudyOpened: ({ studyInstanceUid }) => {
       sendToParent('study-opened', { studyInstanceUid });
     },
@@ -287,6 +524,12 @@ export default function getCommandsModule({ servicesManager }) {
     toggleFoveaMarker: { commandFn: actions.toggleFoveaMarker },
     toggleClaheFilter: {
       commandFn: actions.toggleClaheFilter,
+    },
+    toggleSegmentationEraser: {
+      commandFn: actions.toggleSegmentationEraser,
+    },
+    saveSegmentationCorrections: {
+      commandFn: actions.saveSegmentationCorrections,
     },
   };
 

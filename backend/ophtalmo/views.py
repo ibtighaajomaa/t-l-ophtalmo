@@ -39,6 +39,85 @@ from .dmi_integration import (
 logger = logging.getLogger(__name__)
 
 
+LESION_SEGMENT_FIELDS = {
+    '1': ('microaneurysms',),
+    '2': ('hemorrhages',),
+    '3': ('hard_exudates', 'exudates'),
+    '4': ('soft_exudates', 'cotton_wool_spots'),
+}
+
+
+def _apply_doctor_lesion_correction_to_eye(eye_report, correction):
+    """Apply OHIF eraser pixel counts to lesion metrics used for report generation."""
+    if not isinstance(eye_report, dict) or not isinstance(correction, dict):
+        return eye_report
+
+    lesions = eye_report.get('lesions')
+    if not isinstance(lesions, dict):
+        return eye_report
+
+    original_counts = lesions.get('pixel_counts_by_class') or {}
+    corrected_counts = correction.get('pixel_counts_by_segment') or {}
+    if not isinstance(original_counts, dict) or not isinstance(corrected_counts, dict):
+        return eye_report
+
+    corrected_lesions = dict(lesions)
+    for segment_index, fields in LESION_SEGMENT_FIELDS.items():
+        try:
+            original_pixels = int(original_counts.get(segment_index, 0))
+            corrected_pixels = int(corrected_counts.get(segment_index, 0))
+        except (TypeError, ValueError):
+            continue
+        if original_pixels <= 0:
+            continue
+        ratio = max(0.0, min(1.0, corrected_pixels / original_pixels))
+        for field in fields:
+            if field not in corrected_lesions:
+                continue
+            try:
+                corrected_lesions[field] = int(round(float(corrected_lesions[field]) * ratio))
+            except (TypeError, ValueError):
+                pass
+
+    total_original = sum(
+        int(value) for value in original_counts.values()
+        if isinstance(value, (int, float, str)) and str(value).isdigit()
+    )
+    total_corrected = correction.get('total_labeled_pixels')
+    if total_original > 0 and isinstance(total_corrected, int) and 'coverage_pct' in corrected_lesions:
+        try:
+            corrected_lesions['coverage_pct'] = round(
+                float(corrected_lesions['coverage_pct']) * max(0.0, min(1.0, total_corrected / total_original)),
+                2,
+            )
+        except (TypeError, ValueError):
+            pass
+
+    corrected_lesions['doctor_corrected'] = True
+    corrected_lesions['doctor_correction_source'] = 'ohif_segmentation_eraser'
+    updated = dict(eye_report)
+    updated['lesions'] = corrected_lesions
+    updated['doctor_corrected_segmentation'] = correction
+    return updated
+
+
+def _apply_doctor_lesion_correction(report_json, correction):
+    if not isinstance(report_json, dict):
+        return report_json
+
+    updated = json.loads(json.dumps(report_json))
+    per_eye = updated.get('per_eye')
+    if isinstance(per_eye, dict):
+        updated['per_eye'] = {
+            side: _apply_doctor_lesion_correction_to_eye(eye_report, correction)
+            for side, eye_report in per_eye.items()
+        }
+        return updated
+
+    updated['analysis_before_doctor_correction'] = updated.get('analysis_before_doctor_correction') or report_json
+    return _apply_doctor_lesion_correction_to_eye(updated, correction)
+
+
 def _mark_exam_interpreted(study_instance_uid=None, series_instance_uid=None):
     """Mark the exam linked to a saved medical report as interpreted."""
     exam = None
@@ -1395,6 +1474,61 @@ def save_analysis(request):
     )
     serializer = AnalysisReportSerializer(report)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def save_segmentation_corrections(request):
+    study_uid = request.data.get('study_instance_uid')
+    if not study_uid:
+        return Response(
+            {'error': 'study_instance_uid is required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    pixel_counts = request.data.get('pixel_counts_by_segment') or {}
+    if not isinstance(pixel_counts, dict):
+        return Response(
+            {'error': 'pixel_counts_by_segment must be an object'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    report = AnalysisReport.objects.filter(series_instance_uid=study_uid).first()
+    if not report:
+        return Response({'error': 'Analysis not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    cleaned_counts = {}
+    for key, value in pixel_counts.items():
+        try:
+            segment_index = str(int(key))
+            cleaned_counts[segment_index] = int(value)
+        except (TypeError, ValueError):
+            continue
+
+    report_json = report.report_json or {}
+    corrections = report_json.setdefault('doctor_segmentation_corrections', [])
+    correction = {
+        'type': request.data.get('correction_type') or 'eraser',
+        'segmentation_id': request.data.get('segmentation_id') or '1',
+        'pixel_counts_by_segment': cleaned_counts,
+        'total_labeled_pixels': sum(cleaned_counts.values()),
+        'saved_at': datetime.utcnow().isoformat() + 'Z',
+        'source': 'ohif_segmentation_eraser',
+    }
+    corrections.append(correction)
+    report_json = _apply_doctor_lesion_correction(report_json, correction)
+    corrections = report_json.setdefault('doctor_segmentation_corrections', corrections)
+    report_json['doctor_corrected_segmentation'] = correction
+    report_json['status'] = 'DOCTOR_CORRECTED'
+    report.report_json = report_json
+    report.save(update_fields=['report_json'])
+
+    return Response({
+        'status': 'saved',
+        'study_instance_uid': study_uid,
+        'doctor_corrected_segmentation': correction,
+        'analysis': report_json.get('per_eye') or report_json,
+    })
 
 
 @api_view(['GET'])
