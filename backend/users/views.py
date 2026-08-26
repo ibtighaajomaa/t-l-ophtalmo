@@ -97,7 +97,7 @@ class CreerUtilisateurView(APIView):
             # 6. Envoyer l'email de bienvenue avec les identifiants
             from django.core.mail import send_mail
             sujet = "Bienvenue sur Télé-rétinographie - Vos identifiants"
-            lien_login = "http://172.20.1.188/login"
+            lien_login = "http://193.95.31.196/login"
             
             message = f"""Bonjour Dr {data['prenom']} {data['nom']},
             
@@ -307,7 +307,7 @@ def request_password_reset(request):
     reset_obj = PasswordResetToken.objects.create(email=email)
     
     # 3. Envoyer le mail vers REACT
-    link = f"http://172.20.1.188/reset-password?token={reset_obj.token}"
+    link = f"http://193.95.31.196/reset-password?token={reset_obj.token}"
     sujet = "[Télé-rétinographie] Demande de réinitialisation de votre mot de passe"
     message = f"""Bonjour Dr {prenom_medecin} {nom_medecin},
 
