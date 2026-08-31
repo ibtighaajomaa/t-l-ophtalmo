@@ -17,4 +17,3 @@ whitenoise==6.6.0
 timm
 Pillow
 pydicom==3.0.1
-oracledb==4.0.2
