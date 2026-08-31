@@ -22,4 +22,5 @@ urlpatterns = [
     path('oidc/', include('mozilla_django_oidc.urls')),
     path('', include('users.urls')),
     path('', include('ophtalmo.urls')),
+    path('', include('dmi_oracle.urls')),
 ]
