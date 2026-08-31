@@ -82,6 +82,7 @@ INSTALLED_APPS = [
     'django_celery_beat',
     'users',
     'ophtalmo',
+    'dmi_oracle',
 ]
 
 MIDDLEWARE = [
@@ -129,6 +130,21 @@ DATABASES = {
         'PORT': os.environ.get('DB_PORT', '5432'),
     }
 }
+
+# =========================
+#  DMI ORACLE (direct connection to the hospital DMI database)
+# =========================
+# Only registered when ORACLE_DMI_HOST is set, so environments without
+# access to the DMI network (e.g. this dev VM) are unaffected.
+if os.environ.get('ORACLE_DMI_HOST'):
+    DATABASES['dmi_db'] = {
+        'ENGINE': 'django.db.backends.oracle',
+        'HOST': os.environ.get('ORACLE_DMI_HOST'),
+        'PORT': os.environ.get('ORACLE_DMI_PORT', '1521'),
+        'NAME': os.environ.get('ORACLE_DMI_SERVICE_NAME', ''),
+        'USER': os.environ.get('ORACLE_DMI_USER', ''),
+        'PASSWORD': os.environ.get('ORACLE_DMI_PASSWORD', ''),
+    }
 
 
 # Password validation
