@@ -49,7 +49,7 @@ try:
             "publicClient": False,
             "serviceAccountsEnabled": True,
             "standardFlowEnabled": True,
-            "redirectUris": ["http://localhost:8000/*", "http://localhost:5173/*", "http://172.20.1.188/*", "*"]
+            "redirectUris": ["http://localhost:8000/*", "http://localhost:5173/*", "http://193.95.31.196/*", "*"]
         })
         print(f"Client {client_id} created.")
 except Exception as e:
