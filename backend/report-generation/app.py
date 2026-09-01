@@ -74,18 +74,36 @@ def _generation_token_limit(max_new_tokens: int | None = None) -> int:
 
 def _clean_generated_text(text: str) -> str:
     text = re.sub(r"<unused\d+>", "", text).strip()
-    # Some instruction-tuned models may expose a reasoning preamble despite
-    # thinking being disabled. Keep only the requested clinical report when a
-    # recognizable report heading is present.
-    report_heading = re.search(
-        r"(?im)^(?:#{1,3}\s*)?(?:\*\*)?"
-        r"(?:œil droit|oeil droit|œil gauche|oeil gauche|"
-        r"synthèse bilatérale|synthese bilaterale)\s*:?(?:\*\*)?\s*$",
-        text,
-    )
-    if report_heading:
-        text = text[report_heading.start():].strip()
+
+    # MedGemma sometimes narrates its process (English chain-of-thought,
+    # successive "Revised Draft" attempts) before or instead of the final
+    # answer, despite enable_thinking=False and prose instructions not to.
+    # The prompts wrap the requested answer in <RAPPORT>...</RAPPORT>, so
+    # prefer extracting exactly that span over any heuristic.
+    tag_match = re.search(r"<RAPPORT>(.*?)</RAPPORT>", text, re.IGNORECASE | re.DOTALL)
+    if tag_match:
+        text = tag_match.group(1).strip()
+    else:
+        open_tag = re.search(r"<RAPPORT>", text, re.IGNORECASE)
+        if open_tag:
+            # Generation was cut off before the closing tag (token limit).
+            # Best-effort recovery: keep everything after the opening tag.
+            print("WARNING: MedGemma output truncated before </RAPPORT>; using partial content")
+            text = text[open_tag.end():].strip()
+        else:
+            # Older/unconstrained output: fall back to the previous
+            # heading-based heuristic.
+            report_heading = re.search(
+                r"(?im)^(?:#{1,3}\s*)?(?:\*\*)?"
+                r"(?:œil droit|oeil droit|œil gauche|oeil gauche|"
+                r"synthèse bilatérale|synthese bilaterale)\s*:?(?:\*\*)?\s*$",
+                text,
+            )
+            if report_heading:
+                text = text[report_heading.start():].strip()
+
     text = re.sub(r"(?im)^\s*(?:thought|thinking process|raisonnement)\s*:?\s*$", "", text)
+    text = re.sub(r"</?RAPPORT>", "", text, flags=re.IGNORECASE).strip()
     return _dedupe_report_text(text)
 
 
@@ -281,8 +299,8 @@ def _report_prompt(
 Rédige un résumé professionnel du fond d'œil, entièrement en français.
 
 Règles obligatoires :
-- N'affiche jamais ton raisonnement, ta réflexion interne, une analyse préparatoire ou le mot « thought ».
-- Écris uniquement le compte rendu demandé, sans préambule ni commentaire après celui-ci.
+- Ta réponse complète doit être uniquement : <RAPPORT>{report_title} [paragraphe]</RAPPORT>
+- N'écris strictement rien avant <RAPPORT>, ni après </RAPPORT> : pas de plan, pas de brouillon, pas de vérification de longueur, pas de réflexion visible.
 - Utilise les sorties des modèles, sans modifier ni inventer les valeurs.
 - Résume les résultats importants sans recopier toutes les données techniques.
 - N'utilise aucun mot anglais pour désigner les diagnostics ou les stades.
@@ -304,11 +322,11 @@ Règles obligatoires :
 
 {analysis_text}
 
-Format obligatoire :
-{report_title}
-[Un unique paragraphe de 3 à 5 phrases résumant les lésions principales, le stade probable, les éventuelles anomalies maculaires et la recommandation.]
+Format obligatoire (rien d'autre dans ta réponse) :
+<RAPPORT>{report_title}
+[Un unique paragraphe de 3 à 5 phrases résumant les lésions principales, le stade probable, les éventuelles anomalies maculaires et la recommandation.]</RAPPORT>
 
-Rédige maintenant uniquement ce résumé, sans répétition."""
+Rédige maintenant, directement, sans brouillon ni répétition."""
 
 
 def _summary_prompt(
@@ -348,8 +366,8 @@ def _summary_prompt(
 Rédige un résumé bilatéral du fond d'œil, entièrement en français médical professionnel.
 
 Règles obligatoires :
-- N'affiche jamais ton raisonnement, ta réflexion interne, une analyse préparatoire ou le mot « thought ».
-- Écris uniquement le compte rendu demandé, sans préambule ni commentaire après celui-ci.
+- Ta réponse complète doit être uniquement : <RAPPORT>Synthèse bilatérale : [paragraphe]</RAPPORT>
+- N'écris strictement rien avant <RAPPORT>, ni après </RAPPORT> : pas de plan, pas de brouillon, pas de vérification de longueur, pas de réflexion visible.
 - Ne recopie pas successivement les rapports de chaque œil : résume et compare.
 - N'utilise aucun mot anglais pour désigner les diagnostics ou les stades.
 - N'utilise ni liste, ni tableau, ni sous-rubrique.
@@ -367,11 +385,11 @@ Règles obligatoires :
 
 {chr(10).join(eye_sections)}
 
-Format obligatoire :
-Synthèse bilatérale :
-[Un unique paragraphe de 3 à 5 phrases donnant l'impression générale, comparant les deux yeux et indiquant les examens recommandés.]
+Format obligatoire (rien d'autre dans ta réponse) :
+<RAPPORT>Synthèse bilatérale :
+[Un unique paragraphe de 3 à 5 phrases donnant l'impression générale, comparant les deux yeux et indiquant les examens recommandés.]</RAPPORT>
 
-Rédige maintenant uniquement ce résumé, sans répétition."""
+Rédige maintenant, directement, sans brouillon ni répétition."""
 
 
 def _analysis_prompt() -> str:
