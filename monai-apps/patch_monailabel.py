@@ -2839,6 +2839,201 @@ if os.path.exists(CONVERT):
 else:
     print(f"WARNING: convert.py not found for Patch 23: {CONVERT}")
 
+# Patch 24: Stop double-pushing every DICOM-SEG to Orthanc.
+# AUTO_PUSH_DICOM_SEG (this file, earlier) already converts and pushes the
+# SEG for every successful inference and notifies the Django webhook. The
+# native "Dicom Seg Integration" block below independently regenerates and
+# re-pushes the same SEG whenever `output` resolves to "dicom_seg" (its
+# default), producing two distinct DICOM-SEG series per model per call.
+PATCH24_MARKER = "OHIF SEG: skip redundant native Orthanc push"
+if os.path.exists(INFER):
+    with open(INFER) as f:
+        content = f.read()
+
+    if PATCH24_MARKER not in content:
+        old_dup_push = '''        if dicom_seg_file and os.path.exists(dicom_seg_file):
+            try:
+                orthanc_url = "http://orthanc-container:8042/instances"
+                with open(dicom_seg_file, "rb") as f:
+                    resp = requests.post(orthanc_url, data=f, headers={"Content-Type": "application/dicom"})
+                    logger.info(f"Pushed DICOM-SEG to Orthanc: {resp.status_code}")
+            except Exception as e:
+                logger.error(f"Failed to push DICOM-SEG to Orthanc: {e}")
+            result["dicom_seg"] = dicom_seg_file
+        else:
+            result.pop("dicom_seg", None)'''
+        new_dup_push = '''        if dicom_seg_file and os.path.exists(dicom_seg_file):
+            # OHIF SEG: skip redundant native Orthanc push -- AUTO_PUSH_DICOM_SEG
+            # already pushed this SEG (and notified Django) earlier in this request.
+            result["dicom_seg"] = dicom_seg_file
+        else:
+            result.pop("dicom_seg", None)'''
+        if old_dup_push in content:
+            content = content.replace(old_dup_push, new_dup_push, 1)
+            with open(INFER, "w") as f:
+                f.write(content)
+            print("infer.py Patch 24: skip redundant native Orthanc push")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 24 -- native dicom_seg push block not found in infer.py")
+    else:
+        patches_applied = True
+        print("infer.py: Patch 24 already applied")
+else:
+    print(f"WARNING: infer.py not found for Patch 24: {INFER}")
+
+# Patch 25: Make the AUTO_PUSH_DICOM_SEG push idempotent, scoped to the same
+# study. Something outside Django's own pipeline (most likely OHIF's native
+# MONAI Label panel, which calls /infer/<model> directly from the browser)
+# can independently trigger inference on the same source series, and
+# Django's own cleanup (_delete_prior_ai_seg_series) has no visibility into
+# that. Fix it here instead: before pushing, delete any existing SEG series
+# whose SeriesDescription matches this model, whose ReferencedSeriesSequence
+# points at the same source series, AND whose StudyInstanceUID matches the
+# source study -- the StudyInstanceUID filter is required because this test
+# dataset reuses the same source SeriesInstanceUID across many different
+# patients/studies, so without it dedup could delete a DIFFERENT patient's
+# valid SEG result. Skip entirely if source_study_uid is unknown.
+PATCH25_MARKER = "OHIF SEG: idempotent push, scoped to study"
+if os.path.exists(INFER):
+    with open(INFER) as f:
+        content = f.read()
+
+    if PATCH25_MARKER not in content:
+        old_push_anchor = '''                        ### PATCH14_FORCE_STUDY_UID ###
+                        with open(dicom_seg_file, "rb") as f:'''
+        new_push_anchor = '''                        ### PATCH14_FORCE_STUDY_UID ###
+                        # OHIF SEG: idempotent push, scoped to study
+                        try:
+                            if not source_study_uid:
+                                logger.warning("OHIF SEG dedup skipped: source_study_uid unknown")
+                            else:
+                                _p25_find = requests.post(
+                                    "http://orthanc-container:8042/tools/find",
+                                    json={
+                                        "Level": "Series",
+                                        "Query": {
+                                            "Modality": "SEG",
+                                            "SeriesDescription": model,
+                                            "StudyInstanceUID": source_study_uid,
+                                        },
+                                        "Expand": True,
+                                    },
+                                    timeout=15,
+                                )
+                                if _p25_find.status_code == 200:
+                                    for _p25_series in _p25_find.json():
+                                        _p25_instances = _p25_series.get("Instances") or []
+                                        if not _p25_instances:
+                                            continue
+                                        _p25_tags_resp = requests.get(
+                                            f"http://orthanc-container:8042/instances/{_p25_instances[0]}/tags?simplify",
+                                            timeout=10,
+                                        )
+                                        if _p25_tags_resp.status_code != 200:
+                                            continue
+                                        _p25_refs = {
+                                            _p25_item.get("SeriesInstanceUID")
+                                            for _p25_item in (_p25_tags_resp.json().get("ReferencedSeriesSequence") or [])
+                                            if isinstance(_p25_item, dict)
+                                        }
+                                        if image in _p25_refs:
+                                            requests.delete(f"http://orthanc-container:8042/series/{_p25_series['ID']}", timeout=30)
+                                            logger.info(f"OHIF SEG dedup: deleted prior {model} SEG {_p25_series['ID']} for source {image} (study {source_study_uid})")
+                        except Exception as _p25_e:
+                            logger.warning(f"OHIF SEG dedup check failed: {_p25_e}")
+                        with open(dicom_seg_file, "rb") as f:'''
+        if old_push_anchor in content:
+            content = content.replace(old_push_anchor, new_push_anchor, 1)
+            with open(INFER, "w") as f:
+                f.write(content)
+            print("infer.py Patch 25: idempotent SEG push, scoped to study")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 25 -- push anchor not found in infer.py")
+    else:
+        patches_applied = True
+        print("infer.py: Patch 25 already applied")
+else:
+    print(f"WARNING: infer.py not found for Patch 25: {INFER}")
+
+# Patch 26: Same idempotent-push fix as Patch 25, but for the SEPARATE push
+# path inside the /infer/analyze endpoint (a second, independent code path
+# from AUTO_PUSH_DICOM_SEG, not covered by Patch 24/25). This endpoint
+# re-runs optic_disc_cup/vessel_seg/lesion_seg/neovascularization_seg
+# internally as part of DR analysis and pushes its OWN DICOM-SEG copies
+# ("Pushed DICOM-SEG to Orthanc from analyze/<model>"), independent of
+# AUTO_PUSH_DICOM_SEG's own push for the same model+source+study.
+PATCH26_MARKER = "OHIF SEG dedup (analyze)"
+if os.path.exists(INFER):
+    with open(INFER) as f:
+        content = f.read()
+
+    if PATCH26_MARKER not in content:
+        old_analyze_push = '''                    try:
+                        dicom_seg_file = nifti_to_dicom_seg(
+                            image_path, result_image, label_info, use_itk=False
+                        )'''
+        new_analyze_push = '''                    try:
+                        # OHIF SEG dedup (analyze): delete any existing SEG for this
+                        # model + source series within the same study before pushing,
+                        # so this endpoint's own push converges with AUTO_PUSH_DICOM_SEG
+                        # and any other caller instead of accumulating copies.
+                        try:
+                            _p26_find = requests.post(
+                                "http://orthanc-container:8042/tools/find",
+                                json={
+                                    "Level": "Series",
+                                    "Query": {
+                                        "Modality": "SEG",
+                                        "SeriesDescription": model,
+                                        "StudyInstanceUID": study_uid,
+                                    },
+                                    "Expand": True,
+                                },
+                                timeout=15,
+                            )
+                            if _p26_find.status_code == 200:
+                                for _p26_series in _p26_find.json():
+                                    _p26_instances = _p26_series.get("Instances") or []
+                                    if not _p26_instances:
+                                        continue
+                                    _p26_tags_resp = requests.get(
+                                        f"http://orthanc-container:8042/instances/{_p26_instances[0]}/tags?simplify",
+                                        timeout=10,
+                                    )
+                                    if _p26_tags_resp.status_code != 200:
+                                        continue
+                                    _p26_refs = {
+                                        _p26_item.get("SeriesInstanceUID")
+                                        for _p26_item in (_p26_tags_resp.json().get("ReferencedSeriesSequence") or [])
+                                        if isinstance(_p26_item, dict)
+                                    }
+                                    if image in _p26_refs:
+                                        requests.delete(f"http://orthanc-container:8042/series/{_p26_series['ID']}", timeout=30)
+                                        logger.info(
+                                            "OHIF SEG dedup (analyze): deleted prior %s SEG %s for source %s (study %s)",
+                                            model, _p26_series['ID'], image, study_uid,
+                                        )
+                        except Exception as _p26_e:
+                            logger.warning("OHIF SEG dedup (analyze) check failed: %s", _p26_e)
+                        dicom_seg_file = nifti_to_dicom_seg(
+                            image_path, result_image, label_info, use_itk=False
+                        )'''
+        if old_analyze_push in content:
+            content = content.replace(old_analyze_push, new_analyze_push, 1)
+            with open(INFER, "w") as f:
+                f.write(content)
+            print("infer.py Patch 26: idempotent SEG push for /infer/analyze")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 26 -- analyze push anchor not found in infer.py")
+    else:
+        patches_applied = True
+        print("infer.py: Patch 26 already applied")
+else:
+    print(f"WARNING: infer.py not found for Patch 26: {INFER}")
+
 
 if not patches_applied:
     print("No patches needed (already applied or versions mismatch)")

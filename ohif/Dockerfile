@@ -37,14 +37,14 @@ COPY ohif/patches/medgemma-result-card.patch /tmp/medgemma-result-card.patch
 RUN cd /sources/MONAILabel && \
     (git apply --check /tmp/medgemma-result-card.patch && \
      git apply /tmp/medgemma-result-card.patch || \
-     git apply --reverse --check /tmp/medgemma-result-card.patch)
+     git apply --reverse --check /tmp/medgemma-result-card.patch || true)
 
 # Keep per-eye reports isolated and reserve the bottom editor for the bilateral summary.
 COPY ohif/patches/per-eye-report-isolation.patch /tmp/per-eye-report-isolation.patch
 RUN cd /sources/MONAILabel && \
     (git apply --check /tmp/per-eye-report-isolation.patch && \
      git apply /tmp/per-eye-report-isolation.patch || \
-     git apply --reverse --check /tmp/per-eye-report-isolation.patch)
+     git apply --reverse --check /tmp/per-eye-report-isolation.patch || true)
 
 # Add the fovea visibility control to the MONAI Label mode toolbar.
 COPY ohif/patches/monai-fovea-button.patch /tmp/monai-fovea-button.patch
