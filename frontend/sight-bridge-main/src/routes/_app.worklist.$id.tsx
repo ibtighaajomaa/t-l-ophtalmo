@@ -967,11 +967,11 @@ function ExamDetail() {
                           <span>Exsudats solides</span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <div className="w-3 h-3 rounded-full border border-[#6a0dad] bg-[#6a0dad]/40" />
+                          <div className="w-3 h-3 rounded-full border border-[#ff3232] bg-[#ff3232]/40" />
                           <span>Microanévrismes</span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <div className="w-3 h-3 rounded-full border border-[#ff008c] bg-[#ff008c]/40" />
+                          <div className="w-3 h-3 rounded-full border border-[#00ff00] bg-[#00ff00]/40" />
                           <span>Exsudats cotonneux</span>
                         </div>
                       </>
@@ -1075,8 +1075,8 @@ function ExamDetail() {
                     {[
                       { label: "Hémorragies", type: "lesion", color: "#3232ff", count: 5 },
                       { label: "Exsudats solides", type: "lesion", color: "#a0a0a0", count: 7 },
-                      { label: "Microanévrismes", type: "lesion", color: "#6a0dad", count: 9 },
-                      { label: "Exsudats cotonneux", type: "lesion", color: "#ff008c", count: 1 },
+                      { label: "Microanévrismes", type: "lesion", color: "#ff3232", count: 9 },
+                      { label: "Exsudats cotonneux", type: "lesion", color: "#00ff00", count: 1 },
                       { label: "Vaisseaux", type: "vessel", color: "#00bcd4", count: 1 },
                       { label: "Disque optique", type: "optic-disc", color: "#4caf50", count: 1 },
                     ].map((seg) => (
