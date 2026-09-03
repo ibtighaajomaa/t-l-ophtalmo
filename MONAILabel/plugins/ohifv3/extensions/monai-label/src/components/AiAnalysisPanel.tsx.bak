@@ -1,0 +1,787 @@
+import React, { Component } from 'react';
+import PropTypes from 'prop-types';
+import './AiAnalysisPanel.css';
+import MonaiLabelClient from '../services/MonaiLabelClient';
+
+export default class AiAnalysisPanel extends Component {
+  static propTypes = {
+    commandsManager: PropTypes.any,
+    servicesManager: PropTypes.any,
+    extensionManager: PropTypes.any,
+  };
+
+  constructor(props) {
+    super(props);
+    this.state = {
+      loading: false,
+      error: null,
+      report: null,
+      reportsByEye: {},
+      activeEye: 'right',
+      pollingSavedAnalysis: false,
+      generatingReport: false,
+      reportResult: null,
+      reportResultsByEye: {},
+      reportError: null,
+      savingReport: false,
+    };
+    this.serverURI = (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1') + '/monai/';
+  }
+
+  client = () => new MonaiLabelClient(this.serverURI);
+  rightColumnRef = React.createRef();
+  leftColumnRef = React.createRef();
+  reportEditorRef = React.createRef();
+
+  componentDidMount() {
+    window.addEventListener('teleophtalmo:ai-eye-selected', this.handleEyeSelected);
+    this.loadSavedAnalysis();
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener('teleophtalmo:ai-eye-selected', this.handleEyeSelected);
+  }
+
+  handleEyeSelected = event => {
+    const eye = event?.detail?.eye;
+    if (eye === 'right' || eye === 'left') {
+      this.setState({ activeEye: eye }, () => {
+        const ref = eye === 'right' ? this.rightColumnRef : this.leftColumnRef;
+        ref.current?.scrollIntoView?.({
+          behavior: 'smooth',
+          block: 'nearest',
+          inline: 'nearest',
+        });
+      });
+    }
+  };
+
+  getActiveReport = () => {
+    const { report, reportsByEye, activeEye } = this.state;
+    if (reportsByEye?.[activeEye]) {
+      return reportsByEye[activeEye];
+    }
+    if (report && this.sideFromReport(report) === activeEye) {
+      return report;
+    }
+    return null;
+  };
+
+  getActiveGeneratedReport = () => {
+    const { reportResult, reportResultsByEye, activeEye } = this.state;
+    return reportResultsByEye?.[activeEye] || reportResult;
+  };
+
+  isPerEyeAnalysis = value =>
+    value &&
+    typeof value === 'object' &&
+    ('right' in value || 'left' in value) &&
+    !('dr_classification' in value);
+
+  sideFromReport = report => {
+    const laterality = String(report?.eye_laterality?.laterality || report?.laterality || '').toUpperCase();
+    if (laterality === 'R' || laterality === 'RIGHT' || laterality === 'OD') return 'right';
+    if (laterality === 'L' || laterality === 'LEFT' || laterality === 'OS' || laterality === 'OG') return 'left';
+    return this.state.activeEye;
+  };
+
+  normalizeAnalysis = analysis => {
+    if (this.isPerEyeAnalysis(analysis)) {
+      return {
+        reportsByEye: {
+          ...(analysis.right ? { right: analysis.right } : {}),
+          ...(analysis.left ? { left: analysis.left } : {}),
+        },
+        activeEye: analysis.right ? 'right' : 'left',
+        report: null,
+      };
+    }
+    const side = this.sideFromReport(analysis);
+    return {
+      reportsByEye: { [side]: analysis },
+      activeEye: side,
+      report: analysis,
+    };
+  };
+
+  getAuthToken = () => {
+    if (typeof window !== 'undefined') {
+      return (
+        localStorage.getItem('teleoph.token') ||
+        sessionStorage.getItem('teleoph.token')
+      );
+    }
+    return null;
+  };
+
+  getActiveViewportInfo = () => {
+    const { viewportGridService, displaySetService } =
+      this.props.servicesManager.services;
+    const { viewports, activeViewportId } = viewportGridService.getState();
+    const viewport = viewports.get(activeViewportId);
+    if (!viewport) return null;
+    const displaySet = displaySetService.getDisplaySetByUID(
+      viewport.displaySetInstanceUIDs[0]
+    );
+    return { viewport, displaySet };
+  };
+
+  runAnalysis = async () => {
+    const { uiNotificationService } = this.props.servicesManager.services;
+    this.setState({
+      loading: true,
+      error: null,
+      report: null,
+      reportsByEye: {},
+      reportResult: null,
+      reportResultsByEye: {},
+    });
+
+    const viewportInfo = this.getActiveViewportInfo();
+    if (!viewportInfo || !viewportInfo.displaySet) {
+      this.setState({ loading: false, error: 'No active image' });
+      return;
+    }
+
+    const imageUid = viewportInfo.displaySet.SeriesInstanceUID;
+    const studyUid = viewportInfo.displaySet.StudyInstanceUID;
+    if (!imageUid || !studyUid) {
+      this.setState({
+        loading: false,
+        error: 'The active viewport is missing its Study or Series Instance UID',
+      });
+      return;
+    }
+    const nid = uiNotificationService.show({
+      title: 'AI Analysis',
+      message: 'Running analysis pipeline...',
+      type: 'info',
+      duration: 60000,
+    });
+
+    try {
+      const response = await fetch('/api/exams/run-analysis/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ study_instance_uid: studyUid }),
+      });
+      const data = await response.json().catch(() => ({}));
+      console.log('Analysis response:', data);
+
+      if (!response.ok) {
+        throw new Error(data?.detail || data?.error || 'Analysis failed');
+      }
+
+      if (data.study_instance_uid && data.study_instance_uid !== studyUid) {
+        throw new Error('Analysis response does not match the active study');
+      }
+      const normalized = this.normalizeAnalysis(data.analysis || data);
+      this.setState({ ...normalized, loading: false });
+
+      uiNotificationService.show({
+        title: 'AI Analysis',
+        message: 'Analysis complete',
+        type: 'success',
+        duration: 4000,
+      });
+    } catch (err) {
+      console.error('Analysis error:', err);
+      this.setState({ loading: false, error: err.message || 'Analysis failed' });
+      uiNotificationService.show({
+        title: 'AI Analysis',
+        message: err.message || 'Analysis failed',
+        type: 'error',
+        duration: 6000,
+      });
+    } finally {
+      uiNotificationService.hide(nid);
+    }
+  };
+
+  loadSavedAnalysis = async () => {
+    const viewportInfo = this.getActiveViewportInfo();
+    const studyUid = viewportInfo?.displaySet?.StudyInstanceUID;
+    if (!studyUid) return;
+
+    this.setState({ pollingSavedAnalysis: true });
+    try {
+      const token = this.getAuthToken();
+      const response = await fetch(
+        `/api/exams/analysis/?study_instance_uid=${encodeURIComponent(studyUid)}`,
+        {
+          headers: {
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+          },
+        }
+      );
+      if (!response.ok) {
+        this.setState({ pollingSavedAnalysis: false });
+        return;
+      }
+      const data = await response.json();
+      const normalized = this.normalizeAnalysis(data.analysis || data);
+      this.setState({ ...normalized, pollingSavedAnalysis: false });
+    } catch (err) {
+      console.debug('Saved analysis unavailable:', err);
+      this.setState({ pollingSavedAnalysis: false });
+    }
+  };
+
+  generateReport = async () => {
+    const { uiNotificationService } = this.props.servicesManager.services;
+    const report = this.getActiveReport();
+    
+    if (!report) {
+      this.setState({ reportError: 'No analysis results available. Run AI Analysis first.' });
+      return;
+    }
+
+    this.setState({ generatingReport: true, reportError: null, reportResult: null });
+
+    const viewportInfo = this.getActiveViewportInfo();
+    const patientId = viewportInfo?.displaySet?.PatientID || viewportInfo?.displaySet?.PatientName || 'Unknown';
+
+    const nid = uiNotificationService.show({
+      title: 'Report Generation',
+      message: 'Generating medical report with AI...',
+      type: 'info',
+      duration: 120000,
+    });
+
+    try {
+      const token = this.getAuthToken();
+      const response = await fetch('/api/exams/generate-report/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          report_data: report,
+          patient_id: patientId,
+        }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${response.status}`);
+      }
+
+      const result = await response.json();
+      this.setState(state => ({
+        reportResult: result,
+        reportResultsByEye: {
+          ...state.reportResultsByEye,
+          [state.activeEye]: result,
+        },
+        generatingReport: false,
+      }));
+
+      uiNotificationService.show({
+        title: 'Report Generation',
+        message: 'Medical report generated successfully',
+        type: 'success',
+        duration: 4000,
+      });
+    } catch (err) {
+      console.error('Report generation error:', err);
+      this.setState({ generatingReport: false, reportError: err.message || 'Report generation failed' });
+      uiNotificationService.show({
+        title: 'Report Generation',
+        message: err.message || 'Report generation failed',
+        type: 'error',
+        duration: 6000,
+      });
+    } finally {
+      uiNotificationService.hide(nid);
+    }
+  };
+
+  applyReportFormat = (command, value = null) => {
+    this.reportEditorRef.current?.focus();
+    document.execCommand(command, false, value);
+  };
+
+  promptForReportLink = () => {
+    const url = window.prompt('Enter the link URL');
+    if (url) {
+      this.applyReportFormat('createLink', url);
+    }
+  };
+
+  renderEditorToolbar = () => {
+    const commandButton = (label, command, title = label) => (
+      <button
+        type='button'
+        className='editorToolbarButton'
+        title={title}
+        onMouseDown={event => {
+          event.preventDefault();
+          this.applyReportFormat(command);
+        }}
+      >
+        {label}
+      </button>
+    );
+
+    return (
+      <div className='editorToolbar' role='toolbar' aria-label='Mise en forme du rapport'>
+        <select
+          className='editorFormatSelect'
+          aria-label='Format du texte'
+          defaultValue='p'
+          onChange={event => this.applyReportFormat('formatBlock', event.target.value)}
+        >
+          <option value='p'>Paragraphe</option>
+          <option value='h2'>Titre 1</option>
+          <option value='h3'>Titre 2</option>
+        </select>
+        {commandButton(<strong>B</strong>, 'bold', 'Gras')}
+        {commandButton(<em>I</em>, 'italic', 'Italique')}
+        {commandButton(<u>U</u>, 'underline', 'Souligné')}
+        {commandButton(<s>S</s>, 'strikeThrough', 'Barré')}
+        {commandButton('1.', 'insertOrderedList', 'Liste numérotée')}
+        {commandButton('•', 'insertUnorderedList', 'Liste à puces')}
+        {commandButton('≡', 'justifyLeft', 'Aligner à gauche')}
+        {commandButton('≣', 'justifyCenter', 'Centrer')}
+        {commandButton('☰', 'justifyRight', 'Aligner à droite')}
+        {commandButton('←', 'outdent', 'Diminuer le retrait')}
+        {commandButton('→', 'indent', 'Augmenter le retrait')}
+        {commandButton('Tx', 'removeFormat', 'Effacer la mise en forme')}
+        {commandButton('↶', 'undo', 'Annuler')}
+        {commandButton('↷', 'redo', 'Rétablir')}
+        <button
+          type='button'
+          className='editorToolbarButton'
+          title='Insérer un lien'
+          onMouseDown={event => {
+            event.preventDefault();
+            this.promptForReportLink();
+          }}
+        >
+          🔗
+        </button>
+        {commandButton('⛓', 'unlink', 'Supprimer le lien')}
+        <button
+          type='button'
+          className='editorToolbarButton editorColorButton'
+          title='Texte rouge'
+          aria-label='Appliquer la couleur rouge'
+          onMouseDown={event => {
+            event.preventDefault();
+            this.applyReportFormat('foreColor', '#d66a6a');
+          }}
+        >
+          A <span className='editorColorSwatch' />
+        </button>
+      </div>
+    );
+  };
+
+  saveReport = async () => {
+    const { uiNotificationService } = this.props.servicesManager.services;
+    const report = this.getActiveReport();
+    const reportResult = this.getActiveGeneratedReport();
+    const viewportInfo = this.getActiveViewportInfo();
+    const displaySet = viewportInfo?.displaySet;
+
+    if (!reportResult || !displaySet?.SeriesInstanceUID) {
+      this.setState({ reportError: 'No generated report or active examination to save.' });
+      return;
+    }
+
+    this.setState({ savingReport: true, reportError: null });
+
+    try {
+      const token = this.getAuthToken();
+      const response = await fetch('/api/exams/medical-reports/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          patient_id: displaySet.PatientID || displaySet.PatientName || 'Unknown',
+          examination_id: displaySet.SeriesInstanceUID,
+          study_instance_uid: displaySet.StudyInstanceUID,
+          ai_content: this.reportEditorRef.current?.innerHTML || reportResult.report_html || reportResult.report_text || '',
+          ai_report_data: report,
+        }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${response.status}`);
+      }
+
+      this.setState(state => {
+        const reportResultsByEye = { ...state.reportResultsByEye };
+        delete reportResultsByEye[state.activeEye];
+        return {
+          savingReport: false,
+          reportResult: null,
+          reportResultsByEye,
+        };
+      });
+      uiNotificationService.show({
+        title: 'Report Saved',
+        message: 'Medical report saved and examination marked as interpreted',
+        type: 'success',
+        duration: 4000,
+      });
+    } catch (err) {
+      console.error('Report save error:', err);
+      this.setState({
+        savingReport: false,
+        reportError: err.message || 'Report save failed',
+      });
+      uiNotificationService.show({
+        title: 'Report Save',
+        message: err.message || 'Report save failed',
+        type: 'error',
+        duration: 6000,
+      });
+    }
+  };
+
+  getDrProbabilities = dr => {
+    const classes = [
+      { label: 'No DR', color: '#4caf66' },
+      { label: 'Mild NPDR', color: '#8bc34a' },
+      { label: 'Moderate NPDR', color: '#f2b705' },
+      { label: 'Severe NPDR', color: '#ff7a1a' },
+      { label: 'Proliferative DR', color: '#ef4444' },
+    ];
+    const normalizeLabel = label =>
+      String(label || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ');
+    const scores = new Map(
+      (Array.isArray(dr.probabilities) ? dr.probabilities : []).map(item => [
+        normalizeLabel(item.label),
+        Number(item.score) || 0,
+      ])
+    );
+
+    return classes.map(item => {
+      const rawScore = scores.get(normalizeLabel(item.label)) || 0;
+      const score = rawScore > 1 ? rawScore / 100 : rawScore;
+      return {
+        ...item,
+        percentage: Math.max(0, Math.min(100, Math.round(score * 100))),
+      };
+    });
+  };
+
+  getReportForSide = side => {
+    const { report, reportsByEye } = this.state;
+    if (reportsByEye?.[side]) {
+      return reportsByEye[side];
+    }
+
+    if (!report) {
+      return null;
+    }
+
+    return this.sideFromReport(report) === side ? report : null;
+  };
+
+  renderEyePlaceholder = side => (
+    <div className="eyePlaceholder">
+      <div className="spinner small" />
+      Résultat {side === 'right' ? 'œil droit' : 'œil gauche'} en attente...
+    </div>
+  );
+
+  renderEyeColumn = side => {
+    const report = this.getReportForSide(side);
+    const isActive = this.state.activeEye === side;
+    const label = side === 'right' ? 'Œil droit' : 'Œil gauche';
+    const ref = side === 'right' ? this.rightColumnRef : this.leftColumnRef;
+
+    return (
+      <section
+        ref={ref}
+        className={`eyeReportColumn${isActive ? ' active' : ''}`}
+        aria-label={`Rapport ${label}`}
+      >
+        <div className="eyeColumnHeader">
+          <span>{label}</span>
+          {isActive && <span className="activeEyeBadge">sélectionné</span>}
+        </div>
+        {report ? this.renderReport(report, side) : this.renderEyePlaceholder(side)}
+      </section>
+    );
+  };
+
+  renderReport = (report, side = null) => {
+    if (!report) return null;
+
+    const dr = report.dr_classification || {};
+    const lesions = report.lesions || {};
+    const vessels = report.vessels || {};
+    const glaucoma = report.glaucoma || {};
+    const drProbabilities = this.getDrProbabilities(dr);
+    const eyeLaterality = report.eye_laterality || {};
+    const eyeLabel = side === 'right'
+      ? 'ŒIL DROIT'
+      : side === 'left'
+        ? 'ŒIL GAUCHE'
+        : eyeLaterality.laterality === 'R'
+        ? 'ŒIL DROIT'
+        : eyeLaterality.laterality === 'L'
+          ? 'ŒIL GAUCHE'
+          : null;
+    const confidence = Number(dr.confidence) || 0;
+    const confidencePercentage = Math.round(
+      Math.max(0, Math.min(1, confidence > 1 ? confidence / 100 : confidence)) * 100
+    );
+
+    return (
+      <div className="eyeReportContent">
+        <div className="reportTitle">
+          AI Analysis Report{eyeLabel ? ` (${eyeLabel})` : ''}
+        </div>
+
+        {dr.grade && (
+          <div className="section drClassification">
+            <div className="sectionTitle">DR Classification</div>
+            <div className="drPrediction">
+              <span className="label">Predicted Grade</span>
+              <span className="gradeValue">{dr.grade}</span>
+              <span className="drPredictionPercentage">{confidencePercentage}%</span>
+            </div>
+            <div className="drProbabilityList">
+              {drProbabilities.map(item => (
+                <div className="drProbabilityRow" key={item.label}>
+                  <span className="drProbabilityLabel">{item.label}</span>
+                  <div
+                    className="drProbabilityTrack"
+                    role="progressbar"
+                    aria-label={item.label}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={item.percentage}
+                  >
+                    <div
+                      className="drProbabilityFill"
+                      style={{
+                        width: `${item.percentage}%`,
+                        backgroundColor: item.color,
+                      }}
+                    />
+                  </div>
+                  <span className="drProbabilityPercentage">{item.percentage}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {lesions.Microaneurysms !== undefined && (
+          <div className="section">
+            <div className="sectionTitle">Lesions</div>
+            <div className="row">
+              <span className="label">Microaneurysms</span>
+              <span className="value">{lesions.Microaneurysms}</span>
+            </div>
+            <div className="row">
+              <span className="label">Hemorrhages</span>
+              <span className="value">{lesions.Hemorrhages}</span>
+            </div>
+            <div className="row">
+              <span className="label">Exudates</span>
+              <span className="value">{lesions.exudates}</span>
+            </div>
+            {lesions.Coverage_pct !== undefined && (
+              <div className="row">
+                <span className="label">Coverage</span>
+                <span className="value">{lesions.Coverage_pct.toFixed(1)}%</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {glaucoma.vcdr !== undefined && (
+          <div className="section">
+            <div className="sectionTitle" style={{ textTransform: 'uppercase' }}>Glaucoma Evaluation</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
+              <div style={{ background: '#1c1f27', padding: '8px', borderRadius: '4px' }}>
+                <div style={{ fontSize: '11px', color: '#888', textTransform: 'uppercase' }}>VCDR</div>
+                <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#fff', marginTop: '4px' }}>
+                  {glaucoma.vcdr.toFixed(4)}
+                </div>
+              </div>
+              <div style={{ background: '#1c1f27', padding: '8px', borderRadius: '4px' }}>
+                <div style={{ fontSize: '11px', color: '#888', textTransform: 'uppercase' }}>Risk</div>
+                <div style={{ fontSize: '16px', fontWeight: 'bold', marginTop: '4px', color: glaucoma.risk === 'Eleve' ? '#ef5350' : (glaucoma.risk === 'Modere' ? '#ffa726' : '#66bb6a') }}>
+                  {glaucoma.risk}
+                </div>
+              </div>
+              <div style={{ background: '#1c1f27', padding: '8px', borderRadius: '4px' }}>
+                <div style={{ fontSize: '11px', color: '#888', textTransform: 'uppercase' }}>Disc Area</div>
+                <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#fff', marginTop: '4px' }}>
+                  {glaucoma.disc_area_px || '—'} px
+                </div>
+              </div>
+              <div style={{ background: '#1c1f27', padding: '8px', borderRadius: '4px' }}>
+                <div style={{ fontSize: '11px', color: '#888', textTransform: 'uppercase' }}>Cup Area</div>
+                <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#fff', marginTop: '4px' }}>
+                  {glaucoma.cup_area_px || '—'} px
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {vessels.Coverage_pct !== undefined && (
+          <div className="section">
+            <div className="sectionTitle">Vessels</div>
+            <div className="row">
+              <span className="label">Coverage</span>
+              <span className="value">{vessels.Coverage_pct.toFixed(1)}%</span>
+            </div>
+            {vessels.tortuosity !== undefined && (
+              <div className="row">
+                <span className="label">Tortuosity</span>
+                <span className="value">{vessels.tortuosity.toFixed(3)}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {report.gradcam_image && (
+          <div className="section" style={{ marginTop: '16px' }}>
+            <div className="sectionTitle">Grad-CAM Visualization</div>
+            <img 
+              src={`data:image/png;base64,${report.gradcam_image}`} 
+              alt="Grad-CAM Visualization" 
+              style={{ width: '100%', borderRadius: '4px', marginTop: '8px' }} 
+            />
+          </div>
+        )}
+
+        {report.clahe_image && (
+          <div className="section" style={{ marginTop: '16px' }}>
+            <div className="sectionTitle">CLAHE Enhanced</div>
+            <img 
+              src={`data:image/png;base64,${report.clahe_image}`} 
+              alt="CLAHE Enhanced" 
+              style={{ width: '100%', borderRadius: '4px', marginTop: '8px' }} 
+            />
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  render() {
+    const {
+      loading,
+      error,
+      generatingReport,
+      reportError,
+      savingReport,
+      reportsByEye,
+      activeEye,
+      pollingSavedAnalysis,
+    } = this.state;
+    const activeReport = this.getActiveReport();
+    const reportResult = this.getActiveGeneratedReport();
+    const hasAnyReport = !!activeReport || Object.keys(reportsByEye || {}).length > 0;
+    const activeEyeLabel = activeEye === 'right' ? 'œil droit' : 'œil gauche';
+
+    return (
+      <div className="aiAnalysisPanel">
+        {!hasAnyReport && !loading && !pollingSavedAnalysis && !error && (
+          <div className="loading compact">
+            <div className="spinner" />
+            Classification automatique en attente...
+          </div>
+        )}
+
+        {(loading || pollingSavedAnalysis) && !activeReport && (
+          <div className="loading">
+            <div className="spinner" />
+            {loading ? 'Running AI analysis...' : 'Classification automatique en cours...'}<br />
+            <small>Segmentation → Classification → Quantification</small>
+          </div>
+        )}
+
+        {error && (
+          <div>
+            <div className="error">{error}</div>
+          </div>
+        )}
+
+        {hasAnyReport && (
+          <div>
+            <div className="perEyeReportGrid">
+              {this.renderEyeColumn('right')}
+              {this.renderEyeColumn('left')}
+            </div>
+            <div className="reportActions">
+              <button
+                className="reportButton"
+                onClick={this.generateReport}
+                disabled={generatingReport || !activeReport}
+              >
+                {generatingReport ? 'Generating Report...' : `Generate Report - ${activeEyeLabel}`}
+              </button>
+            </div>
+            
+            {reportError && (
+              <div className="error" style={{ marginTop: '16px' }}>
+                {reportError}
+              </div>
+            )}
+
+            {reportResult && (
+              <div className="generatedReport">
+                <h3 className="generatedReportTitle">Rapport médical généré</h3>
+                {this.renderEditorToolbar()}
+                <div
+                  ref={this.reportEditorRef}
+                  className="reportContent reportEditor"
+                  contentEditable
+                  suppressContentEditableWarning
+                  dangerouslySetInnerHTML={{ __html: reportResult.report_html }}
+                />
+                <div className="reportValidationNote">
+                  Rapport modifiable — vérifiez le contenu clinique avant validation.
+                </div>
+                <div className="generatedReportActions">
+                  <button
+                    className="saveReportButton"
+                    onClick={this.saveReport}
+                    disabled={savingReport}
+                  >
+                    {savingReport ? 'Enregistrement...' : 'Enregistrer'}
+                  </button>
+                  <button
+                    className="printReportButton"
+                    onClick={() => {
+                      const printWindow = window.open('', '_blank');
+                      printWindow.document.write(`
+                        <html>
+                          <head><title>Medical Report</title></head>
+                          <body>${this.reportEditorRef.current?.innerHTML || reportResult.report_html}</body>
+                        </html>
+                      `);
+                      printWindow.document.close();
+                      printWindow.print();
+                    }}
+                  >
+                    Print Report
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+}

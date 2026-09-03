@@ -1,0 +1,686 @@
+.aiAnalysisPanel {
+  color: white;
+  padding: 8px;
+  font-size: 13px;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.aiAnalysisPanel .reportTitle {
+  font-size: 15px;
+  font-weight: bold;
+  color: #5acce6;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #3a3f4a;
+}
+
+.aiAnalysisPanel .section {
+  margin-bottom: 14px;
+  padding: 8px;
+  background: #2a2f3a;
+  border-radius: 6px;
+}
+
+.aiAnalysisPanel .perEyeReportGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.aiAnalysisPanel .eyeReportColumn {
+  min-width: 0;
+  padding: 8px;
+  background: #161b25;
+  border: 1px solid #343b49;
+  border-radius: 6px;
+}
+
+.aiAnalysisPanel .eyeReportColumn.active {
+  border-color: #5acce6;
+  box-shadow: 0 0 0 1px rgba(90, 204, 230, 0.35);
+}
+
+.aiAnalysisPanel .eyeColumnHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: #f2f5fa;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.aiAnalysisPanel .activeEyeBadge {
+  padding: 2px 6px;
+  color: #06131a;
+  background: #5acce6;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.aiAnalysisPanel .eyePlaceholder {
+  display: flex;
+  min-height: 120px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #a5adba;
+  text-align: center;
+}
+
+.aiAnalysisPanel .eyeToggleSection {
+  margin: 0 0 12px;
+  padding: 4px;
+  background: #101722;
+  border: 1px solid #2d3748;
+  border-radius: 7px;
+}
+
+.aiAnalysisPanel .eyeToggleContainer {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.aiAnalysisPanel .eyeToggleButton {
+  display: inline-flex !important;
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 10px;
+  color: #dfe7f2 !important;
+  background: #202938 !important;
+  border: 1px solid #465267 !important;
+  border-radius: 5px !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  line-height: 1.1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.aiAnalysisPanel .eyeToggleButton:hover {
+  color: #ffffff !important;
+  background: #2b3547 !important;
+  border-color: #5acce6 !important;
+}
+
+.aiAnalysisPanel .eyeToggleButton.active {
+  color: #031017 !important;
+  background: #5acce6 !important;
+  border-color: #9beefe !important;
+  box-shadow: 0 0 0 1px rgba(90, 204, 230, 0.5);
+}
+
+.aiAnalysisPanel .sectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #9bcdff;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #3a3f4a;
+}
+
+.aiAnalysisPanel .lesionSectionHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #3a3f4a;
+}
+
+.aiAnalysisPanel .lesionSectionHeader .sectionTitle {
+  margin-bottom: 0;
+  border-bottom: none;
+}
+
+.aiAnalysisPanel .lesionCorrectionActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.aiAnalysisPanel .lesionToolButton {
+  min-height: 28px;
+  padding: 4px 8px;
+  color: #dbeafe;
+  background: #273244;
+  border: 1px solid #4b5568;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.aiAnalysisPanel .lesionToolButton:hover {
+  border-color: #5acce6;
+  background: #334155;
+}
+
+.aiAnalysisPanel .lesionToolButton.primary {
+  color: #07131b;
+  background: #5acce6;
+  border-color: #9beefe;
+}
+
+.aiAnalysisPanel .lesionToolButton.primary:hover {
+  background: #48bdd9;
+}
+
+.aiAnalysisPanel .lesionToolButton:disabled {
+  color: #a1a1aa;
+  background: #3f3f46;
+  border-color: #52525b;
+  cursor: not-allowed;
+}
+
+.aiAnalysisPanel .lesionCorrectionBadge {
+  margin-bottom: 8px;
+  color: #86efac;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.aiAnalysisPanel .row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+
+.aiAnalysisPanel .label {
+  color: #aaa;
+}
+
+.aiAnalysisPanel .value {
+  color: #fff;
+  font-weight: 500;
+}
+
+.aiAnalysisPanel .gradeValue {
+  color: #ffa726;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.aiAnalysisPanel .drClassification {
+  padding: 12px;
+}
+
+.aiAnalysisPanel .medGemmaResultCard {
+  padding: 12px;
+  background: #172554;
+  border: 1px solid #38bdf8;
+}
+
+.aiAnalysisPanel .medGemmaResultCard .sectionTitle {
+  color: #7dd3fc;
+}
+
+.aiAnalysisPanel .medGemmaResultField {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-top: 8px;
+  line-height: 1.45;
+}
+
+.aiAnalysisPanel .medGemmaResultLabel {
+  flex: 0 0 auto;
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.aiAnalysisPanel .medGemmaGrade {
+  color: #fbbf24;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.aiAnalysisPanel .drPrediction {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 12px;
+  padding: 9px 10px;
+  background: #222733;
+  border-radius: 7px;
+}
+
+.aiAnalysisPanel .drPredictionPercentage,
+.aiAnalysisPanel .drProbabilityPercentage {
+  color: #c7cbd3;
+  font-variant-numeric: tabular-nums;
+}
+
+.aiAnalysisPanel .drProbabilityList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aiAnalysisPanel .drProbabilityRow {
+  display: grid;
+  grid-template-columns: minmax(92px, 1.3fr) minmax(58px, 1fr) 36px;
+  align-items: center;
+  gap: 8px;
+}
+
+.aiAnalysisPanel .drProbabilityLabel {
+  color: #e0e2e7;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.aiAnalysisPanel .drProbabilityLabel.predicted {
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.aiAnalysisPanel .drProbabilityTrack {
+  height: 10px;
+  overflow: hidden;
+  background: #202532;
+  border-radius: 999px;
+}
+
+.aiAnalysisPanel .drProbabilityFill {
+  height: 100%;
+  min-width: 0;
+  border-radius: inherit;
+  transition: width 0.5s ease;
+}
+
+.aiAnalysisPanel .drProbabilityFill.predicted {
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.28);
+}
+
+.aiAnalysisPanel .drProbabilityPercentage {
+  text-align: right;
+}
+
+.aiAnalysisPanel .drProbabilityPercentage.predicted {
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.aiAnalysisPanel .generatedReportPreview {
+  color: #d7dbe4;
+}
+
+.aiAnalysisPanel .generatedReportPreview.pending {
+  color: #a5adba;
+  font-style: italic;
+}
+
+.aiAnalysisPanel .generatedReportPreviewHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #3a3f4a;
+}
+
+.aiAnalysisPanel .generatedReportPreviewHeader .sectionTitle {
+  margin-bottom: 0;
+  border-bottom: none;
+}
+
+.aiAnalysisPanel .inlineReportButton {
+  min-height: 28px;
+  padding: 3px 9px;
+  color: #08131a;
+  background: #5acce6;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.aiAnalysisPanel .inlineReportButton:hover {
+  background: #48bdd9;
+}
+
+.aiAnalysisPanel .storedReportContent {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 8px;
+  color: #dfe3ea;
+  background: #1c2230;
+  border: 1px solid #374050;
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.aiAnalysisPanel .storedReportContent h1,
+.aiAnalysisPanel .storedReportContent h2,
+.aiAnalysisPanel .storedReportContent h3 {
+  margin: 8px 0 6px;
+  color: #9bcdff;
+  font-size: 13px;
+}
+
+.aiAnalysisPanel .storedReportContent p {
+  margin: 0 0 7px;
+}
+
+.aiAnalysisPanel .storedReportContent ul,
+.aiAnalysisPanel .storedReportContent ol {
+  margin: 0 0 8px 18px;
+}
+
+.aiAnalysisPanel .loading {
+  text-align: center;
+  padding: 40px 0;
+  color: #888;
+}
+
+.aiAnalysisPanel .loading.compact {
+  padding: 24px 0;
+}
+
+.aiAnalysisPanel .loading .spinner {
+  width: 32px;
+  height: 32px;
+  margin: 0 auto 12px;
+  border: 3px solid #3a3f4a;
+  border-top: 3px solid #5acce6;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.aiAnalysisPanel .spinner.small {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  border-width: 2px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.aiAnalysisPanel .error {
+  color: #ef5350;
+  text-align: center;
+  padding: 20px;
+}
+
+.aiAnalysisPanel .noResults {
+  color: #888;
+  text-align: center;
+  padding: 30px 0;
+  font-style: italic;
+}
+
+.aiAnalysisPanel .analyzeButton {
+  width: 100%;
+  padding: 10px;
+  margin-top: 8px;
+  background: #5acce6;
+  color: #1a1e2a;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.aiAnalysisPanel .analyzeButton:hover {
+  background: #48bdd9;
+}
+
+.aiAnalysisPanel .analyzeButton:disabled {
+  background: #555;
+  cursor: not-allowed;
+}
+
+.aiAnalysisPanel .reportActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.aiAnalysisPanel .reportButton {
+  width: 100%;
+  padding: 10px;
+  margin-top: 8px;
+  background: #7c4dff;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.aiAnalysisPanel .reportButton:hover {
+  background: #651fff;
+}
+
+.aiAnalysisPanel .reportButton:disabled {
+  background: #555;
+  cursor: not-allowed;
+}
+
+.aiAnalysisPanel .generatedReport {
+  animation: fadeIn 0.3s ease;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #444;
+}
+
+.aiAnalysisPanel .generatedReportTitle {
+  margin: 0 0 12px;
+  color: #fff;
+  font-size: 16px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.aiAnalysisPanel .reportContent h1,
+.aiAnalysisPanel .reportContent h2,
+.aiAnalysisPanel .reportContent h3 {
+  color: #5acce6;
+  margin-top: 16px;
+  margin-bottom: 8px;
+}
+
+.aiAnalysisPanel .reportContent p {
+  margin-bottom: 8px;
+}
+
+.aiAnalysisPanel .reportContent ul {
+  margin-left: 20px;
+  margin-bottom: 12px;
+}
+
+.aiAnalysisPanel .reportContent li {
+  margin-bottom: 4px;
+}
+
+.aiAnalysisPanel .reportContent table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 12px;
+}
+
+.aiAnalysisPanel .reportContent th,
+.aiAnalysisPanel .reportContent td {
+  border: 1px solid #3a3f4a;
+  padding: 8px;
+  text-align: left;
+}
+
+.aiAnalysisPanel .reportContent th {
+  background: #2a2f3a;
+  color: #9bcdff;
+}
+
+.aiAnalysisPanel .reportContent td {
+  color: #ddd;
+}
+
+.aiAnalysisPanel .reportContent hr {
+  border: none;
+  border-top: 1px solid #3a3f4a;
+  margin: 16px 0;
+}
+
+.aiAnalysisPanel .reportContent em {
+  color: #888;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .aiAnalysisPanel .perEyeReportGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1100px) {
+  .aiAnalysisPanel .eyeReportColumn .drPrediction {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .aiAnalysisPanel .eyeReportColumn .drProbabilityRow {
+    grid-template-columns: minmax(78px, 1fr) minmax(42px, 1fr) 32px;
+    gap: 6px;
+    font-size: 11px;
+  }
+}
+
+
+.aiAnalysisPanel .editorToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px;
+  background: #252b38;
+  border: 1px solid #495163;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+}
+
+.aiAnalysisPanel .editorToolbarButton,
+.aiAnalysisPanel .editorFormatSelect {
+  height: 34px;
+  min-width: 34px;
+  padding: 4px 9px;
+  color: #e6e6e6;
+  background: #222833;
+  border: 1px solid #596174;
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.aiAnalysisPanel .editorToolbarButton:hover,
+.aiAnalysisPanel .editorFormatSelect:hover {
+  background: #454c5c;
+  border-color: #5acce6;
+}
+
+.aiAnalysisPanel .editorFormatSelect {
+  min-width: 118px;
+  color-scheme: dark;
+}
+
+.aiAnalysisPanel .editorColorButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.aiAnalysisPanel .editorColorSwatch {
+  width: 16px;
+  height: 12px;
+  background: #d66a6a;
+  border: 1px solid #ef9999;
+}
+
+.aiAnalysisPanel .reportEditor {
+  min-height: 460px;
+  max-height: 585px;
+  overflow-y: auto;
+  padding: 12px 16px;
+  color: #ddd;
+  background: #1a1a1a;
+  border: 1px solid #495163;
+  border-radius: 0;
+  font-size: 14px;
+  line-height: 1.65;
+  outline: none;
+}
+
+.aiAnalysisPanel .reportEditor:focus {
+  border-color: #5acce6;
+  box-shadow: 0 0 0 1px #5acce6;
+}
+
+.aiAnalysisPanel .reportValidationNote {
+  padding: 9px 12px;
+  color: #7f8591;
+  background: #1a1a1a;
+  border: 1px solid #495163;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  font-size: 11px;
+}
+
+.aiAnalysisPanel .generatedReportActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.aiAnalysisPanel .saveReportButton,
+.aiAnalysisPanel .printReportButton {
+  flex: 1;
+  min-height: 48px;
+  border: none;
+  border-radius: 3px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.aiAnalysisPanel .saveReportButton {
+  color: #fff;
+  background: #388cf5;
+}
+
+.aiAnalysisPanel .saveReportButton:hover {
+  background: #257ce5;
+}
+
+.aiAnalysisPanel .printReportButton {
+  color: #08131a;
+  background: #56c2dc;
+}
+
+.aiAnalysisPanel .printReportButton:hover {
+  background: #42b3ce;
+}
+
+.aiAnalysisPanel .saveReportButton:disabled {
+  color: #b8bec8;
+  background: #4b5563;
+  cursor: not-allowed;
+}
