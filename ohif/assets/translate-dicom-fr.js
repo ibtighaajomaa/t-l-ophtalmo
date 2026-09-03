@@ -204,10 +204,29 @@
   }
 
   /**
-   * Parcourt les nœuds texte et les attributs d'un élément.
+   * Parcourt les nœuds texte et les attributs d'un élément pour traduire et masquer les bannières.
    */
   function translateElement(root) {
     if (!root) return;
+
+    // Masquer immédiatement les bannières 'investigational use' et 'Sélection conservatrice'
+    if (root.querySelectorAll) {
+      const candidates = root.querySelectorAll('div, p, span, button');
+      for (let i = 0; i < candidates.length; i++) {
+        const el = candidates[i];
+        const text = el.textContent || '';
+        if (text.includes('investigational use only') || text.includes('Confirm and hide')) {
+          if (el.tagName === 'BUTTON' && text.includes('Confirm and hide')) {
+            try { el.click(); } catch (e) {}
+          }
+          const banner = el.closest('[class*="banner"], [class*="alert"], [class*="dialog"], [class*="warning"], [class*="notification"]') || el;
+          banner.style.display = 'none';
+        }
+        if (text.includes('Sélection conservatrice')) {
+          el.style.display = 'none';
+        }
+      }
+    }
 
     // Nœuds texte
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);

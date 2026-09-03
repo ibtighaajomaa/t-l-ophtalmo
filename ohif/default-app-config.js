@@ -117,6 +117,10 @@ window.config = {
 
   showStudyList: true,
 
+  investigationalUseDialog: {
+    option: 'never',
+  },
+
   maxNumberOfWebWorkers: 3,
   omitQuotationForMultipartRequest: true,
   showWarningMessageForCrossOrigin: true,
