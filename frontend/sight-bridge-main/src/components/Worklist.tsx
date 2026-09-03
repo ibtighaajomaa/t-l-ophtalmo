@@ -795,7 +795,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                             <a
                               href={`/ohif/viewer?StudyInstanceUIDs=${encodeURIComponent(
                                 dicomStudyInstanceUid,
-                              )}`}
+                              )}&lng=fr`}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 transition"

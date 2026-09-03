@@ -853,7 +853,7 @@ export default class AiAnalysisPanel extends Component {
     return (
       <div className="section" style={{ borderColor: '#fb7185' }}>
         <div className="sectionTitle" style={{ color: '#fda4af' }}>
-          DMLA — DeepSeeNet+
+          DMLA
         </div>
         {factors.map(([title, factor]) => factor && (
           <div className="row" key={title}>
@@ -1212,7 +1212,7 @@ export default class AiAnalysisPanel extends Component {
                       printWindow.print();
                     }}
                   >
-                    Print Report
+                    Imprimer le rapport
                   </button>
                 </div>
               </div>

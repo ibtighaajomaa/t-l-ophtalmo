@@ -256,9 +256,11 @@ function ExamDetail() {
       iframeRef,
       onReady: () => {
         setBridgeReady(true);
-        fetchAnalysis(exam.studyInstanceUid)
-          .then(result => bridgeRef.current?.setFoveaMarkers(result.fovea_markers ?? []))
-          .catch(() => bridgeRef.current?.setFoveaMarkers([]));
+        if (exam.studyInstanceUid) {
+          fetchAnalysis(exam.studyInstanceUid)
+            .then(result => bridgeRef.current?.setFoveaMarkers(result.fovea_markers ?? []))
+            .catch(() => bridgeRef.current?.setFoveaMarkers([]));
+        }
       },
       onStudyOpened: (studyInstanceUid) => {
         setBridgeReady(true);
@@ -474,7 +476,7 @@ function ExamDetail() {
                               bridgeRef.current.openStudy(exam.studyInstanceUid!);
                             } else {
                               window.open(
-                                `/ohif/viewer?StudyInstanceUIDs=${exam.studyInstanceUid}`,
+                                `/ohif/viewer?StudyInstanceUIDs=${exam.studyInstanceUid}&lng=fr`,
                                 "_blank",
                               );
                             }
@@ -562,7 +564,7 @@ function ExamDetail() {
               <div ref={viewerRef} className="relative" style={{ height: "520px" }}>
                 <iframe
                   ref={iframeRef}
-                  src={`/ohif/viewer?StudyInstanceUIDs=${exam.studyInstanceUid}`}
+                  src={`/ohif/viewer?StudyInstanceUIDs=${exam.studyInstanceUid}&lng=fr`}
                   width="100%"
                   height="100%"
                   style={{ border: "none" }}

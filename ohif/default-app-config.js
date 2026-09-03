@@ -1,3 +1,8 @@
+try {
+  localStorage.setItem('i18nextLng', 'fr');
+  sessionStorage.setItem('i18nextLng', 'fr');
+} catch (e) {}
+
 window.config = {
   routerBasename: '/ohif',
 

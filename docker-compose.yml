@@ -336,6 +336,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./ohif/default-app-config.js:/usr/share/nginx/html/app-config.js
+      - ./ohif/assets:/usr/share/nginx/html/assets
     depends_on:
       - orthanc-container
     networks:
