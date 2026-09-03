@@ -1,6 +1,11 @@
 window.config = {
   routerBasename: '/ohif',
 
+  // =========================
+  // 🌍 LANGUE
+  // =========================
+  defaultLanguage: 'fr',
+
   whiteLabeling: {
     createLogoComponentFn: React =>
       React.createElement('img', {
