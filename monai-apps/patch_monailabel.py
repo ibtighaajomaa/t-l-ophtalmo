@@ -1060,7 +1060,11 @@ async def analyze(request: dict):
                     if isinstance(label_info, list):
                         for segment in label_info:
                             if isinstance(segment, dict):
-                                segment["model_name"] = model
+                                segment["model_name"] = {
+                                    "optic_disc_cup": "optic_disc_exca",
+                                    "vessel_seg": "seg_vaisseaux",
+                                    "lesion_seg": "seg_lésions",
+                                }.get(model, model)
                     try:
                         dicom_seg_file = nifti_to_dicom_seg(
                             image_path, result_image, label_info, use_itk=False
@@ -2986,7 +2990,11 @@ if os.path.exists(INFER):
                                     "Level": "Series",
                                     "Query": {
                                         "Modality": "SEG",
-                                        "SeriesDescription": model,
+                                        "SeriesDescription": {
+                                            "optic_disc_cup": "optic_disc_exca",
+                                            "vessel_seg": "seg_vaisseaux",
+                                            "lesion_seg": "seg_lésions",
+                                        }.get(model, model),
                                         "StudyInstanceUID": study_uid,
                                     },
                                     "Expand": True,
@@ -3033,6 +3041,65 @@ if os.path.exists(INFER):
         print("infer.py: Patch 26 already applied")
 else:
     print(f"WARNING: infer.py not found for Patch 26: {INFER}")
+
+# Patch 27: Rename the DICOM SeriesDescription MONAI Label writes for each
+# model to a French display name, in the two places whose output is NOT
+# reset by a later patch on every restart (Patch 12's injection inside
+# run_inference()'s AUTO_PUSH_DICOM_SEG block, and Patch 25's dedup query
+# in that same block). The /infer/analyze endpoint's own model_name and
+# dedup query are edited directly in the Patch 23/26 source strings above,
+# since Patch 23 rewrites that whole function fresh on every restart.
+# The mapping must stay identical everywhere the model id is turned into a
+# SeriesDescription -- otherwise the SEG dedup logic (Patch 25/26) can no
+# longer find prior SEGs by their new (renamed) SeriesDescription and
+# duplicates start accumulating again.
+PATCH27_MARKER = "OHIF SEG: French display name for SeriesDescription"
+if os.path.exists(INFER):
+    with open(INFER) as f:
+        content = f.read()
+
+    if PATCH27_MARKER not in content:
+        old_p12_name = '''                label_info[0]["model_name"] = model
+            ### MONAI_P12_MODEL_NAME ###'''
+        new_p12_name = '''                # OHIF SEG: French display name for SeriesDescription
+                label_info[0]["model_name"] = {
+                    "optic_disc_cup": "optic_disc_exca",
+                    "vessel_seg": "seg_vaisseaux",
+                    "lesion_seg": "seg_lésions",
+                }.get(model, model)
+            ### MONAI_P12_MODEL_NAME ###'''
+        old_p25_seriesdesc = '''                                _p25_find = requests.post(
+                                    "http://orthanc-container:8042/tools/find",
+                                    json={
+                                        "Level": "Series",
+                                        "Query": {
+                                            "Modality": "SEG",
+                                            "SeriesDescription": model,'''
+        new_p25_seriesdesc = '''                                _p25_find = requests.post(
+                                    "http://orthanc-container:8042/tools/find",
+                                    json={
+                                        "Level": "Series",
+                                        "Query": {
+                                            "Modality": "SEG",
+                                            "SeriesDescription": {
+                                                "optic_disc_cup": "optic_disc_exca",
+                                                "vessel_seg": "seg_vaisseaux",
+                                                "lesion_seg": "seg_lésions",
+                                            }.get(model, model),'''
+        if old_p12_name in content and old_p25_seriesdesc in content:
+            content = content.replace(old_p12_name, new_p12_name, 1)
+            content = content.replace(old_p25_seriesdesc, new_p25_seriesdesc, 1)
+            with open(INFER, "w") as f:
+                f.write(content)
+            print("infer.py Patch 27: French SeriesDescription display names applied")
+            patches_applied = True
+        else:
+            print("WARNING: Patch 27 -- model_name/dedup anchors not found in infer.py")
+    else:
+        patches_applied = True
+        print("infer.py: Patch 27 already applied")
+else:
+    print(f"WARNING: infer.py not found for Patch 27: {INFER}")
 
 
 if not patches_applied:
