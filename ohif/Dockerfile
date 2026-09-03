@@ -76,6 +76,9 @@ ENV QUICK_BUILD true
 RUN yarn install
 RUN QUICK_BUILD=true PUBLIC_URL=/ohif/ yarn run build
 
+# Inject the French DICOM description translation script into index.html
+RUN sed -i 's|</body>|<script src="/ohif/assets/translate-dicom-fr.js"></script></body>|' platform/app/dist/index.html
+
 ######################################################
 
 FROM nginx:1.23

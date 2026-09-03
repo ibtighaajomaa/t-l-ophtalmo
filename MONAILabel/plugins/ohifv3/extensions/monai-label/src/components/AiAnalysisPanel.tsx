@@ -666,7 +666,6 @@ export default class AiAnalysisPanel extends Component {
           background: '#0f172a',
         }}
       >
-        <div style={{ color: '#7dd3fc', fontWeight: 700, marginBottom: '8px' }}>{title}</div>
         {available ? (
           <>
             <div className="drPrediction">
@@ -709,17 +708,7 @@ export default class AiAnalysisPanel extends Component {
                 </div>
               ))}
             </div>
-            {model.calibration_status && (
-              <div style={{ color: '#94a3b8', fontSize: '10px', marginTop: '7px' }}>
-                Calibration : {
-                  {
-                    not_locally_calibrated: 'non calibré localement',
-                    locally_calibrated: 'calibré localement',
-                    calibrated: 'calibré',
-                  }[model.calibration_status] || String(model.calibration_status).replace(/_/g, ' ')
-                }
-              </div>
-            )}
+
           </>
         ) : (
           <div style={{ color: '#fbbf24', fontSize: '12px' }}>
@@ -801,16 +790,7 @@ export default class AiAnalysisPanel extends Component {
 
     return (
       <div className="section generatedReportPreview">
-        <div className="generatedReportPreviewHeader">
-          <div className="sectionTitle">Rapport IA</div>
-          <button
-            type="button"
-            className="inlineReportButton"
-            onClick={() => this.openReportEditor(side)}
-          >
-            Éditer
-          </button>
-        </div>
+        <div className="sectionTitle">Rapport IA</div>
         <div
           className="storedReportContent"
           dangerouslySetInnerHTML={{ __html: html }}
@@ -901,16 +881,7 @@ export default class AiAnalysisPanel extends Component {
               : `${patient.simplified_score}/5`}
           </span>
         </div>
-        <div style={{ marginTop: '8px', color: usedFallback ? '#fbbf24' : '#94a3b8', fontSize: '11px' }}>
-          {usedFallback
-            ? '⚠ Fovéa non localisée pour au moins un facteur : recadrage central utilisé.'
-            : '✓ Recadrage centré sur la fovéa par VascX.'}
-        </div>
-        {deepseenet.conservative && (
-          <div style={{ marginTop: '5px', color: '#fbbf24', fontSize: '11px' }}>
-            ⚠ Agrégation conservatrice : les facteurs peuvent provenir de plusieurs images du même œil.
-          </div>
-        )}
+
       </div>
     );
   };
@@ -1042,28 +1013,7 @@ export default class AiAnalysisPanel extends Component {
 
         {(lesions.microaneurysms !== undefined || lesions.hemorrhages !== undefined || lesions.hard_exudates !== undefined) && (
           <div className="section">
-            <div className="lesionSectionHeader">
-              <div className="sectionTitle">Lésions</div>
-              <div className="lesionCorrectionActions">
-                <button
-                  type="button"
-                  className="lesionToolButton"
-                  title="Activer la gomme pour effacer les lésions IA dans l'image"
-                  onClick={this.toggleLesionEraser}
-                >
-                  Gomme
-                </button>
-                <button
-                  type="button"
-                  className="lesionToolButton primary"
-                  title="Sauvegarder les lésions corrigées et régénérer le compte rendu"
-                  onClick={this.saveSegmentationCorrectionAndRegenerate}
-                  disabled={this.state.savingSegmentationCorrection || this.state.generatingReport}
-                >
-                  {this.state.savingSegmentationCorrection ? 'Sauvegarde...' : 'Mettre à jour CR'}
-                </button>
-              </div>
-            </div>
+            <div className="sectionTitle">Lésions</div>
             {lesions.doctor_corrected && (
               <div className="lesionCorrectionBadge">Correction médecin appliquée</div>
             )}
