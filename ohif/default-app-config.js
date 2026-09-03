@@ -3,6 +3,42 @@ try {
   sessionStorage.setItem('i18nextLng', 'fr');
 } catch (e) {}
 
+// Masquage immédiat et permanent de toute mention 'Sélection conservatrice'
+(function () {
+  function cleanConservative() {
+    try {
+      var walker = document.createTreeWalker(
+        document.body || document.documentElement,
+        NodeFilter.SHOW_TEXT,
+        null
+      );
+      var node;
+      while ((node = walker.nextNode())) {
+        if (node.nodeValue && node.nodeValue.indexOf('Sélection conservatrice') !== -1) {
+          node.nodeValue = '';
+          if (node.parentElement) {
+            node.parentElement.style.display = 'none';
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  var obs = new MutationObserver(cleanConservative);
+  if (document.body) {
+    obs.observe(document.body, { childList: true, subtree: true, characterData: true });
+    cleanConservative();
+  } else {
+    document.addEventListener('DOMContentLoaded', function () {
+      if (document.body) {
+        obs.observe(document.body, { childList: true, subtree: true, characterData: true });
+        cleanConservative();
+      }
+    });
+  }
+})();
+
+
 window.config = {
   routerBasename: '/ohif',
 

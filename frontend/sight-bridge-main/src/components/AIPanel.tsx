@@ -554,9 +554,6 @@ export function AIPanel({
                       canonical
                       result={selectedModel.result}
                     />
-                    <p className="px-1 text-[10px] text-slate-400">
-                      Sélection conservatrice : grade maximal prédit parmi les modèles.
-                    </p>
                     {selectedDR?.requires_review && (
                       <div className="flex items-start gap-1.5 rounded-md border border-amber-700/70 bg-amber-950/30 p-2 text-[10px] text-amber-300">
                         <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />

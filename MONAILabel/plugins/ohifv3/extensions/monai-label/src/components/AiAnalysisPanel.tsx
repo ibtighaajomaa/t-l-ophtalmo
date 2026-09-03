@@ -993,11 +993,6 @@ export default class AiAnalysisPanel extends Component {
                   {this.renderDrModelCard(title, model, report)}
                 </React.Fragment>
               ))}
-              {!hasMedGemmaAdjudication && selectedModel && (
-                <div style={{ width: '100%', color: '#94a3b8', fontSize: '10px' }}>
-                  Sélection conservatrice : grade maximal prédit parmi les modèles.
-                </div>
-              )}
               {hasMedGemmaAdjudication && !exactGradeMatch && (
                 <div style={{ width: '100%', color: '#fbbf24', fontSize: '10px' }}>
                   Aucun classifieur ne prédit exactement le grade proposé par MedGemma.
