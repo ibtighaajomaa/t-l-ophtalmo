@@ -964,7 +964,7 @@ function ExamDetail() {
                         </div>
                         <div className="flex items-center gap-2">
                           <div className="w-3 h-3 rounded-full border border-[#a0a0a0] bg-[#a0a0a0]/40" />
-                          <span>Exsudats solides</span>
+                          <span>Exsudats</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <div className="w-3 h-3 rounded-full border border-[#ff3232] bg-[#ff3232]/40" />
@@ -972,7 +972,7 @@ function ExamDetail() {
                         </div>
                         <div className="flex items-center gap-2">
                           <div className="w-3 h-3 rounded-full border border-[#00ff00] bg-[#00ff00]/40" />
-                          <span>Exsudats cotonneux</span>
+                          <span>Nodules cotonneux</span>
                         </div>
                       </>
                     )}
@@ -1074,9 +1074,9 @@ function ExamDetail() {
                   <div className="space-y-2">
                     {[
                       { label: "Hémorragies", type: "lesion", color: "#3232ff", count: 5 },
-                      { label: "Exsudats solides", type: "lesion", color: "#a0a0a0", count: 7 },
+                      { label: "Exsudats", type: "lesion", color: "#a0a0a0", count: 7 },
                       { label: "Microanévrismes", type: "lesion", color: "#ff3232", count: 9 },
-                      { label: "Exsudats cotonneux", type: "lesion", color: "#00ff00", count: 1 },
+                      { label: "Nodules cotonneux", type: "lesion", color: "#00ff00", count: 1 },
                       { label: "Vaisseaux", type: "vessel", color: "#00bcd4", count: 1 },
                       { label: "Disque optique", type: "optic-disc", color: "#4caf50", count: 1 },
                     ].map((seg) => (
