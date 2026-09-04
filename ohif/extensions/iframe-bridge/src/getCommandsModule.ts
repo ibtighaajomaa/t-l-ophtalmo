@@ -12,7 +12,6 @@ export default function getCommandsModule({ servicesManager }) {
   let foveaMarkers = [];
   let foveaVisible = false;
   let eraserBrushSize = 24;
-  let activePencilSegmentIndex = 1;
 
   function removeFoveaOverlays() {
     foveaOverlays.forEach(({ element, render, resizeObserver, svg }) => {
@@ -225,9 +224,33 @@ export default function getCommandsModule({ servicesManager }) {
     };
   }
 
-  function getActiveLabelmapVolume(segmentationId = '1') {
+  function getActiveLabelmapVolume(segmentationId) {
+    if (!segmentationId) return undefined;
     const { segmentationService } = servicesManager.services;
     return segmentationService?.getLabelmapVolume?.(segmentationId);
+  }
+
+  // A study can have several SEG series loaded at once (one per model), each
+  // as its own Cornerstone segmentation object with its own generated id --
+  // there is no fixed '1'. Resolve the real id/segment the doctor currently
+  // has selected (via OHIF's own SEG panel) instead of assuming one.
+  function resolveActiveSegmentationId(viewportId) {
+    const { segmentationService } = servicesManager.services;
+    try {
+      const activeSegmentation = segmentationService?.getActiveSegmentation?.(viewportId);
+      return activeSegmentation?.segmentationId || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function resolveActiveSegmentIndex(viewportId) {
+    const { segmentationService } = servicesManager.services;
+    try {
+      return segmentationService?.getActiveSegment?.(viewportId)?.segmentIndex;
+    } catch (_) {
+      return undefined;
+    }
   }
 
   function currentStudyInstanceUid() {
@@ -269,8 +292,8 @@ export default function getCommandsModule({ servicesManager }) {
     });
   }
 
-  function paintAtCanvasPoint(viewport, canvasX, canvasY, brushSize, writeValue, strokeDiff) {
-    const volumeLoadObject = getActiveLabelmapVolume('1');
+  function paintAtCanvasPoint(viewport, segmentationId, canvasX, canvasY, brushSize, writeValue, strokeDiff) {
+    const volumeLoadObject = getActiveLabelmapVolume(segmentationId);
     const scalarData = volumeLoadObject?.voxelManager?.getCompleteScalarDataArray?.();
     if (!scalarData) return 0;
 
@@ -295,13 +318,13 @@ export default function getCommandsModule({ servicesManager }) {
 
     if (changed) {
       volumeLoadObject.voxelManager?.setCompleteScalarDataArray?.(scalarData);
-      notifySegmentationModified('1');
+      notifySegmentationModified(segmentationId);
     }
     return changed;
   }
 
-  function ensureOriginalSnapshot(segmentationId = '1') {
-    if (originalSnapshots.has(segmentationId)) return;
+  function ensureOriginalSnapshot(segmentationId) {
+    if (!segmentationId || originalSnapshots.has(segmentationId)) return;
     const volumeLoadObject = getActiveLabelmapVolume(segmentationId);
     const scalarData = volumeLoadObject?.voxelManager?.getCompleteScalarDataArray?.();
     if (scalarData) {
@@ -317,8 +340,12 @@ export default function getCommandsModule({ servicesManager }) {
     redoStacks.set(segmentationId, []);
   }
 
-  function undoSegmentationEdit(segmentationId = '1') {
-    const stack = undoStacks.get(segmentationId);
+  function undoSegmentationEdit(segmentationId) {
+    if (!segmentationId) {
+      const { activeViewportId } = getActiveViewport();
+      segmentationId = resolveActiveSegmentationId(activeViewportId);
+    }
+    const stack = segmentationId && undoStacks.get(segmentationId);
     if (!stack || !stack.length) {
       uiNotificationService.show({ title: 'Annuler', message: 'Rien à annuler.', type: 'info', duration: 1500 });
       return;
@@ -339,8 +366,12 @@ export default function getCommandsModule({ servicesManager }) {
     redoStacks.set(segmentationId, redoStack);
   }
 
-  function redoSegmentationEdit(segmentationId = '1') {
-    const stack = redoStacks.get(segmentationId);
+  function redoSegmentationEdit(segmentationId) {
+    if (!segmentationId) {
+      const { activeViewportId } = getActiveViewport();
+      segmentationId = resolveActiveSegmentationId(activeViewportId);
+    }
+    const stack = segmentationId && redoStacks.get(segmentationId);
     if (!stack || !stack.length) {
       uiNotificationService.show({ title: 'Rétablir', message: 'Rien à rétablir.', type: 'info', duration: 1500 });
       return;
@@ -361,9 +392,13 @@ export default function getCommandsModule({ servicesManager }) {
     undoStacks.set(segmentationId, undoStack);
   }
 
-  function resetSegmentationToOriginal(segmentationId = '1') {
-    const original = originalSnapshots.get(segmentationId);
-    const volumeLoadObject = getActiveLabelmapVolume(segmentationId);
+  function resetSegmentationToOriginal(segmentationId) {
+    if (!segmentationId) {
+      const { activeViewportId } = getActiveViewport();
+      segmentationId = resolveActiveSegmentationId(activeViewportId);
+    }
+    const original = segmentationId && originalSnapshots.get(segmentationId);
+    const volumeLoadObject = segmentationId && getActiveLabelmapVolume(segmentationId);
     const scalarData = volumeLoadObject?.voxelManager?.getCompleteScalarDataArray?.();
     if (!original || !scalarData) {
       uiNotificationService.show({
@@ -387,12 +422,12 @@ export default function getCommandsModule({ servicesManager }) {
     });
   }
 
-  function segmentsForActiveSegmentation() {
+  function segmentsForSegmentation(segmentationId) {
     const { segmentationService } = servicesManager.services;
+    if (!segmentationId) return [];
     try {
-      const segmentations = segmentationService?.getSegmentations?.() || {};
-      const segmentation = segmentations['1'] || segmentations['0'] || Object.values(segmentations)[0];
-      const segments = segmentation?.config?.segments || segmentation?.segments || {};
+      const segmentation = segmentationService?.getSegmentation?.(segmentationId);
+      const segments = segmentation?.segments || {};
       return Object.keys(segments)
         .map(key => Number(key))
         .filter(index => Number.isFinite(index) && index > 0)
@@ -408,23 +443,40 @@ export default function getCommandsModule({ servicesManager }) {
   }
 
   function cycleActivePencilSegment() {
-    const segments = segmentsForActiveSegmentation();
-    if (!segments.length) {
-      activePencilSegmentIndex = 1;
+    const { segmentationService } = servicesManager.services;
+    const { activeViewportId } = getActiveViewport();
+    const segmentationId = resolveActiveSegmentationId(activeViewportId);
+    if (!segmentationId) {
       uiNotificationService.show({
-        title: 'Crayon',
-        message: 'Segment actif : 1 (aucune info de segment trouvée).',
+        title: 'Segment',
+        message: 'Aucune segmentation active. Sélectionnez-en une dans la liste à gauche.',
+        type: 'warning',
+        duration: 3000,
+      });
+      return;
+    }
+    const segments = segmentsForSegmentation(segmentationId);
+    if (!segments.length) {
+      uiNotificationService.show({
+        title: 'Segment',
+        message: 'Aucune classe trouvée pour cette segmentation.',
         type: 'info',
         duration: 1800,
       });
       return;
     }
-    const currentPos = segments.findIndex(s => s.segmentIndex === activePencilSegmentIndex);
+    const currentIndex = resolveActiveSegmentIndex(activeViewportId);
+    const currentPos = segments.findIndex(s => s.segmentIndex === currentIndex);
     const next = segments[(currentPos + 1) % segments.length];
-    activePencilSegmentIndex = next.segmentIndex;
+    try {
+      segmentationService.setActiveSegment(segmentationId, next.segmentIndex);
+    } catch (err) {
+      reportSegmentationError('Segment', 'cycle', err);
+      return;
+    }
     uiNotificationService.show({
-      title: 'Crayon',
-      message: `Segment actif : ${next.label}`,
+      title: 'Segment',
+      message: `Classe active pour le crayon : ${next.label}`,
       type: 'info',
       duration: 2000,
     });
@@ -461,7 +513,10 @@ export default function getCommandsModule({ servicesManager }) {
   }
 
   function summarizeActiveSegmentation() {
-    const volumeLoadObject = getActiveLabelmapVolume('1');
+    const { activeViewportId } = getActiveViewport();
+    const segmentationId = resolveActiveSegmentationId(activeViewportId);
+    if (!segmentationId) return null;
+    const volumeLoadObject = getActiveLabelmapVolume(segmentationId);
     const scalarData = volumeLoadObject?.voxelManager?.getCompleteScalarDataArray?.();
     if (!scalarData) return null;
 
@@ -472,7 +527,7 @@ export default function getCommandsModule({ servicesManager }) {
       counts[value] = (counts[value] || 0) + 1;
     }
     return {
-      segmentation_id: '1',
+      segmentation_id: segmentationId,
       pixel_counts_by_segment: counts,
       total_labeled_pixels: Object.values(counts).reduce((sum, value) => sum + value, 0),
     };
@@ -515,17 +570,18 @@ export default function getCommandsModule({ servicesManager }) {
         }
       }
 
-      if (!getActiveLabelmapVolume('1')) {
+      const segmentationId = resolveActiveSegmentationId(activeViewportId);
+      if (!segmentationId || !getActiveLabelmapVolume(segmentationId)) {
         uiNotificationService.show({
           title: modeLabel,
-          message: 'Aucune segmentation éditable active.',
+          message: 'Aucune segmentation éditable active. Sélectionnez-en une dans la liste à gauche.',
           type: 'warning',
-          duration: 3000,
+          duration: 3500,
         });
         return;
       }
 
-      ensureOriginalSnapshot('1');
+      ensureOriginalSnapshot(segmentationId);
 
       let drawing = false;
       let strokeDiff = null;
@@ -540,8 +596,10 @@ export default function getCommandsModule({ servicesManager }) {
       const paint = event => {
         try {
           const [x, y] = pointFromEvent(event);
-          const writeValue = mode === 'pencil' ? activePencilSegmentIndex : 0;
-          if (paintAtCanvasPoint(viewport, x, y, eraserBrushSize, writeValue, strokeDiff)) {
+          const writeValue = mode === 'pencil'
+            ? (resolveActiveSegmentIndex(activeViewportId) ?? 1)
+            : 0;
+          if (paintAtCanvasPoint(viewport, segmentationId, x, y, eraserBrushSize, writeValue, strokeDiff)) {
             usedModesThisSession.add(mode);
           }
         } catch (err) {
@@ -585,7 +643,7 @@ export default function getCommandsModule({ servicesManager }) {
       const pointerUp = event => {
         try {
           if (drawing && strokeDiff) {
-            pushUndoEntry('1', strokeDiff);
+            pushUndoEntry(segmentationId, strokeDiff);
           }
           drawing = false;
           strokeDiff = null;
