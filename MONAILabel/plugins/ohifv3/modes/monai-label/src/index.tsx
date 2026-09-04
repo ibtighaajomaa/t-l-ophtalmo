@@ -75,7 +75,12 @@ function modeFactory({ modeConfiguration }) {
         'AiAnalysis',
         'AiEyeRight',
         'AiEyeLeft',
+        'SegmentationPencil',
         'SegmentationEraser',
+        'SegmentationActiveSegment',
+        'SegmentationUndo',
+        'SegmentationRedo',
+        'SegmentationResetToAI',
         'SaveSegmentationCorrections',
         'MoreTools',
       ]);

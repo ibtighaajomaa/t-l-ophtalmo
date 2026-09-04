@@ -970,6 +970,11 @@ export default class AiAnalysisPanel extends Component {
       <div className="eyeReportContent">
         <div className="reportTitle">
           Rapport d'analyse par AI{eyeLabel ? ` (${eyeLabel})` : ''}
+          {lesions.doctor_corrected && (
+            <span className="lesionCorrectionBadge" style={{ marginLeft: '8px' }}>
+              ✓ Confirmé par le médecin
+            </span>
+          )}
         </div>
 
         {hasMedGemmaAdjudication && (

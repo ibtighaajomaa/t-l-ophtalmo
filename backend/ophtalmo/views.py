@@ -70,7 +70,10 @@ def _apply_doctor_lesion_correction_to_eye(eye_report, correction):
             continue
         if original_pixels <= 0:
             continue
-        ratio = max(0.0, min(1.0, corrected_pixels / original_pixels))
+        # No upper clamp: the pencil tool can add pixels beyond the AI's
+        # original count (false-negative correction), which should scale
+        # the reported lesion metrics up, not silently cap at 1.0.
+        ratio = max(0.0, corrected_pixels / original_pixels)
         for field in fields:
             if field not in corrected_lesions:
                 continue
@@ -87,7 +90,7 @@ def _apply_doctor_lesion_correction_to_eye(eye_report, correction):
     if total_original > 0 and isinstance(total_corrected, int) and 'coverage_pct' in corrected_lesions:
         try:
             corrected_lesions['coverage_pct'] = round(
-                float(corrected_lesions['coverage_pct']) * max(0.0, min(1.0, total_corrected / total_original)),
+                float(corrected_lesions['coverage_pct']) * max(0.0, total_corrected / total_original),
                 2,
             )
         except (TypeError, ValueError):

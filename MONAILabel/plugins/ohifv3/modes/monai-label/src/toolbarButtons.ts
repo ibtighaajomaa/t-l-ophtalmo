@@ -210,6 +210,17 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'SegmentationPencil',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-freehand-roi',
+      label: 'Crayon',
+      tooltip: 'Ajouter à la segmentation IA active',
+      commands: 'toggleSegmentationPencil',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
     id: 'SegmentationEraser',
     uiType: 'ohif.toolButton',
     props: {
@@ -217,6 +228,50 @@ const toolbarButtons: Button[] = [
       label: 'Gomme',
       tooltip: 'Effacer la segmentation IA active',
       commands: 'toggleSegmentationEraser',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
+    id: 'SegmentationActiveSegment',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-more-menu',
+      label: 'Segment',
+      tooltip: 'Choisir la classe dessinée par le crayon',
+      commands: 'cycleActivePencilSegment',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
+    id: 'SegmentationUndo',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-undo',
+      label: 'Annuler',
+      tooltip: 'Annuler la dernière correction',
+      commands: 'undoSegmentationEdit',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
+    id: 'SegmentationRedo',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-redo',
+      label: 'Rétablir',
+      tooltip: 'Rétablir la correction annulée',
+      commands: 'redoSegmentationEdit',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
+    id: 'SegmentationResetToAI',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-reset',
+      label: 'Réinitialiser',
+      tooltip: 'Revenir au masque IA initial',
+      commands: 'resetSegmentationToOriginal',
       evaluate: 'evaluate.action',
     },
   },
