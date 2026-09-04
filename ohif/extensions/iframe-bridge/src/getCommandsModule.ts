@@ -253,6 +253,26 @@ export default function getCommandsModule({ servicesManager }) {
     }
   }
 
+  // Editing tools shouldn't force the doctor to click into OHIF's native SEG
+  // panel first just to mark a segmentation "active" -- if none is active yet,
+  // default to the first one that is actually loaded for this study.
+  function ensureActiveSegmentationId(viewportId) {
+    const existing = resolveActiveSegmentationId(viewportId);
+    if (existing) return existing;
+
+    const { segmentationService } = servicesManager.services;
+    try {
+      const all = Object.values(segmentationService?.getSegmentations?.() || {});
+      const first = all[0];
+      const firstId = first?.segmentationId;
+      if (!firstId) return null;
+      segmentationService.setActiveSegmentation(viewportId, firstId);
+      return firstId;
+    } catch (_) {
+      return null;
+    }
+  }
+
   function currentStudyInstanceUid() {
     const query = new URLSearchParams(window.location.search);
     return query.get('StudyInstanceUIDs') || query.get('studyInstanceUids') || '';
@@ -445,7 +465,7 @@ export default function getCommandsModule({ servicesManager }) {
   function cycleActivePencilSegment() {
     const { segmentationService } = servicesManager.services;
     const { activeViewportId } = getActiveViewport();
-    const segmentationId = resolveActiveSegmentationId(activeViewportId);
+    const segmentationId = ensureActiveSegmentationId(activeViewportId);
     if (!segmentationId) {
       uiNotificationService.show({
         title: 'Segment',
@@ -514,7 +534,7 @@ export default function getCommandsModule({ servicesManager }) {
 
   function summarizeActiveSegmentation() {
     const { activeViewportId } = getActiveViewport();
-    const segmentationId = resolveActiveSegmentationId(activeViewportId);
+    const segmentationId = ensureActiveSegmentationId(activeViewportId);
     if (!segmentationId) return null;
     const volumeLoadObject = getActiveLabelmapVolume(segmentationId);
     const scalarData = volumeLoadObject?.voxelManager?.getCompleteScalarDataArray?.();
@@ -570,11 +590,11 @@ export default function getCommandsModule({ servicesManager }) {
         }
       }
 
-      const segmentationId = resolveActiveSegmentationId(activeViewportId);
+      const segmentationId = ensureActiveSegmentationId(activeViewportId);
       if (!segmentationId || !getActiveLabelmapVolume(segmentationId)) {
         uiNotificationService.show({
           title: modeLabel,
-          message: 'Aucune segmentation éditable active. Sélectionnez-en une dans la liste à gauche.',
+          message: 'Aucune segmentation éditable trouvée pour cette étude.',
           type: 'warning',
           duration: 3500,
         });
