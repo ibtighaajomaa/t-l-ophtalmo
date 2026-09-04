@@ -177,6 +177,17 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'Fovea',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-crosshair',
+      label: 'Fovéa',
+      tooltip: 'Afficher/masquer la localisation de la fovéa',
+      commands: 'toggleFoveaMarker',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
     id: 'AiAnalysis',
     uiType: 'ohif.toolButton',
     props: {
@@ -224,7 +235,7 @@ const toolbarButtons: Button[] = [
     id: 'SegmentationEraser',
     uiType: 'ohif.toolButton',
     props: {
-      icon: 'tool-freehand-roi',
+      icon: 'tool-invert',
       label: 'Gomme',
       tooltip: 'Effacer la segmentation IA active',
       commands: 'toggleSegmentationEraser',

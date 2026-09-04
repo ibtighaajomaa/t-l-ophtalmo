@@ -68,13 +68,9 @@ function modeFactory({ modeConfiguration }) {
         'WindowLevel',
         'Pan',
         'Zoom',
-        'TrackballRotate',
-        'Capture',
         'Layout',
-        'Crosshairs',
+        'Fovea',
         'AiAnalysis',
-        'AiEyeRight',
-        'AiEyeLeft',
         'SegmentationPencil',
         'SegmentationEraser',
         'SegmentationActiveSegment',
@@ -101,6 +97,11 @@ function modeFactory({ modeConfiguration }) {
       ]);
 
       toolbarService.updateSection('MoreTools', [
+        'AiEyeRight',
+        'AiEyeLeft',
+        'Crosshairs',
+        'TrackballRotate',
+        'Capture',
         'Reset',
         'rotate-right',
         'flipHorizontal',

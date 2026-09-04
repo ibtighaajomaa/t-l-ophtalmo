@@ -478,129 +478,165 @@ export default function getCommandsModule({ servicesManager }) {
     };
   }
 
+  function reportSegmentationError(modeLabel, phase, err) {
+    console.error(`[SegmentationEdit] ${modeLabel} (${phase}) failed:`, err);
+    uiNotificationService.show({
+      title: `${modeLabel} — erreur`,
+      message: `[${phase}] ${err?.message || err}`,
+      type: 'error',
+      duration: 8000,
+    });
+  }
+
   function toggleSegmentationEdit(mode) {
-    const { activeViewportId, viewport } = getActiveViewport();
-    const element = viewport?.element;
-    if (!activeViewportId || !element) return;
-
     const modeLabel = mode === 'pencil' ? 'Crayon' : 'Gomme';
+    try {
+      const { activeViewportId, viewport } = getActiveViewport();
+      const element = viewport?.element;
+      if (!activeViewportId || !element) {
+        reportSegmentationError(modeLabel, 'setup', new Error('Aucun viewport actif trouvé.'));
+        return;
+      }
 
-    const existing = editSessions.get(activeViewportId);
-    if (existing) {
-      const wasSameMode = existing.mode === mode;
-      existing.cleanup();
-      editSessions.delete(activeViewportId);
-      hideBrushCursor(activeViewportId);
-      if (wasSameMode) {
+      const existing = editSessions.get(activeViewportId);
+      if (existing) {
+        const wasSameMode = existing.mode === mode;
+        existing.cleanup();
+        editSessions.delete(activeViewportId);
+        hideBrushCursor(activeViewportId);
+        if (wasSameMode) {
+          uiNotificationService.show({
+            title: modeLabel,
+            message: `${modeLabel} désactivé.`,
+            type: 'info',
+            duration: 1600,
+          });
+          return;
+        }
+      }
+
+      if (!getActiveLabelmapVolume('1')) {
         uiNotificationService.show({
           title: modeLabel,
-          message: `${modeLabel} désactivé.`,
-          type: 'info',
-          duration: 1600,
+          message: 'Aucune segmentation éditable active.',
+          type: 'warning',
+          duration: 3000,
         });
         return;
       }
-    }
 
-    if (!getActiveLabelmapVolume('1')) {
+      ensureOriginalSnapshot('1');
+
+      let drawing = false;
+      let strokeDiff = null;
+      const previousCursor = element.style.cursor;
+      element.style.cursor = 'none';
+      const cursor = showBrushCursor(element, activeViewportId);
+
+      const pointFromEvent = event => {
+        const rect = element.getBoundingClientRect();
+        return [event.clientX - rect.left, event.clientY - rect.top];
+      };
+      const paint = event => {
+        try {
+          const [x, y] = pointFromEvent(event);
+          const writeValue = mode === 'pencil' ? activePencilSegmentIndex : 0;
+          if (paintAtCanvasPoint(viewport, x, y, eraserBrushSize, writeValue, strokeDiff)) {
+            usedModesThisSession.add(mode);
+          }
+        } catch (err) {
+          reportSegmentationError(modeLabel, 'paint', err);
+        }
+      };
+      const updateCursor = event => {
+        try {
+          const [x, y] = pointFromEvent(event);
+          const radius = Math.max(2, eraserBrushSize / 2);
+          cursor.circle.setAttribute('cx', String(x));
+          cursor.circle.setAttribute('cy', String(y));
+          cursor.circle.setAttribute('r', String(radius));
+          cursor.circle.setAttribute('stroke', mode === 'pencil' ? '#22c55e' : '#ffffff');
+        } catch (err) {
+          reportSegmentationError(modeLabel, 'cursor', err);
+        }
+      };
+      const pointerDown = event => {
+        try {
+          drawing = true;
+          strokeDiff = new Map();
+          element.setPointerCapture?.(event.pointerId);
+          updateCursor(event);
+          paint(event);
+          event.preventDefault();
+        } catch (err) {
+          reportSegmentationError(modeLabel, 'pointerdown', err);
+        }
+      };
+      const pointerMove = event => {
+        try {
+          updateCursor(event);
+          if (!drawing) return;
+          paint(event);
+          event.preventDefault();
+        } catch (err) {
+          reportSegmentationError(modeLabel, 'pointermove', err);
+        }
+      };
+      const pointerUp = event => {
+        try {
+          if (drawing && strokeDiff) {
+            pushUndoEntry('1', strokeDiff);
+          }
+          drawing = false;
+          strokeDiff = null;
+          element.releasePointerCapture?.(event.pointerId);
+          event.preventDefault();
+        } catch (err) {
+          reportSegmentationError(modeLabel, 'pointerup', err);
+        }
+      };
+      const wheel = event => {
+        if (!event.altKey) return;
+        eraserBrushSize = Math.max(4, Math.min(96, eraserBrushSize + (event.deltaY > 0 ? -4 : 4)));
+        uiNotificationService.show({
+          title: modeLabel,
+          message: `Taille: ${eraserBrushSize}px`,
+          type: 'info',
+          duration: 900,
+        });
+        event.preventDefault();
+      };
+
+      element.addEventListener('pointerdown', pointerDown);
+      element.addEventListener('pointermove', pointerMove);
+      element.addEventListener('pointerup', pointerUp);
+      element.addEventListener('pointerleave', pointerUp);
+      element.addEventListener('wheel', wheel, { passive: false });
+
+      editSessions.set(activeViewportId, {
+        mode,
+        cleanup: () => {
+          element.style.cursor = previousCursor;
+          element.removeEventListener('pointerdown', pointerDown);
+          element.removeEventListener('pointermove', pointerMove);
+          element.removeEventListener('pointerup', pointerUp);
+          element.removeEventListener('pointerleave', pointerUp);
+          element.removeEventListener('wheel', wheel);
+        },
+      });
+
       uiNotificationService.show({
         title: modeLabel,
-        message: 'Aucune segmentation éditable active.',
-        type: 'warning',
+        message:
+          mode === 'pencil'
+            ? 'Crayon actif. Alt + molette : taille. Bouton "Segment" : choisir la classe à dessiner.'
+            : 'Gomme active. Maintenez Alt + molette pour changer la taille.',
+        type: 'success',
         duration: 3000,
       });
-      return;
+    } catch (err) {
+      reportSegmentationError(modeLabel, 'setup', err);
     }
-
-    ensureOriginalSnapshot('1');
-
-    let drawing = false;
-    let strokeDiff = null;
-    const previousCursor = element.style.cursor;
-    element.style.cursor = 'none';
-    const cursor = showBrushCursor(element, activeViewportId);
-
-    const pointFromEvent = event => {
-      const rect = element.getBoundingClientRect();
-      return [event.clientX - rect.left, event.clientY - rect.top];
-    };
-    const paint = event => {
-      const [x, y] = pointFromEvent(event);
-      const writeValue = mode === 'pencil' ? activePencilSegmentIndex : 0;
-      if (paintAtCanvasPoint(viewport, x, y, eraserBrushSize, writeValue, strokeDiff)) {
-        usedModesThisSession.add(mode);
-      }
-    };
-    const updateCursor = event => {
-      const [x, y] = pointFromEvent(event);
-      const radius = Math.max(2, eraserBrushSize / 2);
-      cursor.circle.setAttribute('cx', String(x));
-      cursor.circle.setAttribute('cy', String(y));
-      cursor.circle.setAttribute('r', String(radius));
-      cursor.circle.setAttribute('stroke', mode === 'pencil' ? '#22c55e' : '#ffffff');
-    };
-    const pointerDown = event => {
-      drawing = true;
-      strokeDiff = new Map();
-      element.setPointerCapture?.(event.pointerId);
-      updateCursor(event);
-      paint(event);
-      event.preventDefault();
-    };
-    const pointerMove = event => {
-      updateCursor(event);
-      if (!drawing) return;
-      paint(event);
-      event.preventDefault();
-    };
-    const pointerUp = event => {
-      if (drawing && strokeDiff) {
-        pushUndoEntry('1', strokeDiff);
-      }
-      drawing = false;
-      strokeDiff = null;
-      element.releasePointerCapture?.(event.pointerId);
-      event.preventDefault();
-    };
-    const wheel = event => {
-      if (!event.altKey) return;
-      eraserBrushSize = Math.max(4, Math.min(96, eraserBrushSize + (event.deltaY > 0 ? -4 : 4)));
-      uiNotificationService.show({
-        title: modeLabel,
-        message: `Taille: ${eraserBrushSize}px`,
-        type: 'info',
-        duration: 900,
-      });
-      event.preventDefault();
-    };
-
-    element.addEventListener('pointerdown', pointerDown);
-    element.addEventListener('pointermove', pointerMove);
-    element.addEventListener('pointerup', pointerUp);
-    element.addEventListener('pointerleave', pointerUp);
-    element.addEventListener('wheel', wheel, { passive: false });
-
-    editSessions.set(activeViewportId, {
-      mode,
-      cleanup: () => {
-        element.style.cursor = previousCursor;
-        element.removeEventListener('pointerdown', pointerDown);
-        element.removeEventListener('pointermove', pointerMove);
-        element.removeEventListener('pointerup', pointerUp);
-        element.removeEventListener('pointerleave', pointerUp);
-        element.removeEventListener('wheel', wheel);
-      },
-    });
-
-    uiNotificationService.show({
-      title: modeLabel,
-      message:
-        mode === 'pencil'
-          ? 'Crayon actif. Alt + molette : taille. Bouton "Segment" : choisir la classe à dessiner.'
-          : 'Gomme active. Maintenez Alt + molette pour changer la taille.',
-      type: 'success',
-      duration: 3000,
-    });
   }
 
   function toggleSegmentationEraser() {
@@ -774,6 +810,6 @@ export default function getCommandsModule({ servicesManager }) {
   return {
     actions,
     definitions,
-    defaultContext: 'IFRAME_BRIDGE',
+    defaultContext: 'CORNERSTONE',
   };
 }
