@@ -262,13 +262,30 @@ export default function getCommandsModule({ servicesManager }) {
 
     const { segmentationService } = servicesManager.services;
     try {
-      const all = Object.values(segmentationService?.getSegmentations?.() || {});
-      const first = all[0];
-      const firstId = first?.segmentationId;
-      if (!firstId) return null;
-      segmentationService.setActiveSegmentation(viewportId, firstId);
-      return firstId;
-    } catch (_) {
+      const raw = segmentationService?.getSegmentations?.();
+      // eslint-disable-next-line no-console
+      console.log('[SegmentationEdit] getSegmentations() raw:', raw);
+      const entries = Array.isArray(raw) ? raw : Object.entries(raw || {});
+      for (const entry of entries) {
+        const [key, value] = Array.isArray(entry) ? entry : [null, entry];
+        const candidateId = value?.segmentationId || value?.id || key;
+        if (!candidateId) continue;
+        try {
+          segmentationService.setActiveSegmentation(viewportId, candidateId);
+        } catch (setErr) {
+          console.warn('[SegmentationEdit] setActiveSegmentation failed for', candidateId, setErr);
+          continue;
+        }
+        const confirmed = resolveActiveSegmentationId(viewportId);
+        if (confirmed) return confirmed;
+        // setActiveSegmentation didn't throw but didn't take either -- try the
+        // candidate id directly against getLabelmapVolume as a last resort.
+        if (getActiveLabelmapVolume(candidateId)) return candidateId;
+      }
+      console.warn('[SegmentationEdit] No usable segmentation id found among', entries.length, 'entries');
+      return null;
+    } catch (err) {
+      console.error('[SegmentationEdit] ensureActiveSegmentationId failed:', err);
       return null;
     }
   }
