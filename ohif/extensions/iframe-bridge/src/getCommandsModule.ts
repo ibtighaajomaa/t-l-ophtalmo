@@ -263,22 +263,17 @@ export default function getCommandsModule({ servicesManager }) {
     const { segmentationService } = servicesManager.services;
     try {
       const raw = segmentationService?.getSegmentations?.();
-      let entries = [];
-      try {
-        entries = Array.from(raw ?? []);
-      } catch (_) {
-        entries = Object.entries(raw || {});
-      }
-      console.log(
-        '[SegmentationEdit] getSegmentations():',
-        raw, 'isArray=', Array.isArray(raw), 'length=', entries.length, 'entries=', entries
-      );
-      for (const entry of entries) {
-        const candidates = Array.isArray(entry)
-          ? [entry[1]?.segmentationId, entry[1]?.id, entry[0]]
-          : [entry?.segmentationId, entry?.id];
+      // getSegmentations() has been observed to be a reactive/proxied array
+      // whose Symbol.iterator is unreliable (Array.from/for...of silently
+      // yield 0 items even though .length is correct) -- index by hand.
+      const length = raw?.length ?? 0;
+      let tried = 0;
+      for (let i = 0; i < length; i++) {
+        const entry = raw[i];
+        const candidates = [entry?.segmentationId, entry?.id];
         for (const candidateId of candidates) {
           if (!candidateId) continue;
+          tried++;
           try {
             segmentationService.setActiveSegmentation(viewportId, candidateId);
           } catch (setErr) {
@@ -290,7 +285,9 @@ export default function getCommandsModule({ servicesManager }) {
           if (getActiveLabelmapVolume(candidateId)) return candidateId;
         }
       }
-      console.warn('[SegmentationEdit] No usable segmentation id found among', entries.length, 'entries:', entries);
+      console.warn(
+        '[SegmentationEdit] No usable segmentation id found. length=', length, 'tried=', tried, 'raw=', raw
+      );
       return null;
     } catch (err) {
       console.error('[SegmentationEdit] ensureActiveSegmentationId failed:', err);
