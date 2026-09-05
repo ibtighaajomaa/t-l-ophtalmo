@@ -1,7 +1,8 @@
 diff --git a/modes/longitudinal/src/index.ts b/modes/longitudinal/src/index.ts
+index 59a265e..0142e25 100644
 --- a/modes/longitudinal/src/index.ts
 +++ b/modes/longitudinal/src/index.ts
-@@ -18,6 +18,10 @@ const cornerstone = {
+@@ -20,6 +20,10 @@ const cornerstone = {
    segmentation: '@ohif/extension-cornerstone.panelModule.panelSegmentation',
  };
  
@@ -12,23 +13,44 @@ diff --git a/modes/longitudinal/src/index.ts b/modes/longitudinal/src/index.ts
  const tracked = {
    measurements: '@ohif/extension-measurement-tracking.panelModule.trackedMeasurements',
    thumbnailList: '@ohif/extension-measurement-tracking.panelModule.seriesList',
-@@ -73,5 +77,6 @@ const extensionDependencies = {
+@@ -68,6 +72,8 @@ const extensionDependencies = {
+   '@ohif/extension-cornerstone-dicom-rt': '^3.0.0',
    '@ohif/extension-dicom-pdf': '^3.0.1',
    '@ohif/extension-dicom-video': '^3.0.1',
 +  '@ohif/extension-monai-label': '^3.0.0',
++  '@ohif/extension-iframe-bridge': '^3.0.0',
  };
  
  function modeFactory({ modeConfiguration }) {
-@@ -97,6 +102,8 @@ function modeFactory({ modeConfiguration }) {
+@@ -97,6 +103,9 @@ function modeFactory({ modeConfiguration }) {
          'Pan',
          'TrackballRotate',
          'WindowLevel',
 +        'CLAHE',
 +        'Fovea',
++        'AICorrectionTools',
          'Capture',
          'Layout',
          'Crosshairs',
-@@ -226,7 +232,11 @@ function modeFactory({ modeConfiguration }) {
+@@ -142,6 +151,17 @@ function modeFactory({ modeConfiguration }) {
+         'LivewireContour',
+       ]);
+ 
++      toolbarService.updateSection('AICorrectionTools', [
++        'SegmentationPencil',
++        'SegmentationEraser',
++        'SegmentationWand',
++        'SegmentationActiveSegment',
++        'SegmentationUndo',
++        'SegmentationRedo',
++        'SegmentationResetToAI',
++        'SaveSegmentationCorrections',
++      ]);
++
+       toolbarService.updateSection('MoreTools', [
+         'Reset',
+         'rotate-right',
+@@ -247,7 +267,11 @@ function modeFactory({ modeConfiguration }) {
              props: {
                leftPanels: [tracked.thumbnailList],
                leftPanelResizable: true,
@@ -42,9 +64,26 @@ diff --git a/modes/longitudinal/src/index.ts b/modes/longitudinal/src/index.ts
                rightPanelResizable: true,
                viewports: [
 diff --git a/modes/longitudinal/src/toolbarButtons.ts b/modes/longitudinal/src/toolbarButtons.ts
+index c9db3f2..bdf188f 100644
 --- a/modes/longitudinal/src/toolbarButtons.ts
 +++ b/modes/longitudinal/src/toolbarButtons.ts
-@@ -610,6 +610,28 @@ const toolbarButtons = [
+@@ -25,7 +25,14 @@ const toolbarButtons: Button[] = [
+     id: 'MeasurementTools',
+     uiType: 'ohif.toolButtonList',
+     props: {
+-      buttonSection: true,
++      buttonSection: 'MeasurementTools',
++    },
++  },
++  {
++    id: 'AICorrectionTools',
++    uiType: 'ohif.toolButtonList',
++    props: {
++      buttonSection: 'AICorrectionTools',
+     },
+   },
+   {
+@@ -610,6 +617,116 @@ const toolbarButtons: Button[] = [
        },
      },
    },
@@ -70,6 +109,107 @@ diff --git a/modes/longitudinal/src/toolbarButtons.ts b/modes/longitudinal/src/t
 +      evaluate: 'evaluate.action',
 +    },
 +  },
++  {
++    id: 'SegmentationPencil',
++    uiType: 'ohif.toolButton',
++    props: {
++      icon: 'tool-freehand-roi',
++      label: 'Crayon',
++      tooltip: 'Ajouter à la segmentation IA active',
++      commands: 'toggleSegmentationPencil',
++      evaluate: 'evaluate.action',
++    },
++  },
++  {
++    id: 'SegmentationEraser',
++    uiType: 'ohif.toolButton',
++    props: {
++      icon: 'tool-invert',
++      label: 'Gomme',
++      tooltip: 'Effacer la segmentation IA active',
++      commands: 'toggleSegmentationEraser',
++      evaluate: 'evaluate.action',
++    },
++  },
++  {
++    id: 'SegmentationWand',
++    uiType: 'ohif.toolButton',
++    props: {
++      icon: 'tool-livewire',
++      label: 'Baguette',
++      tooltip: 'Clic sur une lésion : segmentation automatique par propagation',
++      commands: 'toggleSegmentationWand',
++      evaluate: 'evaluate.action',
++    },
++  },
++  {
++    id: 'SegmentationActiveSegment',
++    uiType: 'ohif.toolButton',
++    props: {
++      icon: 'dicom-tag-browser',
++      label: 'Segment',
++      tooltip: 'Choisir la classe dessinée par le crayon',
++      commands: 'cycleActivePencilSegment',
++      evaluate: 'evaluate.action',
++    },
++  },
++  {
++    id: 'SegmentationUndo',
++    uiType: 'ohif.toolButton',
++    props: {
++      icon: 'Undo',
++      label: 'Annuler',
++      tooltip: 'Annuler la dernière correction',
++      commands: 'undoSegmentationEdit',
++      evaluate: 'evaluate.action',
++    },
++  },
++  {
++    id: 'SegmentationRedo',
++    uiType: 'ohif.toolButton',
++    props: {
++      icon: 'Redo',
++      label: 'Rétablir',
++      tooltip: 'Rétablir la correction annulée',
++      commands: 'redoSegmentationEdit',
++      evaluate: 'evaluate.action',
++    },
++  },
++  {
++    id: 'SegmentationResetToAI',
++    uiType: 'ohif.toolButton',
++    props: {
++      icon: 'tool-reset',
++      label: 'Réinitialiser',
++      tooltip: 'Revenir au masque IA initial',
++      commands: 'resetSegmentationToOriginal',
++      evaluate: 'evaluate.action',
++    },
++  },
++  {
++    id: 'SaveSegmentationCorrections',
++    uiType: 'ohif.toolButton',
++    props: {
++      icon: 'Export',
++      label: 'Sauvegarder',
++      tooltip: 'Sauvegarder les corrections de segmentation',
++      commands: 'saveSegmentationCorrections',
++      evaluate: 'evaluate.action',
++    },
++  },
    {
      id: 'Capture',
      uiType: 'ohif.toolButton',
+diff --git a/platform/ui-next/src/components/Errorboundary/ErrorBoundary.tsx b/platform/ui-next/src/components/Errorboundary/ErrorBoundary.tsx
+index 56ef253..2d93860 100644
+--- a/platform/ui-next/src/components/Errorboundary/ErrorBoundary.tsx
++++ b/platform/ui-next/src/components/Errorboundary/ErrorBoundary.tsx
+@@ -137,7 +137,7 @@ const DefaultFallback = ({
+   const [showDetails, setShowDetails] = useState(false);
+   const { show } = useNotification();
+ 
+-  const title = `${t('Something went wrong')}${!isProduction && ` ${t('in')} ${context}`}.`;
++  const title = `${t('Something went wrong')}${!isProduction ? ` ${t('in')} ${context}` : ''}.`;
+   const subtitle = t('Sorry, something went wrong there. Try again.');
+ 
+   const { errorTitle, code, firstFilename } = parseErrorStack(error);
