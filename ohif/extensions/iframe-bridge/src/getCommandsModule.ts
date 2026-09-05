@@ -413,20 +413,6 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // Editing tools shouldn't force the doctor to click into OHIF's native SEG
   // panel first just to mark a segmentation "active" -- if none is active yet,
   // default to the first one that is actually loaded for this study.
-  // In the Basic Viewer the SEG series are listed but not loaded into the
-  // viewport until the doctor clicks "CHARGER". When an editing tool is
-  // activated with nothing loaded, hydrate the most relevant SEG display set
-  // (lesions first) exactly like that button does, then wait for Cornerstone
-  // to expose the resulting segmentation.
-  function segDisplaySetPriority(displaySet) {
-    const description = String(displaySet?.SeriesDescription || '').toLowerCase();
-    if (/l[eé]sion/.test(description)) return 0;
-    if (/neovasc|néovasc/.test(description)) return 1;
-    if (/vaiss|vessel/.test(description)) return 3;
-    if (/optic|disc|exca|cup/.test(description)) return 4;
-    return 2;
-  }
-
   function waitForActiveSegmentation(viewportId, timeoutMs = 6000) {
     return new Promise(resolve => {
       const startedAt = Date.now();
@@ -502,54 +488,19 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     return id || segmentationId;
   }
 
+  // Nothing selected/loaded by the doctor -> draw directly on the image: create
+  // an empty labelmap with the lesion classes, immediately. When the doctor has
+  // loaded a SEG series (left list / CHARGER badge) this is never reached and
+  // the tools work on that segmentation instead.
   async function loadSegmentationForEditing(viewportId, modeLabel) {
-    const { displaySetService } = servicesManager.services;
-    let candidates = [];
-    try {
-      const all = displaySetService?.getActiveDisplaySets?.() || [];
-      candidates = all.filter(ds => ds?.Modality === 'SEG');
-    } catch (err) {
-      console.warn('[SegmentationEdit] getActiveDisplaySets failed', err);
-    }
-
-    // 1) Prefer the AI segmentation when the study has one: load it like the
-    //    CHARGER badge does and wait briefly for it to appear.
-    if (candidates.length) {
-      candidates.sort((a, b) => segDisplaySetPriority(a) - segDisplaySetPriority(b));
-      const chosen = candidates[0];
-      const label = chosen.SeriesDescription || 'SEG';
-      console.log('[SegmentationEdit] auto-loading SEG', label, chosen.displaySetInstanceUID, 'into', viewportId);
-      uiNotificationService.show({
-        title: modeLabel,
-        message: `Chargement de la segmentation « ${label} »…`,
-        type: 'info',
-        duration: 2000,
-      });
-      try {
-        await commandsManager?.runCommand?.('hydrateSecondaryDisplaySet', {
-          displaySet: chosen,
-          viewportId,
-        });
-      } catch (err) {
-        console.error('[SegmentationEdit] hydrateSecondaryDisplaySet failed', err);
-      }
-      const loadedId = await waitForActiveSegmentation(viewportId, 6000);
-      if (loadedId) return loadedId;
-      console.warn('[SegmentationEdit] SEG did not load in time, creating a fresh doctor segmentation instead');
-    }
-
-    // 2) Otherwise draw directly on the image: create an empty labelmap with
-    //    the lesion classes.
     try {
       const createdId = await createEditableSegmentation(viewportId, modeLabel);
       if (createdId) {
         uiNotificationService.show({
           title: modeLabel,
-          message: candidates.length
-            ? 'Segmentation IA non chargée : nouvelle segmentation « Lésions (médecin) » créée sur l\'image. Dessinez directement.'
-            : 'Nouvelle segmentation « Lésions (médecin) » créée sur l\'image. Dessinez directement.',
+          message: 'Nouvelle segmentation « Lésions (médecin) » créée sur l\'image. Dessinez directement. Pour corriger la segmentation IA, sélectionnez d\'abord la série SEG à gauche.',
           type: 'success',
-          duration: 4000,
+          duration: 4500,
         });
       }
       return createdId;
