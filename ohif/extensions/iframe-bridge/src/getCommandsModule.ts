@@ -678,7 +678,7 @@ export default function getCommandsModule({ servicesManager }) {
     Object.assign(panel.style, {
       position: 'absolute',
       top: '8px',
-      left: '8px',
+      right: '8px',
       zIndex: '20',
       display: 'flex',
       alignItems: 'center',
@@ -969,8 +969,8 @@ export default function getCommandsModule({ servicesManager }) {
         title: modeLabel,
         message:
           mode === 'pencil'
-            ? `Crayon actif (${getBrushSize('pencil')} px). Taille : panneau en haut à gauche ou Alt + molette. Bouton "Segment" : classe à dessiner.`
-            : `Gomme active (${getBrushSize('erase')} px). Taille : panneau en haut à gauche ou Alt + molette.`,
+            ? `Crayon actif (${getBrushSize('pencil')} px). Taille : panneau en haut à droite ou Alt + molette. Bouton "Segment" : classe à dessiner.`
+            : `Gomme active (${getBrushSize('erase')} px). Taille : panneau en haut à droite ou Alt + molette.`,
         type: 'success',
         duration: 3000,
       });
