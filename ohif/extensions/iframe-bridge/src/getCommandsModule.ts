@@ -427,17 +427,79 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     return 2;
   }
 
-  function waitForActiveSegmentation(viewportId, timeoutMs = 12000) {
+  function waitForActiveSegmentation(viewportId, timeoutMs = 6000) {
     return new Promise(resolve => {
       const startedAt = Date.now();
       const tick = () => {
-        const id = ensureActiveSegmentationId(viewportId);
+        const id = ensureActiveSegmentationId(viewportId, true);
         if (id) return resolve(id);
         if (Date.now() - startedAt > timeoutMs) return resolve(null);
         setTimeout(tick, 300);
       };
       tick();
     });
+  }
+
+  // Classes of the doctor-drawn segmentation, same indices/labels as the AI
+  // lesion_seg model (microaneurysms 1, hemorrhages 2, hard exudates 3, soft
+  // exudates 4) and same colours as the viewer legend.
+  const DOCTOR_LESION_SEGMENTS = [
+    { index: 1, label: 'Microanévrismes', color: [255, 50, 50, 255] },
+    { index: 2, label: 'Hémorragies', color: [59, 130, 246, 255] },
+    { index: 3, label: 'Exsudats', color: [255, 255, 255, 255] },
+    { index: 4, label: 'Nodules cotonneux', color: [0, 255, 0, 255] },
+  ];
+
+  // Create an empty labelmap on the image currently displayed so the doctor can
+  // draw directly on it, without any AI SEG loaded. Uses the same OHIF service
+  // calls as the "+ Add segmentation" button of the Segmentation panel.
+  async function createEditableSegmentation(viewportId, modeLabel) {
+    const { viewportGridService, displaySetService, segmentationService } = servicesManager.services;
+    const state = viewportGridService?.getState?.();
+    const viewportInfo = state?.viewports?.get?.(viewportId);
+    const displaySetUid = viewportInfo?.displaySetInstanceUIDs?.[0];
+    const displaySet = displaySetUid ? displaySetService?.getDisplaySetByUID?.(displaySetUid) : null;
+    if (!displaySet) {
+      uiNotificationService.show({
+        title: modeLabel,
+        message: "Impossible de trouver l'image affichée pour y créer une segmentation.",
+        type: 'error',
+        duration: 4000,
+      });
+      return null;
+    }
+    const segmentationId = `doctor-${Date.now()}`;
+    const segments = {};
+    DOCTOR_LESION_SEGMENTS.forEach(s => {
+      segments[s.index] = { label: s.label, active: s.index === 2 };
+    });
+    console.log('[SegmentationEdit] creating editable segmentation', segmentationId, 'on', displaySetUid);
+    await segmentationService.createLabelmapForDisplaySet(displaySet, {
+      segmentationId,
+      label: 'Lésions (médecin)',
+      segments,
+    });
+    const type = csTools?.Enums?.SegmentationRepresentations?.Labelmap || 'Labelmap';
+    await segmentationService.addSegmentationRepresentation(viewportId, { segmentationId, type });
+    DOCTOR_LESION_SEGMENTS.forEach(s => {
+      try {
+        segmentationService.setSegmentColor(viewportId, segmentationId, s.index, s.color);
+      } catch (err) {
+        console.warn('[SegmentationEdit] setSegmentColor failed', s.index, err);
+      }
+    });
+    try {
+      segmentationService.setActiveSegmentation(viewportId, segmentationId);
+    } catch (_) {
+      // representation may still be settling; the poll below re-checks
+    }
+    try {
+      segmentationService.setActiveSegment(segmentationId, 2);
+    } catch (_) {
+      // same
+    }
+    const id = await waitForActiveSegmentation(viewportId, 5000);
+    return id || segmentationId;
   }
 
   async function loadSegmentationForEditing(viewportId, modeLabel) {
@@ -449,46 +511,55 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     } catch (err) {
       console.warn('[SegmentationEdit] getActiveDisplaySets failed', err);
     }
-    if (!candidates.length) {
+
+    // 1) Prefer the AI segmentation when the study has one: load it like the
+    //    CHARGER badge does and wait briefly for it to appear.
+    if (candidates.length) {
+      candidates.sort((a, b) => segDisplaySetPriority(a) - segDisplaySetPriority(b));
+      const chosen = candidates[0];
+      const label = chosen.SeriesDescription || 'SEG';
+      console.log('[SegmentationEdit] auto-loading SEG', label, chosen.displaySetInstanceUID, 'into', viewportId);
       uiNotificationService.show({
         title: modeLabel,
-        message: "Aucune segmentation IA disponible pour cette étude. Lancez d'abord l'analyse IA.",
-        type: 'warning',
-        duration: 4500,
+        message: `Chargement de la segmentation « ${label} »…`,
+        type: 'info',
+        duration: 2000,
       });
+      try {
+        await commandsManager?.runCommand?.('hydrateSecondaryDisplaySet', {
+          displaySet: chosen,
+          viewportId,
+        });
+      } catch (err) {
+        console.error('[SegmentationEdit] hydrateSecondaryDisplaySet failed', err);
+      }
+      const loadedId = await waitForActiveSegmentation(viewportId, 6000);
+      if (loadedId) return loadedId;
+      console.warn('[SegmentationEdit] SEG did not load in time, creating a fresh doctor segmentation instead');
+    }
+
+    // 2) Otherwise draw directly on the image: create an empty labelmap with
+    //    the lesion classes.
+    try {
+      const createdId = await createEditableSegmentation(viewportId, modeLabel);
+      if (createdId) {
+        uiNotificationService.show({
+          title: modeLabel,
+          message: candidates.length
+            ? 'Segmentation IA non chargée : nouvelle segmentation « Lésions (médecin) » créée sur l\'image. Dessinez directement.'
+            : 'Nouvelle segmentation « Lésions (médecin) » créée sur l\'image. Dessinez directement.',
+          type: 'success',
+          duration: 4000,
+        });
+      }
+      return createdId;
+    } catch (err) {
+      reportSegmentationError(modeLabel, 'create-segmentation', err);
       return null;
     }
-    candidates.sort((a, b) => segDisplaySetPriority(a) - segDisplaySetPriority(b));
-    const chosen = candidates[0];
-    const label = chosen.SeriesDescription || 'SEG';
-    console.log('[SegmentationEdit] auto-loading SEG', label, chosen.displaySetInstanceUID, 'into', viewportId);
-    uiNotificationService.show({
-      title: modeLabel,
-      message: `Chargement de la segmentation « ${label} »…`,
-      type: 'info',
-      duration: 2500,
-    });
-    try {
-      await commandsManager?.runCommand?.('hydrateSecondaryDisplaySet', {
-        displaySet: chosen,
-        viewportId,
-      });
-    } catch (err) {
-      console.error('[SegmentationEdit] hydrateSecondaryDisplaySet failed', err);
-    }
-    const id = await waitForActiveSegmentation(viewportId);
-    if (!id) {
-      uiNotificationService.show({
-        title: modeLabel,
-        message: `Impossible de charger « ${label} » automatiquement. Cliquez sur CHARGER en haut à droite de l'image (ou sur la série SEG à gauche), puis réessayez.`,
-        type: 'warning',
-        duration: 6000,
-      });
-    }
-    return id;
   }
 
-  function ensureActiveSegmentationId(viewportId) {
+  function ensureActiveSegmentationId(viewportId, quiet = false) {
     const existing = resolveActiveSegmentationId(viewportId);
     if (existing) return existing;
 
@@ -517,9 +588,11 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           if (getActiveLabelmapVolume(candidateId)) return candidateId;
         }
       }
-      console.warn(
-        '[SegmentationEdit] No usable segmentation id found. length=', length, 'tried=', tried, 'raw=', raw
-      );
+      if (!quiet) {
+        console.warn(
+          '[SegmentationEdit] No usable segmentation id found. length=', length, 'tried=', tried, 'raw=', raw
+        );
+      }
       return null;
     } catch (err) {
       console.error('[SegmentationEdit] ensureActiveSegmentationId failed:', err);
