@@ -1,4 +1,4 @@
-export default function getCommandsModule({ servicesManager }) {
+export default function getCommandsModule({ servicesManager, commandsManager }) {
   const { uiNotificationService } = servicesManager.services;
 
   const claheOverlays = new Map();
@@ -413,6 +413,81 @@ export default function getCommandsModule({ servicesManager }) {
   // Editing tools shouldn't force the doctor to click into OHIF's native SEG
   // panel first just to mark a segmentation "active" -- if none is active yet,
   // default to the first one that is actually loaded for this study.
+  // In the Basic Viewer the SEG series are listed but not loaded into the
+  // viewport until the doctor clicks "CHARGER". When an editing tool is
+  // activated with nothing loaded, hydrate the most relevant SEG display set
+  // (lesions first) exactly like that button does, then wait for Cornerstone
+  // to expose the resulting segmentation.
+  function segDisplaySetPriority(displaySet) {
+    const description = String(displaySet?.SeriesDescription || '').toLowerCase();
+    if (/l[eé]sion/.test(description)) return 0;
+    if (/neovasc|néovasc/.test(description)) return 1;
+    if (/vaiss|vessel/.test(description)) return 3;
+    if (/optic|disc|exca|cup/.test(description)) return 4;
+    return 2;
+  }
+
+  function waitForActiveSegmentation(viewportId, timeoutMs = 12000) {
+    return new Promise(resolve => {
+      const startedAt = Date.now();
+      const tick = () => {
+        const id = ensureActiveSegmentationId(viewportId);
+        if (id) return resolve(id);
+        if (Date.now() - startedAt > timeoutMs) return resolve(null);
+        setTimeout(tick, 300);
+      };
+      tick();
+    });
+  }
+
+  async function loadSegmentationForEditing(viewportId, modeLabel) {
+    const { displaySetService } = servicesManager.services;
+    let candidates = [];
+    try {
+      const all = displaySetService?.getActiveDisplaySets?.() || [];
+      candidates = all.filter(ds => ds?.Modality === 'SEG');
+    } catch (err) {
+      console.warn('[SegmentationEdit] getActiveDisplaySets failed', err);
+    }
+    if (!candidates.length) {
+      uiNotificationService.show({
+        title: modeLabel,
+        message: "Aucune segmentation IA disponible pour cette étude. Lancez d'abord l'analyse IA.",
+        type: 'warning',
+        duration: 4500,
+      });
+      return null;
+    }
+    candidates.sort((a, b) => segDisplaySetPriority(a) - segDisplaySetPriority(b));
+    const chosen = candidates[0];
+    const label = chosen.SeriesDescription || 'SEG';
+    console.log('[SegmentationEdit] auto-loading SEG', label, chosen.displaySetInstanceUID, 'into', viewportId);
+    uiNotificationService.show({
+      title: modeLabel,
+      message: `Chargement de la segmentation « ${label} »…`,
+      type: 'info',
+      duration: 2500,
+    });
+    try {
+      await commandsManager?.runCommand?.('hydrateSecondaryDisplaySet', {
+        displaySet: chosen,
+        viewportId,
+      });
+    } catch (err) {
+      console.error('[SegmentationEdit] hydrateSecondaryDisplaySet failed', err);
+    }
+    const id = await waitForActiveSegmentation(viewportId);
+    if (!id) {
+      uiNotificationService.show({
+        title: modeLabel,
+        message: `Impossible de charger « ${label} » automatiquement. Cliquez sur CHARGER en haut à droite de l'image (ou sur la série SEG à gauche), puis réessayez.`,
+        type: 'warning',
+        duration: 6000,
+      });
+    }
+    return id;
+  }
+
   function ensureActiveSegmentationId(viewportId) {
     const existing = resolveActiveSegmentationId(viewportId);
     if (existing) return existing;
@@ -938,7 +1013,11 @@ export default function getCommandsModule({ servicesManager }) {
         }
       }
 
-      const segmentationId = ensureActiveSegmentationId(activeViewportId);
+      let segmentationId = ensureActiveSegmentationId(activeViewportId);
+      if (!segmentationId) {
+        segmentationId = await loadSegmentationForEditing(activeViewportId, modeLabel);
+        if (!segmentationId) return;
+      }
       const accessor = segmentationId
         ? getLabelmapAccessor(segmentationId, activeViewportId, viewport)
         : null;
@@ -958,7 +1037,7 @@ export default function getCommandsModule({ servicesManager }) {
           title: modeLabel,
           message: segmentationId
             ? 'Segmentation trouvée mais ses pixels ne sont pas accessibles (voir console).'
-            : 'Aucune segmentation éditable trouvée pour cette étude.',
+            : "Aucune segmentation chargée. Cliquez sur CHARGER en haut à droite de l'image, puis réessayez.",
           type: 'warning',
           duration: 3500,
         });
@@ -1706,7 +1785,11 @@ export default function getCommandsModule({ servicesManager }) {
         }
       }
 
-      const segmentationId = ensureActiveSegmentationId(activeViewportId);
+      let segmentationId = ensureActiveSegmentationId(activeViewportId);
+      if (!segmentationId) {
+        segmentationId = await loadSegmentationForEditing(activeViewportId, modeLabel);
+        if (!segmentationId) return;
+      }
       const accessor = segmentationId
         ? getLabelmapAccessor(segmentationId, activeViewportId, viewport)
         : null;
@@ -1721,7 +1804,7 @@ export default function getCommandsModule({ servicesManager }) {
           title: modeLabel,
           message: segmentationId
             ? 'Segmentation trouvée mais ses pixels ne sont pas accessibles (voir console).'
-            : 'Aucune segmentation éditable trouvée pour cette étude.',
+            : "Aucune segmentation chargée. Cliquez sur CHARGER en haut à droite de l'image, puis réessayez.",
           type: 'warning',
           duration: 3500,
         });
