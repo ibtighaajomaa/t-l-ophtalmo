@@ -11,8 +11,56 @@ export default function getCommandsModule({ servicesManager }) {
   const usedModesThisSession = new Set(); // 'erase' | 'pencil', reset on save
   let foveaMarkers = [];
   let foveaVisible = false;
-  let eraserBrushSize = 24;
+  // Crayon and Gomme keep independent brush sizes (in canvas pixels). They
+  // persist in localStorage so the doctor's preferred sizes survive reloads.
+  const BRUSH_MIN = 2;
+  const BRUSH_MAX = 120;
+  const BRUSH_STEP = 2;
+  const BRUSH_STORAGE_KEY = 'teleophtalmo.segmentation.brushSizes';
+  const brushPanels = new Map(); // viewportId -> { panel, refresh }
+  const brushSizes = loadBrushSizes();
   let csCore = null;
+
+  function clampBrushSize(value, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(BRUSH_MIN, Math.min(BRUSH_MAX, Math.round(n)));
+  }
+
+  function loadBrushSizes() {
+    const defaults = { pencil: 12, erase: 24 };
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(BRUSH_STORAGE_KEY) || '{}');
+      return {
+        pencil: clampBrushSize(saved.pencil, defaults.pencil),
+        erase: clampBrushSize(saved.erase, defaults.erase),
+      };
+    } catch (_) {
+      return defaults;
+    }
+  }
+
+  function getBrushSize(mode) {
+    return brushSizes[mode] ?? (mode === 'pencil' ? 12 : 24);
+  }
+
+  function setBrushSize(mode, value) {
+    const next = clampBrushSize(value, getBrushSize(mode));
+    if (next === brushSizes[mode]) return next;
+    brushSizes[mode] = next;
+    try {
+      window.localStorage.setItem(BRUSH_STORAGE_KEY, JSON.stringify(brushSizes));
+    } catch (_) {
+      // storage may be unavailable (private mode) -- size still applies for this session
+    }
+    brushPanels.forEach(record => {
+      if (record.mode === mode) record.refresh();
+    });
+    editSessions.forEach(session => {
+      if (session.mode === mode) session.applyRadius?.();
+    });
+    return next;
+  }
   let csTools = null;
 
   async function loadCornerstone() {
@@ -617,6 +665,118 @@ export default function getCommandsModule({ servicesManager }) {
     }
   }
 
+  // Small on-image control (top-left of the viewport) to see and change the
+  // brush size of the active tool without keyboard tricks: [-] [size] [+] and
+  // a slider. Pointer/wheel events are stopped at the panel so clicking the
+  // controls never paints on the image underneath.
+  function showBrushPanel(element, viewportId, mode, modeLabel) {
+    hideBrushPanel(viewportId);
+
+    const accent = mode === 'pencil' ? '#22c55e' : '#e5e7eb';
+    const panel = document.createElement('div');
+    panel.setAttribute('data-brush-panel', mode);
+    Object.assign(panel.style, {
+      position: 'absolute',
+      top: '8px',
+      left: '8px',
+      zIndex: '20',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      padding: '4px 8px',
+      borderRadius: '6px',
+      background: 'rgba(15, 23, 42, 0.88)',
+      border: `1px solid ${accent}`,
+      color: '#f8fafc',
+      font: '12px system-ui, -apple-system, "Segoe UI", sans-serif',
+      cursor: 'default',
+      userSelect: 'none',
+      pointerEvents: 'auto',
+      boxShadow: '0 1px 4px rgba(0,0,0,0.5)',
+    });
+
+    const label = document.createElement('span');
+    label.textContent = modeLabel;
+    Object.assign(label.style, { fontWeight: '600', color: accent, marginRight: '2px' });
+
+    const makeButton = text => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = text;
+      Object.assign(button.style, {
+        width: '22px',
+        height: '22px',
+        lineHeight: '20px',
+        padding: '0',
+        borderRadius: '4px',
+        border: '1px solid rgba(255,255,255,0.35)',
+        background: 'rgba(255,255,255,0.08)',
+        color: '#f8fafc',
+        fontSize: '14px',
+        fontWeight: '700',
+        cursor: 'pointer',
+      });
+      return button;
+    };
+    const minus = makeButton('−');
+    const plus = makeButton('+');
+    minus.title = 'Diminuer la taille';
+    plus.title = 'Augmenter la taille';
+
+    const value = document.createElement('span');
+    Object.assign(value.style, { minWidth: '46px', textAlign: 'center', fontVariantNumeric: 'tabular-nums' });
+
+    const range = document.createElement('input');
+    range.type = 'range';
+    range.min = String(BRUSH_MIN);
+    range.max = String(BRUSH_MAX);
+    range.step = String(BRUSH_STEP);
+    range.title = 'Taille de la brosse';
+    Object.assign(range.style, { width: '90px', cursor: 'pointer', accentColor: accent });
+
+    const refresh = () => {
+      const size = getBrushSize(mode);
+      value.textContent = `${size} px`;
+      if (range.value !== String(size)) range.value = String(size);
+      minus.disabled = size <= BRUSH_MIN;
+      plus.disabled = size >= BRUSH_MAX;
+      minus.style.opacity = minus.disabled ? '0.4' : '1';
+      plus.style.opacity = plus.disabled ? '0.4' : '1';
+    };
+
+    minus.addEventListener('click', () => setBrushSize(mode, getBrushSize(mode) - BRUSH_STEP));
+    plus.addEventListener('click', () => setBrushSize(mode, getBrushSize(mode) + BRUSH_STEP));
+    range.addEventListener('input', () => setBrushSize(mode, range.value));
+
+    [
+      'pointerdown', 'pointermove', 'pointerup', 'pointerleave', 'pointercancel',
+      'mousedown', 'mousemove', 'mouseup', 'click', 'dblclick', 'contextmenu',
+      'wheel', 'touchstart', 'touchmove', 'touchend', 'keydown',
+    ].forEach(type => {
+      panel.addEventListener(type, event => event.stopPropagation());
+    });
+
+    panel.appendChild(label);
+    panel.appendChild(minus);
+    panel.appendChild(value);
+    panel.appendChild(plus);
+    panel.appendChild(range);
+    element.appendChild(panel);
+
+    const record = { panel, refresh, mode };
+    brushPanels.set(viewportId, record);
+    refresh();
+    return record;
+  }
+
+  function hideBrushPanel(viewportId) {
+    const record = brushPanels.get(viewportId);
+    if (record) {
+      record.panel.remove();
+      brushPanels.delete(viewportId);
+    }
+  }
+
   function summarizeActiveSegmentation() {
     const { activeViewportId, viewport } = getActiveViewport();
     const segmentationId = ensureActiveSegmentationId(activeViewportId);
@@ -665,6 +825,7 @@ export default function getCommandsModule({ servicesManager }) {
         existing.cleanup();
         editSessions.delete(activeViewportId);
         hideBrushCursor(activeViewportId);
+        hideBrushPanel(activeViewportId);
         if (wasSameMode) {
           uiNotificationService.show({
             title: modeLabel,
@@ -710,6 +871,8 @@ export default function getCommandsModule({ servicesManager }) {
       const previousCursor = element.style.cursor;
       element.style.cursor = 'none';
       const cursor = showBrushCursor(element, activeViewportId);
+      showBrushPanel(element, activeViewportId, mode, modeLabel);
+      cursor.circle.setAttribute('stroke', mode === 'pencil' ? '#22c55e' : '#ffffff');
 
       const pointFromEvent = event => {
         const rect = element.getBoundingClientRect();
@@ -721,25 +884,27 @@ export default function getCommandsModule({ servicesManager }) {
           const writeValue = mode === 'pencil'
             ? (resolveActiveSegmentIndex(activeViewportId) ?? 1)
             : 0;
-          if (paintAtCanvasPoint(viewport, accessor, x, y, eraserBrushSize, writeValue, strokeDiff)) {
+          if (paintAtCanvasPoint(viewport, accessor, x, y, getBrushSize(mode), writeValue, strokeDiff)) {
             usedModesThisSession.add(mode);
           }
         } catch (err) {
           reportSegmentationError(modeLabel, 'paint', err);
         }
       };
+      const applyRadius = () => {
+        cursor.circle.setAttribute('r', String(Math.max(1, getBrushSize(mode) / 2)));
+      };
       const updateCursor = event => {
         try {
           const [x, y] = pointFromEvent(event);
-          const radius = Math.max(2, eraserBrushSize / 2);
           cursor.circle.setAttribute('cx', String(x));
           cursor.circle.setAttribute('cy', String(y));
-          cursor.circle.setAttribute('r', String(radius));
-          cursor.circle.setAttribute('stroke', mode === 'pencil' ? '#22c55e' : '#ffffff');
+          applyRadius();
         } catch (err) {
           reportSegmentationError(modeLabel, 'cursor', err);
         }
       };
+      applyRadius();
       const pointerDown = event => {
         try {
           drawing = true;
@@ -777,13 +942,7 @@ export default function getCommandsModule({ servicesManager }) {
       };
       const wheel = event => {
         if (!event.altKey) return;
-        eraserBrushSize = Math.max(4, Math.min(96, eraserBrushSize + (event.deltaY > 0 ? -4 : 4)));
-        uiNotificationService.show({
-          title: modeLabel,
-          message: `Taille: ${eraserBrushSize}px`,
-          type: 'info',
-          duration: 900,
-        });
+        setBrushSize(mode, getBrushSize(mode) + (event.deltaY > 0 ? -BRUSH_STEP : BRUSH_STEP));
         event.preventDefault();
       };
 
@@ -795,6 +954,7 @@ export default function getCommandsModule({ servicesManager }) {
 
       editSessions.set(activeViewportId, {
         mode,
+        applyRadius,
         cleanup: () => {
           element.style.cursor = previousCursor;
           element.removeEventListener('pointerdown', pointerDown);
@@ -809,8 +969,8 @@ export default function getCommandsModule({ servicesManager }) {
         title: modeLabel,
         message:
           mode === 'pencil'
-            ? 'Crayon actif. Alt + molette : taille. Bouton "Segment" : choisir la classe à dessiner.'
-            : 'Gomme active. Maintenez Alt + molette pour changer la taille.',
+            ? `Crayon actif (${getBrushSize('pencil')} px). Taille : panneau en haut à gauche ou Alt + molette. Bouton "Segment" : classe à dessiner.`
+            : `Gomme active (${getBrushSize('erase')} px). Taille : panneau en haut à gauche ou Alt + molette.`,
         type: 'success',
         duration: 3000,
       });
