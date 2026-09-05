@@ -426,14 +426,17 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     });
   }
 
-  // Classes of the doctor-drawn segmentation, same indices/labels as the AI
-  // lesion_seg model (microaneurysms 1, hemorrhages 2, hard exudates 3, soft
-  // exudates 4) and same colours as the viewer legend.
+  // Classes of the doctor-drawn segmentation: every type shown in the viewer
+  // legend. Indices 1-4 match the AI lesion_seg model (microaneurysms,
+  // hemorrhages, hard exudates, soft exudates); the others follow.
   const DOCTOR_LESION_SEGMENTS = [
     { index: 1, label: 'Microanévrismes', color: [255, 50, 50, 255] },
     { index: 2, label: 'Hémorragies', color: [59, 130, 246, 255] },
     { index: 3, label: 'Exsudats', color: [255, 255, 255, 255] },
     { index: 4, label: 'Nodules cotonneux', color: [0, 255, 0, 255] },
+    { index: 5, label: 'Néovascularisation', color: [255, 200, 0, 255] },
+    { index: 6, label: 'Disque optique', color: [0, 180, 130, 255] },
+    { index: 7, label: 'Excavation papillaire', color: [255, 80, 160, 255] },
   ];
 
   // Create an empty labelmap on the image currently displayed so the doctor can
