@@ -243,6 +243,17 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'SegmentationWand',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-livewire',
+      label: 'Baguette',
+      tooltip: 'Clic sur une lésion : segmentation automatique par propagation',
+      commands: 'toggleSegmentationWand',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
     id: 'SegmentationActiveSegment',
     uiType: 'ohif.toolButton',
     props: {

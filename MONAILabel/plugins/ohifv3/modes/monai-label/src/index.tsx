@@ -73,6 +73,7 @@ function modeFactory({ modeConfiguration }) {
         'AiAnalysis',
         'SegmentationPencil',
         'SegmentationEraser',
+        'SegmentationWand',
         'SegmentationActiveSegment',
         'SegmentationUndo',
         'SegmentationRedo',
