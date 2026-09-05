@@ -12,6 +12,14 @@ export default function getCommandsModule({ servicesManager }) {
   let foveaMarkers = [];
   let foveaVisible = false;
   let eraserBrushSize = 24;
+  let csCore = null;
+  let csTools = null;
+
+  async function loadCornerstone() {
+    if (!csCore) csCore = await import('@cornerstonejs/core');
+    if (!csTools) csTools = await import('@cornerstonejs/tools');
+    return { csCore, csTools };
+  }
 
   function removeFoveaOverlays() {
     foveaOverlays.forEach(({ element, render, resizeObserver, svg }) => {
@@ -230,6 +238,55 @@ export default function getCommandsModule({ servicesManager }) {
     return segmentationService?.getLabelmapVolume?.(segmentationId);
   }
 
+  // OP/fundus studies are single 2D frames shown in stack viewports, so their
+  // labelmaps are stack-based (representationData.Labelmap.imageIds) and
+  // segmentationService.getLabelmapVolume() returns null for them. Wrap both
+  // storage kinds behind one read/write accessor.
+  function getLabelmapAccessor(segmentationId, viewportId, viewport) {
+    if (!segmentationId) return null;
+    const { segmentationService } = servicesManager.services;
+
+    const volume = getActiveLabelmapVolume(segmentationId);
+    if (volume?.voxelManager) {
+      return {
+        kind: 'volume',
+        segmentationId,
+        getScalarData: () => volume.voxelManager.getCompleteScalarDataArray?.(),
+        setScalarData: data => volume.voxelManager.setCompleteScalarDataArray?.(data),
+      };
+    }
+
+    const segmentation = segmentationService?.getSegmentation?.(segmentationId);
+    const imageIds = segmentation?.representationData?.Labelmap?.imageIds;
+    if (!imageIds?.length || !csCore?.cache) return null;
+
+    let imageId = null;
+    try {
+      imageId = csTools?.segmentation?.state?.getCurrentLabelmapImageIdForViewport?.(
+        viewportId,
+        segmentationId
+      );
+    } catch (_) {
+      imageId = null;
+    }
+    if (!imageId) {
+      const index = viewport?.getCurrentImageIdIndex?.() ?? 0;
+      imageId = imageIds[index] || imageIds[0];
+    }
+    const image = csCore.cache.getImage(imageId);
+    if (!image) return null;
+    const vm = image.voxelManager;
+    return {
+      kind: 'stack',
+      segmentationId,
+      imageId,
+      getScalarData: () => (vm?.getScalarData ? vm.getScalarData() : image.getPixelData?.()),
+      setScalarData: data => {
+        if (vm?.setScalarData) vm.setScalarData(data);
+      },
+    };
+  }
+
   // A study can have several SEG series loaded at once (one per model), each
   // as its own Cornerstone segmentation object with its own generated id --
   // there is no fixed '1'. Resolve the real id/segment the doctor currently
@@ -334,9 +391,8 @@ export default function getCommandsModule({ servicesManager }) {
     });
   }
 
-  function paintAtCanvasPoint(viewport, segmentationId, canvasX, canvasY, brushSize, writeValue, strokeDiff) {
-    const volumeLoadObject = getActiveLabelmapVolume(segmentationId);
-    const scalarData = volumeLoadObject?.voxelManager?.getCompleteScalarDataArray?.();
+  function paintAtCanvasPoint(viewport, accessor, canvasX, canvasY, brushSize, writeValue, strokeDiff) {
+    const scalarData = accessor?.getScalarData?.();
     if (!scalarData) return 0;
 
     const radius = Math.max(2, brushSize / 2);
@@ -359,16 +415,17 @@ export default function getCommandsModule({ servicesManager }) {
     }
 
     if (changed) {
-      volumeLoadObject.voxelManager?.setCompleteScalarDataArray?.(scalarData);
-      notifySegmentationModified(segmentationId);
+      accessor.setScalarData(scalarData);
+      notifySegmentationModified(accessor.segmentationId);
+      viewport?.render?.();
     }
     return changed;
   }
 
-  function ensureOriginalSnapshot(segmentationId) {
+  function ensureOriginalSnapshot(accessor) {
+    const segmentationId = accessor?.segmentationId;
     if (!segmentationId || originalSnapshots.has(segmentationId)) return;
-    const volumeLoadObject = getActiveLabelmapVolume(segmentationId);
-    const scalarData = volumeLoadObject?.voxelManager?.getCompleteScalarDataArray?.();
+    const scalarData = accessor.getScalarData?.();
     if (scalarData) {
       originalSnapshots.set(segmentationId, scalarData.slice());
     }
@@ -382,9 +439,10 @@ export default function getCommandsModule({ servicesManager }) {
     redoStacks.set(segmentationId, []);
   }
 
-  function undoSegmentationEdit(segmentationId) {
+  async function undoSegmentationEdit(segmentationId) {
+    await loadCornerstone();
+    const { activeViewportId, viewport } = getActiveViewport();
     if (!segmentationId) {
-      const { activeViewportId } = getActiveViewport();
       segmentationId = resolveActiveSegmentationId(activeViewportId);
     }
     const stack = segmentationId && undoStacks.get(segmentationId);
@@ -393,24 +451,26 @@ export default function getCommandsModule({ servicesManager }) {
       return;
     }
     const strokeDiff = stack.pop();
-    const volumeLoadObject = getActiveLabelmapVolume(segmentationId);
-    const scalarData = volumeLoadObject?.voxelManager?.getCompleteScalarDataArray?.();
+    const accessor = getLabelmapAccessor(segmentationId, activeViewportId, viewport);
+    const scalarData = accessor?.getScalarData?.();
     if (!scalarData) return;
     const redoDiff = new Map();
     strokeDiff.forEach((oldValue, offset) => {
       redoDiff.set(offset, scalarData[offset]);
       scalarData[offset] = oldValue;
     });
-    volumeLoadObject.voxelManager?.setCompleteScalarDataArray?.(scalarData);
+    accessor.setScalarData(scalarData);
     notifySegmentationModified(segmentationId);
+    viewport?.render?.();
     const redoStack = redoStacks.get(segmentationId) || [];
     redoStack.push(redoDiff);
     redoStacks.set(segmentationId, redoStack);
   }
 
-  function redoSegmentationEdit(segmentationId) {
+  async function redoSegmentationEdit(segmentationId) {
+    await loadCornerstone();
+    const { activeViewportId, viewport } = getActiveViewport();
     if (!segmentationId) {
-      const { activeViewportId } = getActiveViewport();
       segmentationId = resolveActiveSegmentationId(activeViewportId);
     }
     const stack = segmentationId && redoStacks.get(segmentationId);
@@ -419,29 +479,31 @@ export default function getCommandsModule({ servicesManager }) {
       return;
     }
     const redoDiff = stack.pop();
-    const volumeLoadObject = getActiveLabelmapVolume(segmentationId);
-    const scalarData = volumeLoadObject?.voxelManager?.getCompleteScalarDataArray?.();
+    const accessor = getLabelmapAccessor(segmentationId, activeViewportId, viewport);
+    const scalarData = accessor?.getScalarData?.();
     if (!scalarData) return;
     const undoDiff = new Map();
     redoDiff.forEach((newValue, offset) => {
       undoDiff.set(offset, scalarData[offset]);
       scalarData[offset] = newValue;
     });
-    volumeLoadObject.voxelManager?.setCompleteScalarDataArray?.(scalarData);
+    accessor.setScalarData(scalarData);
     notifySegmentationModified(segmentationId);
+    viewport?.render?.();
     const undoStack = undoStacks.get(segmentationId) || [];
     undoStack.push(undoDiff);
     undoStacks.set(segmentationId, undoStack);
   }
 
-  function resetSegmentationToOriginal(segmentationId) {
+  async function resetSegmentationToOriginal(segmentationId) {
+    await loadCornerstone();
+    const { activeViewportId, viewport } = getActiveViewport();
     if (!segmentationId) {
-      const { activeViewportId } = getActiveViewport();
       segmentationId = resolveActiveSegmentationId(activeViewportId);
     }
     const original = segmentationId && originalSnapshots.get(segmentationId);
-    const volumeLoadObject = segmentationId && getActiveLabelmapVolume(segmentationId);
-    const scalarData = volumeLoadObject?.voxelManager?.getCompleteScalarDataArray?.();
+    const accessor = segmentationId && getLabelmapAccessor(segmentationId, activeViewportId, viewport);
+    const scalarData = accessor?.getScalarData?.();
     if (!original || !scalarData) {
       uiNotificationService.show({
         title: 'Réinitialiser',
@@ -452,8 +514,9 @@ export default function getCommandsModule({ servicesManager }) {
       return;
     }
     scalarData.set(original);
-    volumeLoadObject.voxelManager?.setCompleteScalarDataArray?.(scalarData);
+    accessor.setScalarData(scalarData);
     notifySegmentationModified(segmentationId);
+    viewport?.render?.();
     undoStacks.set(segmentationId, []);
     redoStacks.set(segmentationId, []);
     uiNotificationService.show({
@@ -555,11 +618,11 @@ export default function getCommandsModule({ servicesManager }) {
   }
 
   function summarizeActiveSegmentation() {
-    const { activeViewportId } = getActiveViewport();
+    const { activeViewportId, viewport } = getActiveViewport();
     const segmentationId = ensureActiveSegmentationId(activeViewportId);
     if (!segmentationId) return null;
-    const volumeLoadObject = getActiveLabelmapVolume(segmentationId);
-    const scalarData = volumeLoadObject?.voxelManager?.getCompleteScalarDataArray?.();
+    const accessor = getLabelmapAccessor(segmentationId, activeViewportId, viewport);
+    const scalarData = accessor?.getScalarData?.();
     if (!scalarData) return null;
 
     const counts = {};
@@ -585,9 +648,10 @@ export default function getCommandsModule({ servicesManager }) {
     });
   }
 
-  function toggleSegmentationEdit(mode) {
+  async function toggleSegmentationEdit(mode) {
     const modeLabel = mode === 'pencil' ? 'Crayon' : 'Gomme';
     try {
+      await loadCornerstone();
       const { activeViewportId, viewport } = getActiveViewport();
       const element = viewport?.element;
       if (!activeViewportId || !element) {
@@ -613,17 +677,33 @@ export default function getCommandsModule({ servicesManager }) {
       }
 
       const segmentationId = ensureActiveSegmentationId(activeViewportId);
-      if (!segmentationId || !getActiveLabelmapVolume(segmentationId)) {
+      const accessor = segmentationId
+        ? getLabelmapAccessor(segmentationId, activeViewportId, viewport)
+        : null;
+      console.log(
+        '[SegmentationEdit] segmentationId=', segmentationId,
+        'accessor.kind=', accessor?.kind,
+        'imageId=', accessor?.imageId
+      );
+      let initialData = null;
+      try {
+        initialData = accessor ? accessor.getScalarData() : null;
+      } catch (err) {
+        console.warn('[SegmentationEdit] getScalarData failed', err);
+      }
+      if (!accessor || !initialData) {
         uiNotificationService.show({
           title: modeLabel,
-          message: 'Aucune segmentation éditable trouvée pour cette étude.',
+          message: segmentationId
+            ? 'Segmentation trouvée mais ses pixels ne sont pas accessibles (voir console).'
+            : 'Aucune segmentation éditable trouvée pour cette étude.',
           type: 'warning',
           duration: 3500,
         });
         return;
       }
 
-      ensureOriginalSnapshot(segmentationId);
+      ensureOriginalSnapshot(accessor);
 
       let drawing = false;
       let strokeDiff = null;
@@ -641,7 +721,7 @@ export default function getCommandsModule({ servicesManager }) {
           const writeValue = mode === 'pencil'
             ? (resolveActiveSegmentIndex(activeViewportId) ?? 1)
             : 0;
-          if (paintAtCanvasPoint(viewport, segmentationId, x, y, eraserBrushSize, writeValue, strokeDiff)) {
+          if (paintAtCanvasPoint(viewport, accessor, x, y, eraserBrushSize, writeValue, strokeDiff)) {
             usedModesThisSession.add(mode);
           }
         } catch (err) {
@@ -748,6 +828,7 @@ export default function getCommandsModule({ servicesManager }) {
   }
 
   async function saveSegmentationCorrections({ eye } = {}) {
+    await loadCornerstone();
     const summary = summarizeActiveSegmentation();
     const studyInstanceUid = currentStudyInstanceUid();
     if (!summary || !studyInstanceUid) {
