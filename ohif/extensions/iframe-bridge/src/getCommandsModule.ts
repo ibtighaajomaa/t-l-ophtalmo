@@ -281,9 +281,13 @@ export default function getCommandsModule({ servicesManager }) {
   }
 
   function getActiveLabelmapVolume(segmentationId) {
-    if (!segmentationId) return undefined;
+    if (typeof segmentationId !== 'string' || !segmentationId) return undefined;
     const { segmentationService } = servicesManager.services;
-    return segmentationService?.getLabelmapVolume?.(segmentationId);
+    try {
+      return segmentationService?.getLabelmapVolume?.(segmentationId);
+    } catch (_) {
+      return undefined;
+    }
   }
 
   // OP/fundus studies are single 2D frames shown in stack viewports, so their
@@ -291,7 +295,7 @@ export default function getCommandsModule({ servicesManager }) {
   // segmentationService.getLabelmapVolume() returns null for them. Wrap both
   // storage kinds behind one read/write accessor.
   function getLabelmapAccessor(segmentationId, viewportId, viewport) {
-    if (!segmentationId) return null;
+    if (typeof segmentationId !== 'string' || !segmentationId) return null;
     const { segmentationService } = servicesManager.services;
 
     const volume = getActiveLabelmapVolume(segmentationId);
@@ -487,92 +491,139 @@ export default function getCommandsModule({ servicesManager }) {
     redoStacks.set(segmentationId, []);
   }
 
-  async function undoSegmentationEdit(segmentationId) {
+  // Toolbar commands are invoked by OHIF's CommandsManager with an options
+  // *object* as first argument (never a bare id). Accept either shape and
+  // fall back to the segmentation currently active in the viewport.
+  async function resolveEditTarget(options) {
     await loadCornerstone();
     const { activeViewportId, viewport } = getActiveViewport();
+    let segmentationId = null;
+    if (typeof options === 'string') {
+      segmentationId = options;
+    } else if (options && typeof options.segmentationId === 'string') {
+      segmentationId = options.segmentationId;
+    }
     if (!segmentationId) {
-      segmentationId = resolveActiveSegmentationId(activeViewportId);
+      segmentationId = resolveActiveSegmentationId(activeViewportId) ||
+        ensureActiveSegmentationId(activeViewportId);
     }
-    const stack = segmentationId && undoStacks.get(segmentationId);
-    if (!stack || !stack.length) {
-      uiNotificationService.show({ title: 'Annuler', message: 'Rien à annuler.', type: 'info', duration: 1500 });
-      return;
-    }
-    const strokeDiff = stack.pop();
-    const accessor = getLabelmapAccessor(segmentationId, activeViewportId, viewport);
-    const scalarData = accessor?.getScalarData?.();
-    if (!scalarData) return;
-    const redoDiff = new Map();
-    strokeDiff.forEach((oldValue, offset) => {
-      redoDiff.set(offset, scalarData[offset]);
-      scalarData[offset] = oldValue;
-    });
-    accessor.setScalarData(scalarData);
-    notifySegmentationModified(segmentationId);
-    viewport?.render?.();
-    const redoStack = redoStacks.get(segmentationId) || [];
-    redoStack.push(redoDiff);
-    redoStacks.set(segmentationId, redoStack);
+    const accessor = segmentationId
+      ? getLabelmapAccessor(segmentationId, activeViewportId, viewport)
+      : null;
+    return { activeViewportId, viewport, segmentationId, accessor };
   }
 
-  async function redoSegmentationEdit(segmentationId) {
-    await loadCornerstone();
-    const { activeViewportId, viewport } = getActiveViewport();
-    if (!segmentationId) {
-      segmentationId = resolveActiveSegmentationId(activeViewportId);
+  async function undoSegmentationEdit(options) {
+    try {
+      const { viewport, segmentationId, accessor } = await resolveEditTarget(options);
+      const stack = segmentationId && undoStacks.get(segmentationId);
+      if (!stack || !stack.length) {
+        uiNotificationService.show({ title: 'Annuler', message: 'Rien à annuler.', type: 'info', duration: 1500 });
+        return;
+      }
+      const scalarData = accessor?.getScalarData?.();
+      if (!scalarData) {
+        uiNotificationService.show({ title: 'Annuler', message: 'Pixels de la segmentation inaccessibles.', type: 'warning', duration: 2500 });
+        return;
+      }
+      const strokeDiff = stack.pop();
+      const redoDiff = new Map();
+      strokeDiff.forEach((oldValue, offset) => {
+        redoDiff.set(offset, scalarData[offset]);
+        scalarData[offset] = oldValue;
+      });
+      accessor.setScalarData(scalarData);
+      notifySegmentationModified(segmentationId);
+      viewport?.render?.();
+      const redoStack = redoStacks.get(segmentationId) || [];
+      redoStack.push(redoDiff);
+      redoStacks.set(segmentationId, redoStack);
+    } catch (err) {
+      reportSegmentationError('Annuler', 'undo', err);
     }
-    const stack = segmentationId && redoStacks.get(segmentationId);
-    if (!stack || !stack.length) {
-      uiNotificationService.show({ title: 'Rétablir', message: 'Rien à rétablir.', type: 'info', duration: 1500 });
-      return;
-    }
-    const redoDiff = stack.pop();
-    const accessor = getLabelmapAccessor(segmentationId, activeViewportId, viewport);
-    const scalarData = accessor?.getScalarData?.();
-    if (!scalarData) return;
-    const undoDiff = new Map();
-    redoDiff.forEach((newValue, offset) => {
-      undoDiff.set(offset, scalarData[offset]);
-      scalarData[offset] = newValue;
-    });
-    accessor.setScalarData(scalarData);
-    notifySegmentationModified(segmentationId);
-    viewport?.render?.();
-    const undoStack = undoStacks.get(segmentationId) || [];
-    undoStack.push(undoDiff);
-    undoStacks.set(segmentationId, undoStack);
   }
 
-  async function resetSegmentationToOriginal(segmentationId) {
-    await loadCornerstone();
-    const { activeViewportId, viewport } = getActiveViewport();
-    if (!segmentationId) {
-      segmentationId = resolveActiveSegmentationId(activeViewportId);
+  async function redoSegmentationEdit(options) {
+    try {
+      const { viewport, segmentationId, accessor } = await resolveEditTarget(options);
+      const stack = segmentationId && redoStacks.get(segmentationId);
+      if (!stack || !stack.length) {
+        uiNotificationService.show({ title: 'Rétablir', message: 'Rien à rétablir.', type: 'info', duration: 1500 });
+        return;
+      }
+      const scalarData = accessor?.getScalarData?.();
+      if (!scalarData) {
+        uiNotificationService.show({ title: 'Rétablir', message: 'Pixels de la segmentation inaccessibles.', type: 'warning', duration: 2500 });
+        return;
+      }
+      const redoDiff = stack.pop();
+      const undoDiff = new Map();
+      redoDiff.forEach((newValue, offset) => {
+        undoDiff.set(offset, scalarData[offset]);
+        scalarData[offset] = newValue;
+      });
+      accessor.setScalarData(scalarData);
+      notifySegmentationModified(segmentationId);
+      viewport?.render?.();
+      const undoStack = undoStacks.get(segmentationId) || [];
+      undoStack.push(undoDiff);
+      undoStacks.set(segmentationId, undoStack);
+    } catch (err) {
+      reportSegmentationError('Rétablir', 'redo', err);
     }
-    const original = segmentationId && originalSnapshots.get(segmentationId);
-    const accessor = segmentationId && getLabelmapAccessor(segmentationId, activeViewportId, viewport);
-    const scalarData = accessor?.getScalarData?.();
-    if (!original || !scalarData) {
+  }
+
+  async function resetSegmentationToOriginal(options) {
+    try {
+      const { viewport, segmentationId, accessor } = await resolveEditTarget(options);
+      const original = segmentationId && originalSnapshots.get(segmentationId);
+      const scalarData = accessor?.getScalarData?.();
+      console.log(
+        '[SegmentationEdit] reset segmentationId=', segmentationId,
+        'hasSnapshot=', !!original, 'accessor.kind=', accessor?.kind
+      );
+      if (!original) {
+        uiNotificationService.show({
+          title: 'Réinitialiser',
+          message: 'Aucune modification à annuler pour cette segmentation.',
+          type: 'info',
+          duration: 2000,
+        });
+        return;
+      }
+      if (!scalarData) {
+        uiNotificationService.show({
+          title: 'Réinitialiser',
+          message: 'Pixels de la segmentation inaccessibles.',
+          type: 'warning',
+          duration: 2500,
+        });
+        return;
+      }
+      if (original.length !== scalarData.length) {
+        uiNotificationService.show({
+          title: 'Réinitialiser',
+          message: 'La segmentation active ne correspond pas à la version IA mémorisée.',
+          type: 'warning',
+          duration: 3000,
+        });
+        return;
+      }
+      scalarData.set(original);
+      accessor.setScalarData(scalarData);
+      notifySegmentationModified(segmentationId);
+      viewport?.render?.();
+      undoStacks.set(segmentationId, []);
+      redoStacks.set(segmentationId, []);
       uiNotificationService.show({
         title: 'Réinitialiser',
-        message: 'Aucune modification à annuler pour cette segmentation.',
-        type: 'info',
+        message: 'Masque restauré à la version IA initiale.',
+        type: 'success',
         duration: 2000,
       });
-      return;
+    } catch (err) {
+      reportSegmentationError('Réinitialiser', 'reset', err);
     }
-    scalarData.set(original);
-    accessor.setScalarData(scalarData);
-    notifySegmentationModified(segmentationId);
-    viewport?.render?.();
-    undoStacks.set(segmentationId, []);
-    redoStacks.set(segmentationId, []);
-    uiNotificationService.show({
-      title: 'Réinitialiser',
-      message: 'Masque restauré à la version IA initiale.',
-      type: 'success',
-      duration: 2000,
-    });
   }
 
   function segmentsForSegmentation(segmentationId) {
