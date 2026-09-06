@@ -1193,20 +1193,6 @@ export default class AiAnalysisPanel extends Component {
           )}
         </div>
 
-        {hasMedGemmaAdjudication && (
-          <div className="section medGemmaResultCard" aria-label="Résultat MedGemma">
-            <div className="sectionTitle">Résultat MedGemma</div>
-            <div className="medGemmaResultField">
-              <span className="medGemmaResultLabel">Grade :</span>
-              <span className="medGemmaGrade">
-                {adjudication.method === 'doctor_correction'
-                  ? `${this.drGradeLabel(this.normalizeDrGradeKey(adjudication.grade))} (grade médecin)`
-                  : String(adjudication.grade || 'Unknown').replace(/_/g, ' ')}
-              </span>
-            </div>
-          </div>
-        )}
-
         {(dr.grade || clipDr) && (
           <div className="section drClassification">
             <div className="sectionTitle">Classification de la rétinopathie diabétique</div>
