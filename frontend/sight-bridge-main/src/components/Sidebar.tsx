@@ -75,7 +75,7 @@ export function Sidebar() {
 
   return (
     <>
-      <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-slate-200 bg-white">
+      <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-slate-200 bg-white sticky top-0 h-screen overflow-y-auto">
         <div className="flex items-center gap-2 px-5 py-5 border-b border-slate-200">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600 text-white">
             <Eye className="h-5 w-5" />
