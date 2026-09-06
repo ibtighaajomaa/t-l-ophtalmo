@@ -44,6 +44,68 @@ def _dr_grade_index(result):
     return -1
 
 
+DR_GRADE_KEYS = ["no_dr", "mild_npdr", "moderate_npdr", "severe_npdr", "proliferative_dr"]
+DR_GRADE_LABELS_FR = {
+    "no_dr": "Pas de RD",
+    "mild_npdr": "RDNP légère",
+    "moderate_npdr": "RDNP modérée",
+    "severe_npdr": "RDNP sévère",
+    "proliferative_dr": "RD proliférante",
+}
+_DR_GRADE_ALIASES = {
+    "normal": "no_dr", "no dr": "no_dr", "nodr": "no_dr", "0": "no_dr",
+    "mild": "mild_npdr", "mild npdr": "mild_npdr", "1": "mild_npdr",
+    "moderate": "moderate_npdr", "moderate npdr": "moderate_npdr", "2": "moderate_npdr",
+    "severe": "severe_npdr", "severe npdr": "severe_npdr", "3": "severe_npdr",
+    "proliferative": "proliferative_dr", "proliferative dr": "proliferative_dr",
+    "pdr": "proliferative_dr", "4": "proliferative_dr",
+}
+
+
+def normalize_dr_grade(value):
+    """Return the canonical DR grade key for a label, alias or index, else None."""
+    if value is None:
+        return None
+    text = str(value).strip().lower().replace("-", "_")
+    if text in DR_GRADE_KEYS:
+        return text
+    spaced = text.replace("_", " ")
+    return _DR_GRADE_ALIASES.get(spaced) or _DR_GRADE_ALIASES.get(text)
+
+
+def ai_dr_classification(eye):
+    """AI-side classification of one eye, ignoring any doctor-derived adjudication."""
+    if not isinstance(eye, dict):
+        return {}
+    adjudication = eye.get("medgemma_dr_adjudication")
+    if isinstance(adjudication, dict) and adjudication.get("method") == "doctor_correction":
+        adjudication = None
+    return (
+        adjudication
+        or eye.get("selected_dr_classification")
+        or eye.get("dr_classification")
+        or {}
+    )
+
+
+def effective_dr_classification(eye):
+    """Doctor-corrected grade when present, otherwise the AI classification."""
+    if not isinstance(eye, dict):
+        return {}
+    correction = eye.get("doctor_dr_correction")
+    grade = normalize_dr_grade(correction.get("grade")) if isinstance(correction, dict) else None
+    if grade:
+        return {
+            "grade": grade,
+            "grade_index": DR_GRADE_KEYS.index(grade),
+            "label_fr": DR_GRADE_LABELS_FR[grade],
+            "confidence": 1.0,
+            "source": "doctor",
+            "doctor_corrected": True,
+        }
+    return ai_dr_classification(eye)
+
+
 def select_critical_dr_classification(models):
     """Select the highest main grade, using confidence only as a tie-breaker."""
     available = []
@@ -452,7 +514,10 @@ def aggregate_per_eye(per_series, quality_scores=None):
 def worst_dr_confidence(per_eye):
     confidences = []
     for eye in (per_eye or {}).values():
-        dr = eye.get("dr_classification") or {}
+        if not isinstance(eye, dict):
+            continue
+        effective = effective_dr_classification(eye)
+        dr = effective if effective.get("source") == "doctor" else (eye.get("dr_classification") or {})
         try:
             confidences.append(float(dr.get("confidence")))
         except (TypeError, ValueError):

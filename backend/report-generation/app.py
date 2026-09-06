@@ -191,7 +191,23 @@ def format_analysis_data(report_data: dict) -> str:
     vessels = report_data.get("vessels") or {}
     deepseenet = report_data.get("deepseenet_plus") or {}
 
-    if cls:
+    doctor_grade, doctor = _doctor_dr_grade(report_data)
+    if doctor_grade:
+        lines.append("## Classification RD retenue (grade corrigé et validé par le médecin)")
+        lines.append(
+            f"- Grade retenu par le médecin: {DR_GRADE_LABELS_FR.get(doctor_grade, doctor_grade)} ({doctor_grade})"
+        )
+        if doctor.get("ai_grade"):
+            lines.append(
+                f"- Grade IA initial remplacé: {doctor.get('ai_grade')} "
+                f"(confiance IA: {_format_percent(doctor.get('ai_confidence'))})"
+            )
+        lines.append(
+            "- Consigne: ce grade est la conclusion clinique validée par le médecin; "
+            "utilise-le comme grade de rétinopathie diabétique, ne le remets pas en cause "
+            "et ne présente pas les probabilités des classifieurs comme conclusion."
+        )
+    elif cls:
         lines.append("## Classification RD principale")
         lines.append(f"- Grade predit: {cls.get('predicted_grade') or cls.get('grade') or 'N/A'}")
         lines.append(f"- Confiance: {_format_percent(cls.get('confidence'))}")
@@ -287,6 +303,15 @@ def _report_prompt(
         else "Aucune image n'est fournie dans cet appel; base le rapport sur les sorties des modeles."
     )
 
+    doctor_grade, _doctor = _doctor_dr_grade(report_data)
+    doctor_rule = (
+        "- Le grade de rétinopathie diabétique de cet œil a été corrigé et validé par le médecin : "
+        f"{DR_GRADE_LABELS_FR.get(doctor_grade, doctor_grade)}. Utilise exactement ce grade, "
+        "ne le remets pas en cause et ne cite pas les probabilités des classificateurs comme conclusion.\n"
+        if doctor_grade
+        else ""
+    )
+
     normalized_eye = str(eye or "").strip().lower()
     if any(value in normalized_eye for value in ("droit", "right", "od")):
         report_title = "Œil droit :"
@@ -302,7 +327,7 @@ Règles obligatoires :
 - Ta réponse complète doit être uniquement : <RAPPORT>{report_title} [paragraphe]</RAPPORT>
 - N'écris strictement rien avant <RAPPORT>, ni après </RAPPORT> : pas de plan, pas de brouillon, pas de vérification de longueur, pas de réflexion visible.
 - Utilise les sorties des modèles, sans modifier ni inventer les valeurs.
-- Résume les résultats importants sans recopier toutes les données techniques.
+{doctor_rule}- Résume les résultats importants sans recopier toutes les données techniques.
 - N'utilise aucun mot anglais pour désigner les diagnostics ou les stades.
 - N'utilise ni liste, ni tableau, ni sous-rubrique.
 - Ne pose pas un diagnostic absent des données et ne déduis pas un œdème maculaire des seuls exsudats.
@@ -340,12 +365,19 @@ def _summary_prompt(
     for side, label in (("right", "Oeil droit"), ("left", "Oeil gauche")):
         eye_report = (reports_by_eye or {}).get(side) or {}
         eye_data = (per_eye or {}).get(side) or {}
-        dr = (
-            eye_data.get("medgemma_dr_adjudication")
-            or eye_data.get("selected_dr_classification")
-            or eye_data.get("dr_classification")
-            or {}
-        )
+        doctor_grade, _doctor = _doctor_dr_grade(eye_data)
+        if doctor_grade:
+            dr = {
+                "grade": f"{DR_GRADE_LABELS_FR.get(doctor_grade, doctor_grade)} (grade corrigé et validé par le médecin)",
+                "confidence": 1.0,
+            }
+        else:
+            dr = (
+                eye_data.get("medgemma_dr_adjudication")
+                or eye_data.get("selected_dr_classification")
+                or eye_data.get("dr_classification")
+                or {}
+            )
         glaucoma = eye_data.get("glaucoma") or {}
         vessels = eye_data.get("vessels") or {}
         lesions = eye_data.get("lesions") or {}
@@ -405,6 +437,58 @@ Si une mesure ne peut pas etre estimee de maniere fiable, utilise null."""
 
 
 DR_GRADES = ["no_dr", "mild_npdr", "moderate_npdr", "severe_npdr", "proliferative_dr"]
+DR_GRADE_LABELS_FR = {
+    "no_dr": "Pas de RD",
+    "mild_npdr": "RDNP légère",
+    "moderate_npdr": "RDNP modérée",
+    "severe_npdr": "RDNP sévère",
+    "proliferative_dr": "RD proliférante",
+}
+
+
+def _normalize_dr_grade_key(value):
+    if value is None:
+        return None
+    text = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "normal": "no_dr", "mild": "mild_npdr", "moderate": "moderate_npdr",
+        "severe": "severe_npdr", "proliferative": "proliferative_dr", "pdr": "proliferative_dr",
+    }
+    text = aliases.get(text, text)
+    return text if text in DR_GRADES else None
+
+
+def _doctor_dr_grade(report_data):
+    doctor = report_data.get("doctor_dr_correction") if isinstance(report_data, dict) else None
+    if not isinstance(doctor, dict):
+        return None, None
+    grade = _normalize_dr_grade_key(doctor.get("grade"))
+    return (grade, doctor) if grade else (None, None)
+
+
+def _doctor_adjudication(report_data: dict):
+    """When the doctor corrected the grade, it replaces the MedGemma adjudication."""
+    grade, doctor = _doctor_dr_grade(report_data)
+    if not grade:
+        return None
+    return {
+        "status": "supported",
+        "grade": grade,
+        "grade_index": DR_GRADES.index(grade),
+        "confidence": 1.0,
+        "calibration_status": "doctor_validated",
+        "evidence": ["Grade corrigé et validé par le médecin"],
+        "contradictions": [],
+        "limitations": [],
+        "requires_ophthalmologist_review": False,
+        "model_id": MODEL_ID,
+        "method": "doctor_correction",
+        "corrected_by": doctor.get("corrected_by"),
+        "corrected_by_name": doctor.get("corrected_by_name"),
+        "corrected_at": doctor.get("corrected_at"),
+        "ai_grade": doctor.get("ai_grade"),
+        "ai_confidence": doctor.get("ai_confidence"),
+    }
 
 
 def _adjudication_prompt(patient_id, patient_age, eye, report_data) -> str:
@@ -645,7 +729,10 @@ class MedGemmaEngine:
         max_new_tokens: int | None = None,
     ) -> dict:
         working_report_data = dict(report_data or {})
-        if image is None:
+        doctor_adjudication = _doctor_adjudication(working_report_data)
+        if doctor_adjudication is not None:
+            adjudication = doctor_adjudication
+        elif image is None:
             adjudication = _fallback_adjudication(
                 working_report_data,
                 "Image couleur indisponible pour l'arbitrage multimodal MedGemma",

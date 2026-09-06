@@ -3,6 +3,14 @@ import PropTypes from 'prop-types';
 import './AiAnalysisPanel.css';
 import MonaiLabelClient from '../services/MonaiLabelClient';
 
+const DR_GRADE_OPTIONS = [
+  { key: 'no_dr', label: 'Pas de RD', color: '#4caf66', aliases: ['no dr', 'no_dr', '0'] },
+  { key: 'mild_npdr', label: 'RDNP légère', color: '#8bc34a', aliases: ['mild npdr', 'mild_npdr', '1'] },
+  { key: 'moderate_npdr', label: 'RDNP modérée', color: '#f2b705', aliases: ['moderate npdr', 'moderate_npdr', '2'] },
+  { key: 'severe_npdr', label: 'RDNP sévère', color: '#ff7a1a', aliases: ['severe npdr', 'severe_npdr', '3'] },
+  { key: 'proliferative_dr', label: 'RD proliférante', color: '#ef4444', aliases: ['proliferative dr', 'proliferative_dr', '4'] },
+];
+
 export default class AiAnalysisPanel extends Component {
   static propTypes = {
     commandsManager: PropTypes.any,
@@ -30,6 +38,9 @@ export default class AiAnalysisPanel extends Component {
       savingReport: false,
       savingSegmentationCorrection: false,
       expandedDrModelsByEye: { right: false, left: false },
+      pendingDrGradeByEye: { right: null, left: null },
+      showAiProbabilitiesByEye: { right: false, left: false },
+      savingDrCorrection: false,
     };
     this.serverURI = (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1') + '/monai/';
   }
@@ -409,6 +420,105 @@ export default class AiAnalysisPanel extends Component {
     }
   };
 
+  normalizeDrGradeKey = value => {
+    const text = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    const aliases = {
+      normal: 'no_dr', mild: 'mild_npdr', moderate: 'moderate_npdr', severe: 'severe_npdr',
+      proliferative: 'proliferative_dr', pdr: 'proliferative_dr',
+      '0': 'no_dr', '1': 'mild_npdr', '2': 'moderate_npdr', '3': 'severe_npdr', '4': 'proliferative_dr',
+    };
+    const key = aliases[text] || text;
+    return DR_GRADE_OPTIONS.some(option => option.key === key) ? key : null;
+  };
+
+  drGradeLabel = key => DR_GRADE_OPTIONS.find(option => option.key === key)?.label || key || 'Inconnu';
+
+  selectDrGrade = (side, key) => {
+    if (!side) return;
+    const report = this.getReportForSide(side) || {};
+    const correctedKey = this.normalizeDrGradeKey(report.doctor_dr_correction?.grade);
+    this.setState(state => ({
+      pendingDrGradeByEye: {
+        ...state.pendingDrGradeByEye,
+        [side]: key === correctedKey ? null : key,
+      },
+    }));
+  };
+
+  cancelDrGradeSelection = side => {
+    this.setState(state => ({
+      pendingDrGradeByEye: { ...state.pendingDrGradeByEye, [side]: null },
+    }));
+  };
+
+  toggleAiProbabilities = side => {
+    this.setState(state => ({
+      showAiProbabilitiesByEye: {
+        ...state.showAiProbabilitiesByEye,
+        [side]: !state.showAiProbabilitiesByEye?.[side],
+      },
+    }));
+  };
+
+  saveDrGradeCorrection = async (side, grade) => {
+    const { uiNotificationService } = this.props.servicesManager.services;
+    const viewportInfo = this.getActiveViewportInfo();
+    const studyUid = viewportInfo?.displaySet?.StudyInstanceUID;
+    if (!studyUid) {
+      this.setState({ reportError: "Étude introuvable dans le viewport actif." });
+      return;
+    }
+    this.setState({ savingDrCorrection: true, reportError: null, reportGenerationError: '' });
+    try {
+      const token = this.getAuthToken();
+      const response = await fetch('/api/exams/dr-grade-correction/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ study_instance_uid: studyUid, eye: side, grade: grade || null }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      const normalized = this.normalizeAnalysis(data.analysis || data);
+      this.setState(state => ({
+        ...normalized,
+        activeEye: side,
+        savingDrCorrection: false,
+        pendingDrGradeByEye: { ...state.pendingDrGradeByEye, [side]: null },
+        showAiProbabilitiesByEye: { ...state.showAiProbabilitiesByEye, [side]: false },
+        reportGenerationStatus:
+          data.report_generation_status === 'not_queued' ? state.reportGenerationStatus : 'pending',
+        reportGenerationError: '',
+        savedMedicalReportHtml: '',
+        summaryReportResult: null,
+      }));
+      uiNotificationService.show({
+        title: 'Grade RD',
+        message: grade
+          ? `Grade corrigé : ${this.drGradeLabel(grade)}. Rapport en cours de régénération…`
+          : 'Grade IA rétabli. Rapport en cours de régénération…',
+        type: 'success',
+        duration: 5000,
+      });
+      this.pollSavedAnalysis();
+    } catch (err) {
+      this.setState({
+        savingDrCorrection: false,
+        reportError: err.message || 'Échec de la correction du grade.',
+      });
+      uiNotificationService.show({
+        title: 'Grade RD',
+        message: err.message || 'Échec de la correction du grade.',
+        type: 'error',
+        duration: 6000,
+      });
+    }
+  };
+
   saveSegmentationCorrectionAndRegenerate = async () => {
     const { uiNotificationService } = this.props.servicesManager.services;
     const activeEye = this.state.activeEye;
@@ -599,13 +709,7 @@ export default class AiAnalysisPanel extends Component {
   };
 
   getDrProbabilities = (dr, report = {}) => {
-    const classes = [
-      { label: 'Pas de RD', color: '#4caf66', aliases: ['no dr', 'no_dr', '0'] },
-      { label: 'RDNP légère', color: '#8bc34a', aliases: ['mild npdr', 'mild_npdr', '1'] },
-      { label: 'RDNP modérée', color: '#f2b705', aliases: ['moderate npdr', 'moderate_npdr', '2'] },
-      { label: 'RDNP sévère', color: '#ff7a1a', aliases: ['severe npdr', 'severe_npdr', '3'] },
-      { label: 'RD proliférante', color: '#ef4444', aliases: ['proliferative dr', 'proliferative_dr', '4'] },
-    ];
+    const classes = DR_GRADE_OPTIONS;
     const normalizeLabel = label =>
       String(label || '')
         .trim()
@@ -646,7 +750,7 @@ export default class AiAnalysisPanel extends Component {
     });
   };
 
-  renderDrModelCard = (title, model, report = {}) => {
+  renderDrModelCard = (title, model, report = {}, side = null) => {
     if (!model) return null;
     const available = model.status === 'ok';
     const confidence = Number(model.confidence) || 0;
@@ -654,6 +758,26 @@ export default class AiAnalysisPanel extends Component {
       Math.max(0, Math.min(1, confidence > 1 ? confidence / 100 : confidence)) * 100
     );
     const probabilities = this.getDrProbabilities(model, report);
+    const correction =
+      report?.doctor_dr_correction && typeof report.doctor_dr_correction === 'object'
+        ? report.doctor_dr_correction
+        : null;
+    const correctedKey = correction ? this.normalizeDrGradeKey(correction.grade) : null;
+    const corrected = !!correctedKey;
+    const canEdit = !!side;
+    const pendingKey = canEdit ? this.state.pendingDrGradeByEye?.[side] || null : null;
+    const checkedKey = pendingKey || correctedKey;
+    const saving = !!this.state.savingDrCorrection;
+    const showAiBars = !corrected || !!this.state.showAiProbabilitiesByEye?.[side];
+    const aiGradeKey = correction ? this.normalizeDrGradeKey(correction.ai_grade) : null;
+    const aiGradeLabel = aiGradeKey
+      ? this.drGradeLabel(aiGradeKey)
+      : correction?.ai_grade || model.grade || 'Inconnu';
+    const aiConfidenceRaw = Number(correction?.ai_confidence);
+    const aiConfidenceText = Number.isFinite(aiConfidenceRaw)
+      ? ` ${Math.round((aiConfidenceRaw > 1 ? aiConfidenceRaw / 100 : aiConfidenceRaw) * 100)} %`
+      : '';
+    const pendingColor = DR_GRADE_OPTIONS.find(option => option.key === pendingKey)?.color || '#38bdf8';
 
     return (
       <div
@@ -661,54 +785,143 @@ export default class AiAnalysisPanel extends Component {
           flex: '1 1 220px',
           minWidth: 0,
           padding: '10px',
-          border: `1px solid ${available ? '#0ea5e9' : '#64748b'}`,
+          border: `1px solid ${corrected ? '#f59e0b' : available ? '#0ea5e9' : '#64748b'}`,
           borderRadius: '7px',
           background: '#0f172a',
         }}
       >
         {available ? (
           <>
-            <div className="drPrediction">
-              <span className="label">Grade</span>
-              <span className="gradeValue">
-                {probabilities.find(item => item.isPredicted)?.label || model.grade || 'Inconnu'}
-              </span>
-              <span className="drPredictionPercentage">{confidencePercentage}%</span>
-            </div>
-            <div className="drProbabilityList">
-              {probabilities.map(item => (
-                <div className="drProbabilityRow" key={`${title}-${item.label}`}>
-                  <span className={`drProbabilityLabel ${item.isPredicted ? 'predicted' : ''}`}>
-                    {item.label}
-                  </span>
-                  <div
-                    className="drProbabilityTrack"
-                    role="progressbar"
-                    aria-label={`${title} ${item.label}`}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={item.percentage}
-                    style={{
-                      backgroundColor: `${item.color}4d`,
-                      boxShadow: `inset 0 0 0 1px ${item.color}80`,
-                    }}
-                  >
-                    <div
-                      className={`drProbabilityFill ${item.isPredicted ? 'predicted' : ''}`}
-                      style={{
-                        width: `${item.percentage}%`,
-                        minWidth: item.percentage > 0 ? '3px' : '6px',
-                        backgroundColor: item.color,
-                      }}
-                    />
-                  </div>
-                  <span className={`drProbabilityPercentage ${item.isPredicted ? 'predicted' : ''}`}>
-                    {item.percentage}%
-                  </span>
+            {corrected ? (
+              <>
+                <div className="drPrediction drPredictionCorrected">
+                  <span className="label">Grade</span>
+                  <span className="gradeValue">{this.drGradeLabel(correctedKey)}</span>
+                  <span className="drCorrectedBadge">✓ Corrigé par le médecin</span>
                 </div>
-              ))}
+                <div className="drAiGradeNote">
+                  IA : {aiGradeLabel}{aiConfidenceText}
+                  {correction.corrected_by_name ? ` · ${correction.corrected_by_name}` : ''}
+                </div>
+              </>
+            ) : (
+              <div className="drPrediction">
+                <span className="label">Grade</span>
+                <span className="gradeValue">
+                  {probabilities.find(item => item.isPredicted)?.label || model.grade || 'Inconnu'}
+                </span>
+                <span className="drPredictionPercentage">{confidencePercentage}%</span>
+              </div>
+            )}
+            <div className="drProbabilityList">
+              {probabilities.map(item => {
+                const isChecked = canEdit && item.key === checkedKey;
+                const isRetained = corrected && item.key === correctedKey;
+                return (
+                  <div
+                    className={`drProbabilityRow ${corrected && !showAiBars ? 'corrected' : ''} ${isRetained ? 'retained' : ''}`}
+                    key={`${title}-${item.label}`}
+                  >
+                    {canEdit && (
+                      <input
+                        type="checkbox"
+                        role="radio"
+                        className="drGradeCheckbox"
+                        aria-checked={isChecked}
+                        aria-label={`Corriger le grade : ${item.label}`}
+                        title={`Corriger le grade en « ${item.label} »`}
+                        checked={isChecked}
+                        disabled={saving}
+                        onChange={() => this.selectDrGrade(side, item.key)}
+                        style={{ accentColor: item.color }}
+                      />
+                    )}
+                    <span
+                      className={`drProbabilityLabel ${item.isPredicted && !corrected ? 'predicted' : ''} ${isRetained ? 'retained' : ''}`}
+                    >
+                      {item.label}
+                    </span>
+                    {showAiBars ? (
+                      <>
+                        <div
+                          className="drProbabilityTrack"
+                          role="progressbar"
+                          aria-label={`${title} ${item.label}`}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={item.percentage}
+                          style={{
+                            backgroundColor: `${item.color}4d`,
+                            boxShadow: `inset 0 0 0 1px ${item.color}80`,
+                            opacity: corrected ? 0.55 : 1,
+                          }}
+                        >
+                          <div
+                            className={`drProbabilityFill ${item.isPredicted ? 'predicted' : ''}`}
+                            style={{
+                              width: `${item.percentage}%`,
+                              minWidth: item.percentage > 0 ? '3px' : '6px',
+                              backgroundColor: item.color,
+                            }}
+                          />
+                        </div>
+                        <span
+                          className={`drProbabilityPercentage ${item.isPredicted && !corrected ? 'predicted' : ''}`}
+                          style={{ opacity: corrected ? 0.55 : 1 }}
+                        >
+                          {item.percentage}%
+                        </span>
+                      </>
+                    ) : (
+                      <span
+                        className="drCorrectedMark"
+                        style={{ color: isRetained ? item.color : 'transparent' }}
+                      >
+                        {isRetained ? 'grade retenu' : '·'}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-
+            {canEdit && pendingKey && (
+              <div className="drGradeActionBar">
+                <span className="drGradeActionLabel">
+                  Grade médecin : <strong style={{ color: pendingColor }}>{this.drGradeLabel(pendingKey)}</strong>
+                </span>
+                <button
+                  type="button"
+                  className="drGradeButton primary"
+                  disabled={saving}
+                  onClick={() => this.saveDrGradeCorrection(side, pendingKey)}
+                >
+                  {saving ? 'Enregistrement…' : 'Enregistrer et régénérer le rapport'}
+                </button>
+                <button
+                  type="button"
+                  className="drGradeButton"
+                  disabled={saving}
+                  onClick={() => this.cancelDrGradeSelection(side)}
+                >
+                  Annuler
+                </button>
+              </div>
+            )}
+            {canEdit && corrected && !pendingKey && (
+              <div className="drGradeLinks">
+                <button type="button" className="drGradeLink" onClick={() => this.toggleAiProbabilities(side)}>
+                  {showAiBars ? 'Masquer les probabilités IA' : 'Afficher les probabilités IA'}
+                </button>
+                <button
+                  type="button"
+                  className="drGradeLink danger"
+                  disabled={saving}
+                  onClick={() => this.saveDrGradeCorrection(side, null)}
+                >
+                  Rétablir le grade IA
+                </button>
+              </div>
+            )}
           </>
         ) : (
           <div style={{ color: '#fbbf24', fontSize: '12px' }}>
@@ -938,8 +1151,11 @@ export default class AiAnalysisPanel extends Component {
       classifierGrades.some(modelGrade => modelGrade === adjudicatedGrade);
     const classifiersAgree = classifierGrades.length > 1 &&
       classifierGrades.every(modelGrade => modelGrade === classifierGrades[0]);
+    const isDoctorAdjudication = adjudication?.method === 'doctor_correction';
     const concordanceLabel = !hasMedGemmaAdjudication
       ? null
+      : isDoctorAdjudication
+        ? 'Grade validé par le médecin'
       : !hasMultimodalMedGemma
         ? 'MedGemma indisponible — résultat de repli'
         : medGemmaMatches && classifiersAgree
@@ -947,7 +1163,7 @@ export default class AiAnalysisPanel extends Component {
           : medGemmaMatches
             ? 'Concordance partielle'
             : 'Discordance';
-    const reviewRequired = hasMedGemmaAdjudication && (
+    const reviewRequired = hasMedGemmaAdjudication && !isDoctorAdjudication && (
       adjudication.requires_ophthalmologist_review ||
       adjudication.status !== 'supported' ||
       !hasMultimodalMedGemma ||
@@ -970,7 +1186,7 @@ export default class AiAnalysisPanel extends Component {
       <div className="eyeReportContent">
         <div className="reportTitle">
           Rapport d'analyse par AI{eyeLabel ? ` (${eyeLabel})` : ''}
-          {lesions.doctor_corrected && (
+          {(lesions.doctor_corrected || report.doctor_dr_correction) && (
             <span className="lesionCorrectionBadge" style={{ marginLeft: '8px' }}>
               ✓ Confirmé par le médecin
             </span>
@@ -983,7 +1199,9 @@ export default class AiAnalysisPanel extends Component {
             <div className="medGemmaResultField">
               <span className="medGemmaResultLabel">Grade :</span>
               <span className="medGemmaGrade">
-                {String(adjudication.grade || 'Unknown').replace(/_/g, ' ')}
+                {adjudication.method === 'doctor_correction'
+                  ? `${this.drGradeLabel(this.normalizeDrGradeKey(adjudication.grade))} (grade médecin)`
+                  : String(adjudication.grade || 'Unknown').replace(/_/g, ' ')}
               </span>
             </div>
           </div>
@@ -995,10 +1213,10 @@ export default class AiAnalysisPanel extends Component {
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
               {modelEntries.map(([key, title, model]) => (
                 <React.Fragment key={key}>
-                  {this.renderDrModelCard(title, model, report)}
+                  {this.renderDrModelCard(title, model, report, side)}
                 </React.Fragment>
               ))}
-              {hasMedGemmaAdjudication && !exactGradeMatch && (
+              {hasMedGemmaAdjudication && !exactGradeMatch && !report.doctor_dr_correction && (
                 <div style={{ width: '100%', color: '#fbbf24', fontSize: '10px' }}>
                   Aucun classifieur ne prédit exactement le grade proposé par MedGemma.
                 </div>

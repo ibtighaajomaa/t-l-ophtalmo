@@ -27,7 +27,14 @@ from .serializers import (
 from users.authentication import KeycloakAuthentication
 from .dicom_patient import patient_metadata
 from .orthanc_origin import resolve_study_origin
-from .analysis_utils import aggregate_per_eye
+from .analysis_utils import (
+    DR_GRADE_KEYS,
+    DR_GRADE_LABELS_FR,
+    _dr_grade_index,
+    aggregate_per_eye,
+    ai_dr_classification,
+    normalize_dr_grade,
+)
 from .dmi_integration import (
     audit_dmi_call,
     build_compte_rendu_payload,
@@ -1531,6 +1538,139 @@ def save_segmentation_corrections(request):
         'study_instance_uid': study_uid,
         'doctor_corrected_segmentation': correction,
         'analysis': report_json.get('per_eye') or report_json,
+    })
+
+
+def _doctor_identity(request):
+    user = getattr(request, 'user', None)
+    if not user or not getattr(user, 'is_authenticated', False):
+        return None, None
+    username = getattr(user, 'username', None) or getattr(user, 'email', None) or str(user)
+    full_name = ''
+    getter = getattr(user, 'get_full_name', None)
+    if callable(getter):
+        try:
+            full_name = getter() or ''
+        except Exception:
+            full_name = ''
+    return username, (full_name or username)
+
+
+@api_view(['POST'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([AllowAny])
+def save_dr_grade_correction(request):
+    """The doctor overrides (grade) or restores (grade=null) the DR grade of one eye.
+
+    The AI outputs are never modified; the correction is stored next to them and
+    the MedGemma report is regenerated with the doctor's grade as final grade.
+    """
+    study_uid = request.data.get('study_instance_uid')
+    if not study_uid:
+        return Response({'error': 'study_instance_uid is required'}, status=status.HTTP_400_BAD_REQUEST)
+    eye = str(request.data.get('eye') or '').strip().lower()
+    if eye not in ('right', 'left'):
+        return Response({'error': "eye must be 'right' or 'left'"}, status=status.HTTP_400_BAD_REQUEST)
+    raw_grade = request.data.get('grade')
+    grade = None
+    if raw_grade not in (None, ''):
+        grade = normalize_dr_grade(raw_grade)
+        if grade is None:
+            return Response({'error': f'Unsupported DR grade: {raw_grade}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    report = AnalysisReport.objects.filter(series_instance_uid=study_uid).first()
+    if not report:
+        return Response({'error': 'Analysis not found'}, status=status.HTTP_404_NOT_FOUND)
+    report_json = report.report_json or {}
+    per_eye = report_json.get('per_eye')
+    if not isinstance(per_eye, dict) or not isinstance(per_eye.get(eye), dict):
+        return Response({'error': f'No analysis data for eye {eye}'}, status=status.HTTP_404_NOT_FOUND)
+
+    eye_report = dict(per_eye[eye])
+    username, display_name = _doctor_identity(request)
+    now_iso = datetime.utcnow().isoformat() + 'Z'
+    history = report_json.get('doctor_dr_corrections')
+    if not isinstance(history, list):
+        history = []
+    report_json['doctor_dr_corrections'] = history
+
+    if grade is None:
+        previous = eye_report.pop('doctor_dr_correction', None)
+        adjudication = eye_report.get('medgemma_dr_adjudication')
+        if isinstance(adjudication, dict) and adjudication.get('method') == 'doctor_correction':
+            eye_report['medgemma_dr_adjudication'] = None
+            eye_report['closest_dr_model'] = None
+        history.append({
+            'eye': eye,
+            'action': 'revert_to_ai',
+            'previous': previous,
+            'by': username,
+            'by_name': display_name,
+            'at': now_iso,
+        })
+        correction = None
+    else:
+        existing = eye_report.get('doctor_dr_correction')
+        existing = existing if isinstance(existing, dict) else {}
+        ai_dr = ai_dr_classification(eye_report)
+        ai_grade = existing.get('ai_grade') or normalize_dr_grade(ai_dr.get('grade')) or ai_dr.get('grade')
+        ai_confidence = existing.get('ai_confidence') if existing else ai_dr.get('confidence')
+        correction = {
+            'grade': grade,
+            'grade_index': DR_GRADE_KEYS.index(grade),
+            'label_fr': DR_GRADE_LABELS_FR[grade],
+            'ai_grade': ai_grade,
+            'ai_grade_index': _dr_grade_index({'grade': ai_grade}) if ai_grade else None,
+            'ai_confidence': ai_confidence,
+            'corrected_by': username,
+            'corrected_by_name': display_name,
+            'corrected_at': now_iso,
+            'comment': str(request.data.get('comment') or '')[:500],
+        }
+        eye_report['doctor_dr_correction'] = correction
+        history.append({'eye': eye, 'action': 'set', **correction})
+
+    per_eye[eye] = eye_report
+    report_json['per_eye'] = per_eye
+    has_grade_correction = any(
+        isinstance(item, dict) and isinstance(item.get('doctor_dr_correction'), dict)
+        for item in per_eye.values()
+    )
+    has_seg_correction = bool(report_json.get('doctor_segmentation_corrections'))
+    report_json['status'] = 'DOCTOR_CORRECTED' if (has_grade_correction or has_seg_correction) else 'AI_ANALYZED'
+    report_json['report_generation_status'] = 'pending'
+    report_json['report_generation_error'] = ''
+    report.report_json = report_json
+    report.save(update_fields=['report_json'])
+
+    exam = Exam.objects.filter(study_instance_uid=study_uid).first()
+    task_id = None
+    if exam:
+        exam.report_generation_status = Exam.ReportGenerationStatus.PENDING
+        exam.report_generation_error = ''
+        exam.report_generated_at = None
+        exam.save(update_fields=[
+            'report_generation_status',
+            'report_generation_error',
+            'report_generated_at',
+            'updated_at',
+        ])
+        from .tasks import tache_generate_ai_report
+
+        async_result = tache_generate_ai_report.apply_async(
+            args=[exam.id, report.series_instance_uid, True],
+            queue='reports',
+        )
+        task_id = async_result.id
+
+    return Response({
+        'status': 'saved',
+        'study_instance_uid': study_uid,
+        'eye': eye,
+        'doctor_dr_correction': correction,
+        'analysis': per_eye,
+        'task_id': task_id,
+        'report_generation_status': 'pending' if exam else 'not_queued',
     })
 
 

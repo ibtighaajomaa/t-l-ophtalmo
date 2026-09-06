@@ -903,13 +903,24 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
         existing_adjudication = (
             (existing_eye.get("report_json") or {}).get("medgemma_dr_adjudication") or {}
         )
+        doctor_correction = eye_report.get("doctor_dr_correction") if isinstance(eye_report, dict) else None
+        doctor_grade = doctor_correction.get("grade") if isinstance(doctor_correction, dict) else None
+        existing_method = existing_adjudication.get("method")
+        # Reuse a previously generated eye report only when it already reflects the
+        # current decision: the AI two-stage result when the doctor did not correct
+        # the grade, or a doctor-correction result carrying the same grade.
+        existing_matches_decision = (
+            (
+                bool(doctor_grade)
+                and existing_method == "doctor_correction"
+                and existing_adjudication.get("grade") == doctor_grade
+            )
+            or (not doctor_grade and existing_method == "medgemma_multimodal_two_stage")
+        )
         if (
             existing_eye.get("status") == "generated"
             and existing_eye.get("report_text")
-            and (
-                not force
-                or existing_adjudication.get("method") == "medgemma_multimodal_two_stage"
-            )
+            and (not force or existing_matches_decision)
         ):
             eye_texts.append(f"{eye_label}:\n{existing_eye['report_text']}")
             continue
