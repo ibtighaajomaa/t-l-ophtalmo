@@ -7,6 +7,7 @@ services:
   postgres-keycloak:
     image: postgres:15
     container_name: postgres-keycloak
+    restart: unless-stopped
     environment:
       POSTGRES_DB: keycloak
       POSTGRES_USER: keycloak
@@ -71,6 +72,7 @@ services:
   postgres-django:
     image: postgres:15
     container_name: postgres-django
+    restart: unless-stopped
     environment:
       POSTGRES_DB: teleophtalmo
       POSTGRES_USER: django
