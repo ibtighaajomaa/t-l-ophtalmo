@@ -28,11 +28,15 @@ from users.authentication import KeycloakAuthentication
 from .dicom_patient import patient_metadata
 from .orthanc_origin import resolve_study_origin
 from .analysis_utils import (
+    DEEPSEENET_FACTORS,
+    DEEPSEENET_LABELS_FR,
     DR_GRADE_KEYS,
     DR_GRADE_LABELS_FR,
     _dr_grade_index,
     aggregate_per_eye,
     ai_dr_classification,
+    calculate_deepseenet_patient_score,
+    normalize_deepseenet_label,
     normalize_dr_grade,
 )
 from .dmi_integration import (
@@ -1668,6 +1672,148 @@ def save_dr_grade_correction(request):
         'study_instance_uid': study_uid,
         'eye': eye,
         'doctor_dr_correction': correction,
+        'analysis': per_eye,
+        'task_id': task_id,
+        'report_generation_status': 'pending' if exam else 'not_queued',
+    })
+
+
+@api_view(['POST'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([AllowAny])
+def save_dmla_correction(request):
+    """The doctor overrides (label) or restores (label=null) one DeepSeeNet+ factor of one eye.
+
+    AI predictions are kept untouched under deepseenet_plus[factor]; the correction lives in
+    deepseenet_plus.doctor_corrections[factor]. The AREDS score is recomputed from the
+    effective values and the MedGemma report is regenerated.
+    """
+    study_uid = request.data.get('study_instance_uid')
+    if not study_uid:
+        return Response({'error': 'study_instance_uid is required'}, status=status.HTTP_400_BAD_REQUEST)
+    eye = str(request.data.get('eye') or '').strip().lower()
+    if eye not in ('right', 'left'):
+        return Response({'error': "eye must be 'right' or 'left'"}, status=status.HTTP_400_BAD_REQUEST)
+    factor = str(request.data.get('factor') or '').strip().lower()
+    if factor not in DEEPSEENET_FACTORS:
+        return Response({'error': f'Unsupported DMLA factor: {factor}'}, status=status.HTTP_400_BAD_REQUEST)
+    raw_label = request.data.get('label')
+    label = None
+    if raw_label not in (None, ''):
+        label = normalize_deepseenet_label(factor, raw_label)
+        if label is None:
+            return Response({'error': f'Unsupported value for {factor}: {raw_label}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    report = AnalysisReport.objects.filter(series_instance_uid=study_uid).first()
+    if not report:
+        return Response({'error': 'Analysis not found'}, status=status.HTTP_404_NOT_FOUND)
+    report_json = report.report_json or {}
+    per_eye = report_json.get('per_eye')
+    if not isinstance(per_eye, dict) or not isinstance(per_eye.get(eye), dict):
+        return Response({'error': f'No analysis data for eye {eye}'}, status=status.HTTP_404_NOT_FOUND)
+    eye_report = dict(per_eye[eye])
+    deepseenet = eye_report.get('deepseenet_plus')
+    if not isinstance(deepseenet, dict):
+        return Response({'error': f'No DeepSeeNet+ result for eye {eye}'}, status=status.HTTP_404_NOT_FOUND)
+    deepseenet = dict(deepseenet)
+    corrections = deepseenet.get('doctor_corrections')
+    corrections = dict(corrections) if isinstance(corrections, dict) else {}
+
+    username, display_name = _doctor_identity(request)
+    now_iso = datetime.utcnow().isoformat() + 'Z'
+    history = report_json.get('doctor_dmla_corrections')
+    if not isinstance(history, list):
+        history = []
+    report_json['doctor_dmla_corrections'] = history
+
+    if label is None:
+        previous = corrections.pop(factor, None)
+        history.append({
+            'eye': eye,
+            'factor': factor,
+            'action': 'revert_to_ai',
+            'previous': previous,
+            'by': username,
+            'by_name': display_name,
+            'at': now_iso,
+        })
+        correction = None
+    else:
+        ai = deepseenet.get(factor) if isinstance(deepseenet.get(factor), dict) else {}
+        existing = corrections.get(factor) if isinstance(corrections.get(factor), dict) else {}
+        correction = {
+            'factor': factor,
+            'label': label,
+            'class_index': DEEPSEENET_FACTORS[factor].index(label),
+            'label_fr': DEEPSEENET_LABELS_FR[factor][label],
+            'ai_label': existing.get('ai_label') or ai.get('label'),
+            'ai_probability': existing.get('ai_probability') if existing else ai.get('probability'),
+            'corrected_by': username,
+            'corrected_by_name': display_name,
+            'corrected_at': now_iso,
+        }
+        corrections[factor] = correction
+        history.append({'eye': eye, 'action': 'set', **correction})
+
+    if corrections:
+        deepseenet['doctor_corrections'] = corrections
+    else:
+        deepseenet.pop('doctor_corrections', None)
+    eye_report['deepseenet_plus'] = deepseenet
+    per_eye[eye] = eye_report
+
+    patient_summary = calculate_deepseenet_patient_score(per_eye)
+    for item in per_eye.values():
+        if isinstance(item, dict) and isinstance(item.get('deepseenet_plus'), dict):
+            item['deepseenet_plus']['patient_summary'] = patient_summary
+    report_json['per_eye'] = per_eye
+
+    has_dr_correction = any(
+        isinstance(item, dict) and isinstance(item.get('doctor_dr_correction'), dict)
+        for item in per_eye.values()
+    )
+    has_dmla_correction = any(
+        isinstance(item, dict)
+        and isinstance(item.get('deepseenet_plus'), dict)
+        and item['deepseenet_plus'].get('doctor_corrections')
+        for item in per_eye.values()
+    )
+    has_seg_correction = bool(report_json.get('doctor_segmentation_corrections'))
+    report_json['status'] = (
+        'DOCTOR_CORRECTED' if (has_dr_correction or has_dmla_correction or has_seg_correction) else 'AI_ANALYZED'
+    )
+    report_json['report_generation_status'] = 'pending'
+    report_json['report_generation_error'] = ''
+    report.report_json = report_json
+    report.save(update_fields=['report_json'])
+
+    exam = Exam.objects.filter(study_instance_uid=study_uid).first()
+    task_id = None
+    if exam:
+        exam.report_generation_status = Exam.ReportGenerationStatus.PENDING
+        exam.report_generation_error = ''
+        exam.report_generated_at = None
+        exam.save(update_fields=[
+            'report_generation_status',
+            'report_generation_error',
+            'report_generated_at',
+            'updated_at',
+        ])
+        from .tasks import tache_generate_ai_report
+
+        async_result = tache_generate_ai_report.apply_async(
+            args=[exam.id, report.series_instance_uid, True],
+            queue='reports',
+        )
+        task_id = async_result.id
+
+    return Response({
+        'status': 'saved',
+        'study_instance_uid': study_uid,
+        'eye': eye,
+        'factor': factor,
+        'doctor_correction': correction,
+        'patient_summary': patient_summary,
         'analysis': per_eye,
         'task_id': task_id,
         'report_generation_status': 'pending' if exam else 'not_queued',

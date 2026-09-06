@@ -41,6 +41,8 @@ export default class AiAnalysisPanel extends Component {
       pendingDrGradeByEye: { right: null, left: null },
       showAiProbabilitiesByEye: { right: false, left: false },
       savingDrCorrection: false,
+      pendingDmlaByEye: { right: {}, left: {} },
+      savingDmlaCorrection: false,
     };
     this.serverURI = (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1') + '/monai/';
   }
@@ -513,6 +515,87 @@ export default class AiAnalysisPanel extends Component {
       uiNotificationService.show({
         title: 'Grade RD',
         message: err.message || 'Échec de la correction du grade.',
+        type: 'error',
+        duration: 6000,
+      });
+    }
+  };
+
+  selectDmlaValue = (side, factor, option, currentLabel) => {
+    if (!side) return;
+    this.setState(state => {
+      const pending = { ...(state.pendingDmlaByEye?.[side] || {}) };
+      if (option === currentLabel) {
+        delete pending[factor];
+      } else {
+        pending[factor] = option;
+      }
+      return { pendingDmlaByEye: { ...state.pendingDmlaByEye, [side]: pending } };
+    });
+  };
+
+  cancelDmlaSelection = side => {
+    this.setState(state => ({
+      pendingDmlaByEye: { ...state.pendingDmlaByEye, [side]: {} },
+    }));
+  };
+
+  saveDmlaCorrections = async (side, entries) => {
+    const { uiNotificationService } = this.props.servicesManager.services;
+    const viewportInfo = this.getActiveViewportInfo();
+    const studyUid = viewportInfo?.displaySet?.StudyInstanceUID;
+    if (!studyUid || !entries?.length) {
+      this.setState({ reportError: "Étude introuvable dans le viewport actif." });
+      return;
+    }
+    this.setState({ savingDmlaCorrection: true, reportError: null, reportGenerationError: '' });
+    try {
+      const token = this.getAuthToken();
+      let data = null;
+      for (const [factor, label] of entries) {
+        const response = await fetch('/api/exams/dmla-correction/', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ study_instance_uid: studyUid, eye: side, factor, label: label || null }),
+        });
+        data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+      }
+      const normalized = this.normalizeAnalysis(data.analysis || data);
+      this.setState(state => ({
+        ...normalized,
+        activeEye: side,
+        savingDmlaCorrection: false,
+        pendingDmlaByEye: { ...state.pendingDmlaByEye, [side]: {} },
+        reportGenerationStatus:
+          data.report_generation_status === 'not_queued' ? state.reportGenerationStatus : 'pending',
+        reportGenerationError: '',
+        savedMedicalReportHtml: '',
+        summaryReportResult: null,
+      }));
+      const reverted = entries.every(([, label]) => !label);
+      uiNotificationService.show({
+        title: 'DMLA',
+        message: reverted
+          ? 'Valeur IA rétablie. Rapport en cours de régénération…'
+          : 'Correction DMLA enregistrée. Rapport en cours de régénération…',
+        type: 'success',
+        duration: 5000,
+      });
+      this.pollSavedAnalysis();
+    } catch (err) {
+      this.setState({
+        savingDmlaCorrection: false,
+        reportError: err.message || 'Échec de la correction DMLA.',
+      });
+      uiNotificationService.show({
+        title: 'DMLA',
+        message: err.message || 'Échec de la correction DMLA.',
         type: 'error',
         duration: 6000,
       });
@@ -1040,14 +1123,14 @@ export default class AiAnalysisPanel extends Component {
     );
   };
 
-  renderDeepSeeNet = report => {
+  renderDeepSeeNet = (report, side = null) => {
     const deepseenet = report?.deepseenet_plus;
     if (!deepseenet) return null;
 
-    const factors = [
-      ['Drusen', deepseenet.drusen],
-      ['Anomalies pigmentaires', deepseenet.pigment],
-      ['DMLA avancée', deepseenet.amd],
+    const factorDefs = [
+      { key: 'drusen', title: 'Drusen', options: ['none_small', 'intermediate', 'large'] },
+      { key: 'pigment', title: 'Anomalies pigmentaires', options: ['absent', 'present'] },
+      { key: 'amd', title: 'DMLA avancée', options: ['absent', 'advanced'] },
     ];
     const labelMap = {
       none_small: 'Absents / petits',
@@ -1057,41 +1140,128 @@ export default class AiAnalysisPanel extends Component {
       present: 'Présentes',
       advanced: 'Présente',
     };
+    const colorFor = label =>
+      label === 'advanced' || label === 'large'
+        ? '#fb7185'
+        : label === 'present' || label === 'intermediate'
+          ? '#fbbf24'
+          : '#86efac';
+    const corrections =
+      deepseenet.doctor_corrections && typeof deepseenet.doctor_corrections === 'object'
+        ? deepseenet.doctor_corrections
+        : {};
+    const hasCorrections = Object.keys(corrections).length > 0;
+    const canEdit = !!side;
+    const pending = canEdit ? this.state.pendingDmlaByEye?.[side] || {} : {};
+    const pendingEntries = Object.entries(pending).filter(([, value]) => value);
+    const saving = !!this.state.savingDmlaCorrection;
+    const titleFor = key => factorDefs.find(def => def.key === key)?.title || key;
     const patient = deepseenet.patient_summary || {};
-    const modes = factors
-      .map(([, factor]) => factor?.preprocessing_mode)
-      .filter(Boolean);
-    const usedFallback = modes.includes('central_crop_fallback');
 
     return (
       <div className="section" style={{ borderColor: '#fb7185' }}>
         <div className="sectionTitle" style={{ color: '#fda4af' }}>
           DMLA
-        </div>
-        {factors.map(([title, factor]) => factor && (
-          <div className="row" key={title}>
-            <span className="label">{title}</span>
-            <span
-              className="value"
-              style={{
-                color:
-                  factor.label === 'advanced' || factor.label === 'large'
-                    ? '#fb7185'
-                    : factor.label === 'present' || factor.label === 'intermediate'
-                      ? '#fbbf24'
-                      : '#86efac',
-              }}
-            >
-              {labelMap[factor.label] || factor.label} — {Math.round((Number(factor.probability) || 0) * 100)}%
+          {hasCorrections && (
+            <span className="drCorrectedBadge" style={{ marginLeft: '8px' }}>
+              ✓ Corrigé par le médecin
             </span>
+          )}
+        </div>
+        {factorDefs.map(def => {
+          const factor = deepseenet[def.key];
+          const correction = corrections[def.key];
+          if (!factor && !correction) return null;
+          const correctedLabel = correction?.label || null;
+          const aiLabel = factor?.label;
+          const pendingLabel = pending[def.key] || null;
+          const selectedLabel = pendingLabel || correctedLabel || aiLabel;
+          const aiProbability = Math.round((Number(factor?.probability) || 0) * 100);
+          const correctionAiProbability = Number.isFinite(Number(correction?.ai_probability))
+            ? ` ${Math.round(Number(correction.ai_probability) * 100)} %`
+            : '';
+          return (
+            <div className="dmlaFactor" key={def.key}>
+              <div className="row">
+                <span className="label">{def.title}</span>
+                <span className="value" style={{ color: colorFor(correctedLabel || aiLabel) }}>
+                  {correctedLabel
+                    ? `${labelMap[correctedLabel] || correctedLabel} — médecin`
+                    : `${labelMap[aiLabel] || aiLabel || 'N/A'} — ${aiProbability}%`}
+                </span>
+              </div>
+              {correctedLabel && (
+                <div className="drAiGradeNote">
+                  IA : {labelMap[correction.ai_label] || correction.ai_label || 'N/A'}{correctionAiProbability}
+                  {correction.corrected_by_name ? ` · ${correction.corrected_by_name}` : ''}
+                </div>
+              )}
+              {canEdit && (
+                <div className="dmlaChoices" role="radiogroup" aria-label={`Corriger ${def.title}`}>
+                  {def.options.map(option => {
+                    const active = option === selectedLabel;
+                    return (
+                      <button
+                        type="button"
+                        key={option}
+                        role="radio"
+                        aria-checked={active}
+                        disabled={saving}
+                        className={`dmlaChip ${active ? 'active' : ''}`}
+                        style={active ? { borderColor: colorFor(option), color: colorFor(option) } : undefined}
+                        onClick={() => this.selectDmlaValue(side, def.key, option, correctedLabel || aiLabel)}
+                      >
+                        {labelMap[option] || option}
+                      </button>
+                    );
+                  })}
+                  {correctedLabel && !pendingLabel && (
+                    <button
+                      type="button"
+                      className="drGradeLink danger"
+                      disabled={saving}
+                      onClick={() => this.saveDmlaCorrections(side, [[def.key, null]])}
+                    >
+                      Rétablir la valeur IA
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {canEdit && pendingEntries.length > 0 && (
+          <div className="drGradeActionBar">
+            <span className="drGradeActionLabel">
+              Corrections DMLA :{' '}
+              {pendingEntries.map(([key, value]) => `${titleFor(key)} → ${labelMap[value] || value}`).join(' · ')}
+            </span>
+            <button
+              type="button"
+              className="drGradeButton primary"
+              disabled={saving}
+              onClick={() => this.saveDmlaCorrections(side, pendingEntries)}
+            >
+              {saving ? 'Enregistrement…' : 'Enregistrer et régénérer le rapport'}
+            </button>
+            <button
+              type="button"
+              className="drGradeButton"
+              disabled={saving}
+              onClick={() => this.cancelDmlaSelection(side)}
+            >
+              Annuler
+            </button>
           </div>
-        ))}
+        )}
         <div className="row" style={{ marginTop: '8px', borderTop: '1px solid #475569', paddingTop: '8px' }}>
           <span className="label">Score AREDS bilatéral</span>
           <span className="value" style={{ color: '#fda4af', fontWeight: 700 }}>
             {patient.simplified_score === null || patient.simplified_score === undefined
-              ? 'Non calculable'
-              : `${patient.simplified_score}/5`}
+              ? patient.score_status === 'bilateral_input_missing'
+                ? "Analysez l'autre œil pour obtenir le score"
+                : 'Non calculable'
+              : `${patient.simplified_score}/5${patient.doctor_corrected ? ' (valeurs médecin)' : ''}`}
           </span>
         </div>
 
@@ -1186,7 +1356,8 @@ export default class AiAnalysisPanel extends Component {
       <div className="eyeReportContent">
         <div className="reportTitle">
           Rapport d'analyse par AI{eyeLabel ? ` (${eyeLabel})` : ''}
-          {(lesions.doctor_corrected || report.doctor_dr_correction) && (
+          {(lesions.doctor_corrected || report.doctor_dr_correction ||
+            Object.keys(report.deepseenet_plus?.doctor_corrections || {}).length > 0) && (
             <span className="lesionCorrectionBadge" style={{ marginLeft: '8px' }}>
               ✓ Confirmé par le médecin
             </span>
@@ -1213,7 +1384,7 @@ export default class AiAnalysisPanel extends Component {
 
         {side && this.renderGeneratedReportPreview(side)}
 
-        {this.renderDeepSeeNet(report)}
+        {this.renderDeepSeeNet(report, side)}
 
         {(lesions.microaneurysms !== undefined || lesions.hemorrhages !== undefined || lesions.hard_exudates !== undefined) && (
           <div className="section">

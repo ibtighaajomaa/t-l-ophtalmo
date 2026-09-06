@@ -787,3 +787,32 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* --- Doctor DMLA (DeepSeeNet+) corrections --- */
+.aiAnalysisPanel .dmlaFactor {
+  margin-bottom: 6px;
+}
+.aiAnalysisPanel .dmlaChoices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0 4px;
+}
+.aiAnalysisPanel .dmlaChip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.04);
+  color: #cbd5e1;
+  font-size: 10px;
+  cursor: pointer;
+}
+.aiAnalysisPanel .dmlaChip.active {
+  background: rgba(255, 255, 255, 0.1);
+  font-weight: 700;
+}
+.aiAnalysisPanel .dmlaChip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

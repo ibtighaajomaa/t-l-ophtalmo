@@ -266,11 +266,24 @@ def format_analysis_data(report_data: dict) -> str:
             ("amd", "DMLA avancee"),
         ):
             factor = deepseenet.get(key) or {}
-            if factor:
+            corrections = deepseenet.get("doctor_corrections") or {}
+            correction = corrections.get(key) if isinstance(corrections, dict) else None
+            if isinstance(correction, dict) and correction.get("label"):
+                lines.append(
+                    f"- {label}: {correction.get('label_fr') or correction.get('label')} "
+                    f"(valeur corrigée et validée par le médecin; IA initiale: "
+                    f"{correction.get('ai_label', 'N/A')} {_format_percent(correction.get('ai_probability'))})"
+                )
+            elif factor:
                 lines.append(
                     f"- {label}: {factor.get('label', 'N/A')} "
                     f"(confiance: {_format_percent(factor.get('probability'))})"
                 )
+        if isinstance(deepseenet.get("doctor_corrections"), dict) and deepseenet.get("doctor_corrections"):
+            lines.append(
+                "- Consigne: les valeurs DMLA validées par le médecin sont la référence; "
+                "utilise-les telles quelles et ne les remets pas en cause."
+            )
         patient = deepseenet.get("patient_summary") or {}
         score = patient.get("simplified_score")
         lines.append(f"- Score AREDS simplifie bilateral: {score if score is not None else 'non calculable'}")

@@ -106,6 +106,54 @@ def effective_dr_classification(eye):
     return ai_dr_classification(eye)
 
 
+DEEPSEENET_FACTORS = {
+    "drusen": ("none_small", "intermediate", "large"),
+    "pigment": ("absent", "present"),
+    "amd": ("absent", "advanced"),
+}
+DEEPSEENET_LABELS_FR = {
+    "drusen": {"none_small": "Absents / petits", "intermediate": "Intermédiaires", "large": "Larges"},
+    "pigment": {"absent": "Absentes", "present": "Présentes"},
+    "amd": {"absent": "Absente", "advanced": "Présente"},
+}
+
+
+def normalize_deepseenet_label(factor, value):
+    """Canonical DeepSeeNet+ label for a factor, or None when unsupported."""
+    labels = DEEPSEENET_FACTORS.get(factor)
+    if not labels or value is None:
+        return None
+    text = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "none": "none_small", "small": "none_small", "no": "absent", "yes": "present",
+        "present_amd": "advanced", "advanced_amd": "advanced",
+    }
+    text = aliases.get(text, text)
+    if text.isdigit():
+        index = int(text)
+        return labels[index] if 0 <= index < len(labels) else None
+    return text if text in labels else None
+
+
+def effective_deepseenet_factor(deepseenet, factor):
+    """Doctor-corrected value of one DMLA factor when present, else the AI prediction."""
+    if not isinstance(deepseenet, dict):
+        return {}
+    corrections = deepseenet.get("doctor_corrections")
+    correction = corrections.get(factor) if isinstance(corrections, dict) else None
+    label = normalize_deepseenet_label(factor, correction.get("label")) if isinstance(correction, dict) else None
+    if label:
+        return {
+            "label": label,
+            "class_index": DEEPSEENET_FACTORS[factor].index(label),
+            "probability": 1.0,
+            "source": "doctor",
+            "doctor_corrected": True,
+        }
+    prediction = deepseenet.get(factor)
+    return dict(prediction) if isinstance(prediction, dict) else {}
+
+
 def select_critical_dr_classification(models):
     """Select the highest main grade, using confidence only as a tie-breaker."""
     available = []
@@ -375,7 +423,16 @@ def calculate_deepseenet_patient_score(per_eye):
         }
 
     def index(prediction, factor):
-        return int((prediction.get(factor) or {}).get("class_index", -1))
+        effective = effective_deepseenet_factor(prediction, factor)
+        try:
+            return int(effective.get("class_index", -1))
+        except (TypeError, ValueError):
+            return -1
+
+    doctor_corrected = any(
+        isinstance(dsn, dict) and isinstance(dsn.get("doctor_corrections"), dict) and dsn["doctor_corrections"]
+        for dsn in (left_dsn, right_dsn)
+    )
 
     # Any advanced AMD fixes the simplified severity score at its maximum.
     if index(left_dsn, "amd") == 1 or index(right_dsn, "amd") == 1:
@@ -392,6 +449,7 @@ def calculate_deepseenet_patient_score(per_eye):
         "simplified_score": score,
         "score_status": "complete",
         "aggregation": "most_critical_per_factor",
+        "doctor_corrected": doctor_corrected,
     }
 
 

@@ -894,6 +894,23 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
     report_errors = []
     patient_id = exam.patient_id or "inconnu"
 
+    def _decision_signature(eye_data):
+        """Fingerprint of every doctor decision that must be reflected in the eye report."""
+        doctor_dr = eye_data.get("doctor_dr_correction") if isinstance(eye_data, dict) else None
+        dsn = eye_data.get("deepseenet_plus") if isinstance(eye_data, dict) else None
+        dmla = dsn.get("doctor_corrections") if isinstance(dsn, dict) else None
+        return json.dumps(
+            {
+                "dr": doctor_dr.get("grade") if isinstance(doctor_dr, dict) else None,
+                "dmla": {
+                    key: (value or {}).get("label")
+                    for key, value in sorted((dmla or {}).items())
+                } if isinstance(dmla, dict) else {},
+                "seg": len(report_json.get("doctor_segmentation_corrections") or []),
+            },
+            sort_keys=True,
+        )
+
     for side in ("right", "left"):
         eye_report = per_eye.get(side)
         if not eye_report:
@@ -909,14 +926,19 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
         # Reuse a previously generated eye report only when it already reflects the
         # current decision: the AI two-stage result when the doctor did not correct
         # the grade, or a doctor-correction result carrying the same grade.
-        existing_matches_decision = (
-            (
-                bool(doctor_grade)
-                and existing_method == "doctor_correction"
-                and existing_adjudication.get("grade") == doctor_grade
+        decision_signature = _decision_signature(eye_report)
+        existing_signature = existing_eye.get("decision_signature")
+        if existing_signature is not None:
+            existing_matches_decision = existing_signature == decision_signature
+        else:
+            existing_matches_decision = (
+                (
+                    bool(doctor_grade)
+                    and existing_method == "doctor_correction"
+                    and existing_adjudication.get("grade") == doctor_grade
+                )
+                or (not doctor_grade and existing_method == "medgemma_multimodal_two_stage")
             )
-            or (not doctor_grade and existing_method == "medgemma_multimodal_two_stage")
-        )
         if (
             existing_eye.get("status") == "generated"
             and existing_eye.get("report_text")
@@ -958,6 +980,7 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
             "report_html": generated.get("report_html") or "",
             "report_json": generated_json,
             "status": "generated",
+            "decision_signature": decision_signature,
         }
         text = generated.get("report_text") or ""
         if text:
