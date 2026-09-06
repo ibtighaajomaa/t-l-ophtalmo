@@ -907,6 +907,16 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
                     for key, value in sorted((dmla or {}).items())
                 } if isinstance(dmla, dict) else {},
                 "seg": len(report_json.get("doctor_segmentation_corrections") or []),
+                "lesions": (
+                    (eye_data.get("lesions") or {}).get("doctor_values")
+                    if isinstance(eye_data, dict) and isinstance(eye_data.get("lesions"), dict)
+                    else None
+                ),
+                "glaucoma": (
+                    (eye_data.get("glaucoma") or {}).get("doctor_values")
+                    if isinstance(eye_data, dict) and isinstance(eye_data.get("glaucoma"), dict)
+                    else None
+                ),
             },
             sort_keys=True,
         )

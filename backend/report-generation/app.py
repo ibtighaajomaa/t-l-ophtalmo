@@ -243,6 +243,10 @@ def format_analysis_data(report_data: dict) -> str:
         lines.append(f"- Neovascularisation: {lesions.get('neovascularization', 'N/A')}")
         lines.append(f"- Cicatrices laser: {lesions.get('laser_scars', 'N/A')}")
         lines.append(f"- Couverture lesionnelle: {_format_percent(lesions.get('coverage_pct'))}")
+        if lesions.get("doctor_corrected"):
+            lines.append(
+                "- Note: comptages corrigés et validés par le médecin; utilise-les comme référence."
+            )
 
     if optic or glaucoma:
         lines.append("## Evaluation papille / glaucome")
@@ -253,6 +257,11 @@ def format_analysis_data(report_data: dict) -> str:
         lines.append(f"- Risque glaucome: {glaucoma.get('risk', 'N/A')}")
         lines.append(f"- Surface disque optique: {disc_area if disc_area is not None else 'N/A'} px")
         lines.append(f"- Surface cupule: {cup_area if cup_area is not None else 'N/A'} px")
+        if glaucoma.get("doctor_corrected"):
+            lines.append(
+                "- Note: évaluation papille / glaucome corrigée et validée par le médecin; "
+                "utilise-la comme référence."
+            )
 
     if vessels:
         lines.append("## Analyse vasculaire")

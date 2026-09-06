@@ -1,3 +1,5 @@
+import unicodedata
+
 DR_SEVERITY = {
     "unknown": -1,
     "no dr": 0,
@@ -152,6 +154,30 @@ def effective_deepseenet_factor(deepseenet, factor):
         }
     prediction = deepseenet.get(factor)
     return dict(prediction) if isinstance(prediction, dict) else {}
+
+
+LESION_COUNT_FIELDS = ("microaneurysms", "hemorrhages", "hard_exudates", "soft_exudates", "neovascularization")
+LESION_FIELD_ALIASES = {"hard_exudates": ("exudates",), "soft_exudates": ("cotton_wool_spots",)}
+GLAUCOMA_RISK_LABELS = ("Faible", "Modéré", "Élevé", "Très élevé")
+
+
+def _strip_accents(value):
+    return "".join(
+        ch for ch in unicodedata.normalize("NFD", str(value or "")) if unicodedata.category(ch) != "Mn"
+    )
+
+
+def normalize_glaucoma_risk(value):
+    """Canonical (accented) glaucoma risk label, or None when unsupported."""
+    text = _strip_accents(value).strip().lower().replace("_", " ").replace("-", " ")
+    text = " ".join(text.split())
+    mapping = {
+        "faible": "Faible", "low": "Faible",
+        "modere": "Modéré", "moderate": "Modéré",
+        "eleve": "Élevé", "high": "Élevé",
+        "tres eleve": "Très élevé", "very high": "Très élevé",
+    }
+    return mapping.get(text)
 
 
 def select_critical_dr_classification(models):

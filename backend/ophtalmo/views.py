@@ -32,12 +32,15 @@ from .analysis_utils import (
     DEEPSEENET_LABELS_FR,
     DR_GRADE_KEYS,
     DR_GRADE_LABELS_FR,
+    LESION_COUNT_FIELDS,
+    LESION_FIELD_ALIASES,
     _dr_grade_index,
     aggregate_per_eye,
     ai_dr_classification,
     calculate_deepseenet_patient_score,
     normalize_deepseenet_label,
     normalize_dr_grade,
+    normalize_glaucoma_risk,
 )
 from .dmi_integration import (
     audit_dmi_call,
@@ -1814,6 +1817,244 @@ def save_dmla_correction(request):
         'factor': factor,
         'doctor_correction': correction,
         'patient_summary': patient_summary,
+        'analysis': per_eye,
+        'task_id': task_id,
+        'report_generation_status': 'pending' if exam else 'not_queued',
+    })
+
+
+METRIC_SECTIONS = ('lesions', 'glaucoma')
+GLAUCOMA_NUMERIC_FIELDS = ('vcdr', 'disc_area_px', 'cup_area_px')
+
+
+def _clean_metric_values(section, values):
+    """Validate the doctor's values for one section; returns (cleaned, error)."""
+    if not isinstance(values, dict):
+        return None, 'values must be an object'
+    cleaned = {}
+    if section == 'lesions':
+        for key in LESION_COUNT_FIELDS:
+            if key not in values or values[key] in (None, ''):
+                continue
+            try:
+                number = int(round(float(values[key])))
+            except (TypeError, ValueError):
+                return None, f'{key} must be a number'
+            if number < 0:
+                return None, f'{key} must be >= 0'
+            cleaned[key] = number
+        if values.get('coverage_pct') not in (None, ''):
+            try:
+                coverage = float(values['coverage_pct'])
+            except (TypeError, ValueError):
+                return None, 'coverage_pct must be a number'
+            if not 0 <= coverage <= 100:
+                return None, 'coverage_pct must be between 0 and 100'
+            cleaned['coverage_pct'] = round(coverage, 2)
+    else:
+        if values.get('vcdr') not in (None, ''):
+            try:
+                vcdr = float(values['vcdr'])
+            except (TypeError, ValueError):
+                return None, 'vcdr must be a number'
+            if not 0 <= vcdr <= 1:
+                return None, 'vcdr must be between 0 and 1'
+            cleaned['vcdr'] = round(vcdr, 4)
+        for key in ('disc_area_px', 'cup_area_px'):
+            if values.get(key) in (None, ''):
+                continue
+            try:
+                number = int(round(float(values[key])))
+            except (TypeError, ValueError):
+                return None, f'{key} must be a number'
+            if number < 0:
+                return None, f'{key} must be >= 0'
+            cleaned[key] = number
+        if values.get('risk') not in (None, ''):
+            risk = normalize_glaucoma_risk(values['risk'])
+            if risk is None:
+                return None, f"Unsupported glaucoma risk: {values['risk']}"
+            cleaned['risk'] = risk
+    if not cleaned:
+        return None, 'no supported value provided'
+    return cleaned, None
+
+
+def _mirror_glaucoma_into_optic(eye_report, glaucoma):
+    optic = eye_report.get('optic_disc_cup')
+    if not isinstance(optic, dict):
+        return
+    optic = dict(optic)
+    if 'vcdr' in glaucoma:
+        optic['cup_disc_ratio'] = glaucoma['vcdr']
+    for key in ('disc_area_px', 'cup_area_px'):
+        if key in glaucoma:
+            optic[key] = glaucoma[key]
+    eye_report['optic_disc_cup'] = optic
+
+
+@api_view(['POST'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([AllowAny])
+def save_metrics_correction(request):
+    """The doctor edits (values) or restores (values=null) the lesion counts or the
+    glaucoma metrics of one eye. The AI values are snapshotted once in `ai_values`;
+    the report is regenerated with the doctor's values."""
+    study_uid = request.data.get('study_instance_uid')
+    if not study_uid:
+        return Response({'error': 'study_instance_uid is required'}, status=status.HTTP_400_BAD_REQUEST)
+    eye = str(request.data.get('eye') or '').strip().lower()
+    if eye not in ('right', 'left'):
+        return Response({'error': "eye must be 'right' or 'left'"}, status=status.HTTP_400_BAD_REQUEST)
+    section = str(request.data.get('section') or '').strip().lower()
+    if section not in METRIC_SECTIONS:
+        return Response({'error': f'Unsupported section: {section}'}, status=status.HTTP_400_BAD_REQUEST)
+    values = request.data.get('values')
+    cleaned = None
+    if values is not None:
+        cleaned, error = _clean_metric_values(section, values)
+        if error:
+            return Response({'error': error}, status=status.HTTP_400_BAD_REQUEST)
+
+    report = AnalysisReport.objects.filter(series_instance_uid=study_uid).first()
+    if not report:
+        return Response({'error': 'Analysis not found'}, status=status.HTTP_404_NOT_FOUND)
+    report_json = report.report_json or {}
+    per_eye = report_json.get('per_eye')
+    if not isinstance(per_eye, dict) or not isinstance(per_eye.get(eye), dict):
+        return Response({'error': f'No analysis data for eye {eye}'}, status=status.HTTP_404_NOT_FOUND)
+    eye_report = dict(per_eye[eye])
+    target = eye_report.get(section)
+    if not isinstance(target, dict):
+        return Response({'error': f'No {section} data for eye {eye}'}, status=status.HTTP_404_NOT_FOUND)
+    target = dict(target)
+
+    username, display_name = _doctor_identity(request)
+    now_iso = datetime.utcnow().isoformat() + 'Z'
+    history_key = f'doctor_{section}_corrections'
+    history = report_json.get(history_key)
+    if not isinstance(history, list):
+        history = []
+    report_json[history_key] = history
+
+    tracked_keys = (
+        list(LESION_COUNT_FIELDS) + ['coverage_pct']
+        + [alias for aliases in LESION_FIELD_ALIASES.values() for alias in aliases]
+        if section == 'lesions'
+        else list(GLAUCOMA_NUMERIC_FIELDS) + ['risk']
+    )
+
+    if cleaned is None:
+        ai_values = target.pop('ai_values', None)
+        previous = target.pop('doctor_values', None)
+        if isinstance(ai_values, dict):
+            for key, value in ai_values.items():
+                target[key] = value
+        for key in ('doctor_corrected_by', 'doctor_corrected_by_name', 'doctor_corrected_at'):
+            target.pop(key, None)
+        if section == 'lesions':
+            target['doctor_corrected'] = bool(eye_report.get('doctor_corrected_segmentation'))
+            if target['doctor_corrected']:
+                target['doctor_correction_source'] = 'ohif_segmentation_eraser'
+            else:
+                target.pop('doctor_correction_source', None)
+            if isinstance(ai_values, dict):
+                _mirror = None
+        else:
+            target['doctor_corrected'] = False
+            target.pop('doctor_correction_source', None)
+            if isinstance(ai_values, dict):
+                _mirror_glaucoma_into_optic(eye_report, ai_values)
+        history.append({
+            'eye': eye,
+            'section': section,
+            'action': 'revert_to_ai',
+            'previous': previous,
+            'by': username,
+            'by_name': display_name,
+            'at': now_iso,
+        })
+    else:
+        if not isinstance(target.get('ai_values'), dict):
+            target['ai_values'] = {key: target.get(key) for key in tracked_keys if key in target}
+        for key, value in cleaned.items():
+            target[key] = value
+            for alias in LESION_FIELD_ALIASES.get(key, ()):
+                if alias in target:
+                    target[alias] = value
+        doctor_values = target.get('doctor_values')
+        doctor_values = dict(doctor_values) if isinstance(doctor_values, dict) else {}
+        doctor_values.update(cleaned)
+        target['doctor_values'] = doctor_values
+        target['doctor_corrected'] = True
+        target['doctor_correction_source'] = 'manual_edit'
+        target['doctor_corrected_by'] = username
+        target['doctor_corrected_by_name'] = display_name
+        target['doctor_corrected_at'] = now_iso
+        if section == 'glaucoma':
+            _mirror_glaucoma_into_optic(eye_report, cleaned)
+        history.append({
+            'eye': eye,
+            'section': section,
+            'action': 'set',
+            'values': cleaned,
+            'by': username,
+            'by_name': display_name,
+            'at': now_iso,
+        })
+
+    eye_report[section] = target
+    per_eye[eye] = eye_report
+    report_json['per_eye'] = per_eye
+
+    def _eye_has_doctor_decision(item):
+        if not isinstance(item, dict):
+            return False
+        if isinstance(item.get('doctor_dr_correction'), dict):
+            return True
+        dsn = item.get('deepseenet_plus')
+        if isinstance(dsn, dict) and dsn.get('doctor_corrections'):
+            return True
+        for key in METRIC_SECTIONS:
+            block = item.get(key)
+            if isinstance(block, dict) and block.get('doctor_values'):
+                return True
+        return False
+
+    has_doctor_decision = any(_eye_has_doctor_decision(item) for item in per_eye.values())
+    has_seg_correction = bool(report_json.get('doctor_segmentation_corrections'))
+    report_json['status'] = 'DOCTOR_CORRECTED' if (has_doctor_decision or has_seg_correction) else 'AI_ANALYZED'
+    report_json['report_generation_status'] = 'pending'
+    report_json['report_generation_error'] = ''
+    report.report_json = report_json
+    report.save(update_fields=['report_json'])
+
+    exam = Exam.objects.filter(study_instance_uid=study_uid).first()
+    task_id = None
+    if exam:
+        exam.report_generation_status = Exam.ReportGenerationStatus.PENDING
+        exam.report_generation_error = ''
+        exam.report_generated_at = None
+        exam.save(update_fields=[
+            'report_generation_status',
+            'report_generation_error',
+            'report_generated_at',
+            'updated_at',
+        ])
+        from .tasks import tache_generate_ai_report
+
+        async_result = tache_generate_ai_report.apply_async(
+            args=[exam.id, report.series_instance_uid, True],
+            queue='reports',
+        )
+        task_id = async_result.id
+
+    return Response({
+        'status': 'saved',
+        'study_instance_uid': study_uid,
+        'eye': eye,
+        'section': section,
+        'values': cleaned,
         'analysis': per_eye,
         'task_id': task_id,
         'report_generation_status': 'pending' if exam else 'not_queued',

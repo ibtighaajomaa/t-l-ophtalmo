@@ -20,6 +20,7 @@ urlpatterns = [
     path('api/exams/segmentation-corrections/', views.save_segmentation_corrections, name='save-segmentation-corrections'),
     path('api/exams/dr-grade-correction/', views.save_dr_grade_correction, name='save-dr-grade-correction'),
     path('api/exams/dmla-correction/', views.save_dmla_correction, name='save-dmla-correction'),
+    path('api/exams/metrics-correction/', views.save_metrics_correction, name='save-metrics-correction'),
     path('api/exams/analysis/', views.latest_analysis, name='latest-analysis'),
     path('api/exams/analysis-reports/', views.list_analysis_reports, name='list-analysis-reports'),
     path('api/exams/generate-report/', views.generate_report, name='generate-report'),
