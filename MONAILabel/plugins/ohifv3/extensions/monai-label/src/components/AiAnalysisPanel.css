@@ -885,3 +885,10 @@
   font-size: 11px;
   color: #cbd5e1;
 }
+
+.aiAnalysisPanel .doctorConfirmedRow {
+  margin: 2px 0 6px;
+}
+.aiAnalysisPanel .doctorConfirmedRow .lesionCorrectionBadge {
+  margin-bottom: 0;
+}

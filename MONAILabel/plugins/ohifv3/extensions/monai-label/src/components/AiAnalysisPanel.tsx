@@ -768,6 +768,15 @@ export default class AiAnalysisPanel extends Component {
 
   // Placed under the fields rather than in the section title, so the header
   // keeps only the section name and the doctor-corrected badge.
+  // Same green confirmation badge everywhere, on its own line under the section
+  // title, instead of the amber pill that used to sit inside the title row.
+  doctorConfirmedBadge = corrected =>
+    corrected ? (
+      <div className="doctorConfirmedRow">
+        <span className="lesionCorrectionBadge">✓ Confirmé par le médecin</span>
+      </div>
+    ) : null;
+
   metricsRevertLink = (side, section, corrected, saving) => {
     if (!side || !corrected) return null;
     return (
@@ -828,8 +837,8 @@ export default class AiAnalysisPanel extends Component {
       <div className="section" style={corrected ? { borderColor: '#f59e0b' } : undefined}>
         <div className="sectionTitle metricSectionTitle">
           <span>Lésions</span>
-          {corrected && <span className="drCorrectedBadge">✓ Corrigé par le médecin</span>}
         </div>
+        {this.doctorConfirmedBadge(corrected)}
         {fields.map(field => {
           const aiValue = aiValues[field.key];
           const changed =
@@ -905,8 +914,8 @@ export default class AiAnalysisPanel extends Component {
       <div className="section" style={corrected ? { borderColor: '#f59e0b' } : undefined}>
         <div className="sectionTitle metricSectionTitle" style={{ textTransform: 'uppercase' }}>
           <span>Évaluation du glaucome</span>
-          {corrected && <span className="drCorrectedBadge">✓ Corrigé par le médecin</span>}
         </div>
+        {this.doctorConfirmedBadge(corrected)}
 
         <div className="glaucomaRiskBlock">
           <span className="label">Risque</span>
@@ -1245,7 +1254,6 @@ export default class AiAnalysisPanel extends Component {
                 <div className="drPrediction drPredictionCorrected">
                   <span className="label">Grade</span>
                   <span className="gradeValue">{this.drGradeLabel(correctedKey)}</span>
-                  <span className="drCorrectedBadge">✓ Corrigé par le médecin</span>
                 </div>
                 <div className="drAiGradeNote">
                   IA : {aiGradeLabel}{aiConfidenceText}
@@ -1512,12 +1520,8 @@ export default class AiAnalysisPanel extends Component {
       <div className="section" style={{ borderColor: '#fb7185' }}>
         <div className="sectionTitle" style={{ color: '#fda4af' }}>
           DMLA
-          {hasCorrections && (
-            <span className="drCorrectedBadge" style={{ marginLeft: '8px' }}>
-              ✓ Corrigé par le médecin
-            </span>
-          )}
         </div>
+        {this.doctorConfirmedBadge(hasCorrections)}
         {factorDefs.map(def => {
           const factor = deepseenet[def.key];
           const correction = corrections[def.key];
@@ -1708,6 +1712,7 @@ export default class AiAnalysisPanel extends Component {
         {(dr.grade || clipDr) && (
           <div className="section drClassification">
             <div className="sectionTitle">Classification de la rétinopathie diabétique</div>
+            {this.doctorConfirmedBadge(!!report.doctor_dr_correction)}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
               {modelEntries.map(([key, title, model]) => (
                 <React.Fragment key={key}>
