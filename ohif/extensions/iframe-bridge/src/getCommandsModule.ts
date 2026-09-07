@@ -873,6 +873,58 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     return added;
   }
 
+  // Complete the classes as soon as a segmentation is loaded, so the doctor sees
+  // every class in the Segmentations panel just by opening the study, without
+  // having to activate a tool first.
+  let completingClasses = false;
+
+  function completeClassesForAllSegmentations() {
+    if (completingClasses) return;
+    const { segmentationService, viewportGridService } = servicesManager.services;
+    completingClasses = true;
+    try {
+      const viewportId = viewportGridService?.getState?.()?.activeViewportId;
+      const raw = segmentationService?.getSegmentations?.();
+      const length = raw?.length ?? 0;
+      for (let i = 0; i < length; i++) {
+        const entry = raw[i];
+        const id = entry?.segmentationId || entry?.id;
+        if (id) ensureAllSegmentClasses(id, viewportId);
+      }
+    } catch (err) {
+      console.warn('[SegmentationEdit] class completion sweep failed', err);
+    } finally {
+      completingClasses = false;
+    }
+  }
+
+  function subscribeSegmentationClassCompletion() {
+    const { segmentationService } = servicesManager.services;
+    const events = segmentationService?.EVENTS;
+    if (!segmentationService?.subscribe || !events) return;
+    // Adding a segment emits SEGMENTATION_MODIFIED, which is deliberately not in
+    // this list: reacting to it would loop.
+    ['SEGMENTATION_ADDED', 'SEGMENTATION_LOADING_COMPLETE', 'SEGMENTATION_REPRESENTATION_ADDED']
+      .forEach(name => {
+        const event = events[name];
+        if (!event) return;
+        try {
+          segmentationService.subscribe(event, () => {
+            // Let the service finish its own bookkeeping first.
+            setTimeout(completeClassesForAllSegmentations, 0);
+          });
+        } catch (err) {
+          console.warn('[SegmentationEdit] cannot subscribe to', name, err);
+        }
+      });
+  }
+
+  try {
+    subscribeSegmentationClassCompletion();
+  } catch (err) {
+    console.warn('[SegmentationEdit] class completion subscription failed', err);
+  }
+
   function segmentsForSegmentation(segmentationId) {
     const { segmentationService } = servicesManager.services;
     if (!segmentationId) return [];
