@@ -22,8 +22,12 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // "Baguette" (magic wand): one click on a lesion, seeded region growing on the
   // fundus image fills the whole lesion. Two doctor-facing settings, persisted.
   const WAND_STORAGE_KEY = 'teleophtalmo.segmentation.wand';
-  const WAND_LIMITS = { tolerance: [5, 80], radius: [1, 150] };
-  const WAND_DEFAULTS = { tolerance: 25, radius: 40 };
+  const WAND_LIMITS = { tolerance: [1, 80], radius: [1, 150], edges: [0, 99] };
+  const WAND_DEFAULTS = { tolerance: 12, radius: 40, edges: 90 };
+  // The acceptance threshold is max(tolerance, K_SIGMA * sigma of the region):
+  // the slider is a floor, and a noisy or heterogeneous lesion widens it on its
+  // own instead of forcing the doctor to retune.
+  const WAND_K_SIGMA = 2.5;
   const WAND_MAX_ERASE_COMPONENT = 250000; // px, guards Alt+click on a vessel tree
   const wandPanels = new Map(); // viewportId -> { panel, refresh }
   const wandPreviews = new Map(); // viewportId -> { canvas }
@@ -43,6 +47,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       return {
         tolerance: clampWandSetting('tolerance', saved.tolerance ?? WAND_DEFAULTS.tolerance),
         radius: clampWandSetting('radius', saved.radius ?? WAND_DEFAULTS.radius),
+        edges: clampWandSetting('edges', saved.edges ?? WAND_DEFAULTS.edges),
       };
     } catch (_) {
       return { ...WAND_DEFAULTS };
@@ -1369,7 +1374,70 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       const scale = max > min ? 255 / (max - min) : 1;
       for (let p = 0; p < total; p++) raw[p] = Math.round((pixels[p] - min) * scale);
     }
-    return { data: boxBlur3x3(raw, width, height), width, height, imageId };
+    const data = boxBlur3x3(raw, width, height);
+    // Computed once when the tool is activated, then reused by every click and
+    // every hover preview: O(width * height) here instead of per stroke.
+    const gradient = sobelMagnitude(data, width, height);
+    return { data, gradient, width, height, imageId };
+  }
+
+  // Sobel gradient magnitude. A pixel sitting on a strong edge is a boundary,
+  // either the lesion's own or a vessel's, and the region must not cross it.
+  function sobelMagnitude(src, width, height) {
+    const out = new Float32Array(width * height);
+    for (let j = 1; j < height - 1; j++) {
+      const row = j * width;
+      for (let i = 1; i < width - 1; i++) {
+        const idx = row + i;
+        const a = src[idx - width - 1];
+        const b = src[idx - width];
+        const c = src[idx - width + 1];
+        const d = src[idx - 1];
+        const f = src[idx + 1];
+        const g = src[idx + width - 1];
+        const h = src[idx + width];
+        const k = src[idx + width + 1];
+        const gx = c + 2 * f + k - (a + 2 * d + g);
+        const gy = g + 2 * h + k - (a + 2 * b + c);
+        out[idx] = Math.sqrt(gx * gx + gy * gy);
+      }
+    }
+    return out;
+  }
+
+  // Percentile of the gradient inside the search box, via a histogram: gives an
+  // edge threshold that adapts to the local contrast of each image.
+  function gradientThreshold(gradient, width, height, seedI, seedJ, radius, percentile) {
+    if (!gradient || percentile <= 0) return Infinity;
+    const bins = new Int32Array(256);
+    let total = 0;
+    let maxValue = 0;
+    for (let j = seedJ - radius; j <= seedJ + radius; j++) {
+      if (j < 0 || j >= height) continue;
+      for (let i = seedI - radius; i <= seedI + radius; i++) {
+        if (i < 0 || i >= width) continue;
+        const value = gradient[j * width + i];
+        if (value > maxValue) maxValue = value;
+      }
+    }
+    if (maxValue <= 0) return Infinity;
+    const scale = 255 / maxValue;
+    for (let j = seedJ - radius; j <= seedJ + radius; j++) {
+      if (j < 0 || j >= height) continue;
+      for (let i = seedI - radius; i <= seedI + radius; i++) {
+        if (i < 0 || i >= width) continue;
+        bins[Math.min(255, Math.round(gradient[j * width + i] * scale))]++;
+        total++;
+      }
+    }
+    if (!total) return Infinity;
+    const target = (total * percentile) / 100;
+    let cumulative = 0;
+    for (let b = 0; b < 256; b++) {
+      cumulative += bins[b];
+      if (cumulative >= target) return b / scale;
+    }
+    return Infinity;
   }
 
   function boxBlur3x3(src, width, height) {
@@ -1429,7 +1497,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // A pixel joins the region when it stays within `tolerance` of the running
   // mean of the region AND on the seed's side of the background (dark lesion
   // stays dark, bright lesion stays bright).
-  function growRegion(green, width, height, seedI, seedJ, tolerance, radius, polarity, background, margin) {
+  function growRegion(green, width, height, seedI, seedJ, tolerance, radius, polarity, background, margin, gradient, edgeThreshold) {
     const size = 2 * radius + 1;
     const x0 = seedI - radius;
     const y0 = seedJ - radius;
@@ -1451,19 +1519,38 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     visited[(seedJ - y0) * size + (seedI - x0)] = 1;
 
     let sum = 0;
+    let sumSquares = 0;
     let count = 0;
     let touchedBorder = false;
+    let stoppedOnEdge = 0;
+    const useEdges = !!gradient && Number.isFinite(edgeThreshold);
     while (head < tail && count < maxArea) {
       const i = qi[head];
       const j = qj[head];
       head++;
-      const v = green[j * width + i];
+      const pixelIndex = j * width + i;
+      const v = green[pixelIndex];
       const mean = count ? sum / count : v;
-      if (Math.abs(v - mean) > tolerance || !inside(v)) continue;
+      // Adaptive threshold: the slider is a floor, the spread of the region
+      // widens it when the lesion is noisy or heterogeneous.
+      let limit = tolerance;
+      if (count > 4) {
+        const variance = Math.max(0, sumSquares / count - mean * mean);
+        limit = Math.max(tolerance, WAND_K_SIGMA * Math.sqrt(variance));
+      }
+      if (Math.abs(v - mean) > limit || !inside(v)) continue;
+      // Edge barrier: never cross a strong contour, which is what let the
+      // region escape along a vessel. The seed itself is exempt, since a tiny
+      // lesion is nothing but edge.
+      if (useEdges && count > 0 && gradient[pixelIndex] > edgeThreshold) {
+        stoppedOnEdge++;
+        continue;
+      }
       const bi = i - x0;
       const bj = j - y0;
       mask[bj * size + bi] = 1;
       sum += v;
+      sumSquares += v * v;
       count++;
       if (bi === 0 || bj === 0 || bi === size - 1 || bj === size - 1) touchedBorder = true;
       for (let dj = -1; dj <= 1; dj++) {
@@ -1484,7 +1571,15 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         }
       }
     }
-    return { mask, size, x0, y0, count, leak: touchedBorder || count >= 0.9 * maxArea };
+    return {
+      mask,
+      size,
+      x0,
+      y0,
+      count,
+      stoppedOnEdge,
+      leak: touchedBorder || count >= 0.9 * maxArea,
+    };
   }
 
   function dilate3x3(mask, size) {
@@ -1608,7 +1703,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   function computeWandRegion(fundus, viewport, canvasX, canvasY) {
     const offset = scalarOffsetFromCanvas(viewport, canvasX, canvasY);
     if (offset == null) return { error: 'outside' };
-    const { data: green, width, height } = fundus;
+    const { data: green, gradient, width, height } = fundus;
     const seedI = offset % width;
     const seedJ = Math.floor(offset / width);
     const tolerance = getWandSetting('tolerance');
@@ -1622,7 +1717,13 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     if (margin < 4) return { error: 'no-lesion' };
     const polarity = seedValue < background ? 'dark' : 'bright';
 
-    const grown = growRegion(green, width, height, seedI, seedJ, tolerance, radius, polarity, background, margin);
+    const edgeThreshold = gradientThreshold(
+      gradient, width, height, seedI, seedJ, radius, getWandSetting('edges')
+    );
+    const grown = growRegion(
+      green, width, height, seedI, seedJ, tolerance, radius,
+      polarity, background, margin, gradient, edgeThreshold
+    );
     if (grown.count < 3) return { error: 'no-lesion' };
     const closed = closeMask3x3(grown.mask, grown.size);
     const filled = fillHoles(closed, grown.size);
@@ -1635,6 +1736,33 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       seedJ,
       offset,
     };
+  }
+
+  // Suggest a tolerance from the local noise around a point: about two standard
+  // deviations of an 11x11 window, so the doctor rarely has to tune it by hand.
+  function suggestTolerance(fundus, viewport, canvasX, canvasY) {
+    const offset = scalarOffsetFromCanvas(viewport, canvasX, canvasY);
+    if (offset == null || !fundus) return null;
+    const { data: green, width, height } = fundus;
+    const ci = offset % width;
+    const cj = Math.floor(offset / width);
+    let sum = 0;
+    let sumSquares = 0;
+    let n = 0;
+    for (let j = cj - 5; j <= cj + 5; j++) {
+      if (j < 0 || j >= height) continue;
+      for (let i = ci - 5; i <= ci + 5; i++) {
+        if (i < 0 || i >= width) continue;
+        const v = green[j * width + i];
+        sum += v;
+        sumSquares += v * v;
+        n++;
+      }
+    }
+    if (n < 9) return null;
+    const mean = sum / n;
+    const sigma = Math.sqrt(Math.max(0, sumSquares / n - mean * mean));
+    return clampWandSetting('tolerance', Math.round(2 * sigma));
   }
 
   // Write the region into the active labelmap through the accessor, recording
@@ -1904,8 +2032,9 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     Object.assign(title.style, { fontWeight: '600', color: accent });
     const tolerance = buildSettingRow({ label: 'Tolérance', key: 'tolerance', unit: '', step: 1, accent });
     const radius = buildSettingRow({ label: 'Rayon max', key: 'radius', unit: ' px', step: 1, accent });
+    const edges = buildSettingRow({ label: 'Contours', key: 'edges', unit: ' %', step: 1, accent });
     const hint = document.createElement('div');
-    hint.textContent = 'Clic : dessiner la lésion · Alt + clic : supprimer';
+    hint.textContent = 'Clic : dessiner · Alt + clic : supprimer · Maj + clic : régler la tolérance';
     Object.assign(hint.style, { color: '#94a3b8', fontSize: '11px' });
 
     [
@@ -1917,6 +2046,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     panel.appendChild(title);
     panel.appendChild(tolerance.row);
     panel.appendChild(radius.row);
+    panel.appendChild(edges.row);
     panel.appendChild(hint);
     element.appendChild(panel);
     const record = {
@@ -1924,6 +2054,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       refresh: () => {
         tolerance.refresh();
         radius.refresh();
+        edges.refresh();
       },
     };
     wandPanels.set(viewportId, record);
@@ -2065,6 +2196,21 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           const [x, y] = pointFromEvent(event);
           lastPointer = [x, y];
 
+          if (event.shiftKey) {
+            const suggested = suggestTolerance(fundus, viewport, x, y);
+            if (suggested != null) {
+              setWandSetting('tolerance', suggested);
+              uiNotificationService.show({
+                title: modeLabel,
+                message: `Tolérance réglée sur ${suggested} d'après le bruit local.`,
+                type: 'info',
+                duration: 2000,
+              });
+            }
+            schedulePreview();
+            return;
+          }
+
           if (event.altKey) {
             const offset = scalarOffsetFromCanvas(viewport, x, y);
             if (offset == null) return;
@@ -2138,7 +2284,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
 
       uiNotificationService.show({
         title: modeLabel,
-        message: `Baguette active (tolérance ${getWandSetting('tolerance')}, rayon ${getWandSetting('radius')} px). Cliquez sur une lésion. Alt + clic : supprimer. Ctrl + molette : tolérance.`,
+        message: `Baguette active (tolérance ${getWandSetting('tolerance')}, rayon ${getWandSetting('radius')} px, contours ${getWandSetting('edges')} %). Clic : dessiner. Alt + clic : supprimer. Maj + clic : régler la tolérance. Ctrl + molette : tolérance.`,
         type: 'success',
         duration: 4000,
       });
