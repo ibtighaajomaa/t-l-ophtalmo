@@ -1895,7 +1895,8 @@ export default class AiAnalysisPanel extends Component {
                     title="Régénérer le rapport avec toutes vos corrections"
                     onClick={this.regenerateReportNow}
                   >
-                    {this.state.regeneratingReport ? 'Régénération…' : '↻ Régénérer le rapport'}
+                    <span className="regenerateReportIcon" aria-hidden="true">↻</span>
+                    {this.state.regeneratingReport ? 'Régénération…' : 'Régénérer le rapport'}
                   </button>
                 </div>
                 {this.renderEditorToolbar()}
