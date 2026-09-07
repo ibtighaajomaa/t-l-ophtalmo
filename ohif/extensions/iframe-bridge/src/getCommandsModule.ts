@@ -22,7 +22,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // "Baguette" (magic wand): one click on a lesion, seeded region growing on the
   // fundus image fills the whole lesion. Two doctor-facing settings, persisted.
   const WAND_STORAGE_KEY = 'teleophtalmo.segmentation.wand';
-  const WAND_LIMITS = { tolerance: [5, 80], radius: [2, 150] };
+  const WAND_LIMITS = { tolerance: [5, 80], radius: [1, 150] };
   const WAND_DEFAULTS = { tolerance: 25, radius: 40 };
   const WAND_MAX_ERASE_COMPONENT = 250000; // px, guards Alt+click on a vessel tree
   const wandPanels = new Map(); // viewportId -> { panel, refresh }
