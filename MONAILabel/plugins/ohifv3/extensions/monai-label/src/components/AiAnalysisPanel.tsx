@@ -773,6 +773,27 @@ export default class AiAnalysisPanel extends Component {
   // title, instead of the amber pill that used to sit inside the title row.
   // The doctor corrects everything, checks it, then asks for one regeneration
   // from here, next to the report itself.
+  // Inlined on purpose: OHIF ships its stylesheet as an unhashed 5623.css that
+  // nginx serves with `immutable`, so a CSS-only change can stay invisible in an
+  // already-open browser. The JS bundle is content-hashed, so this always lands.
+  regenerateButtonStyle = disabled => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '8px 14px',
+    minHeight: '34px',
+    border: 'none',
+    borderRadius: '6px',
+    background: disabled ? '#475569' : '#388cf5',
+    color: disabled ? '#cbd5e1' : '#fff',
+    fontSize: '13px',
+    fontWeight: 600,
+    lineHeight: 1,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    whiteSpace: 'nowrap',
+    boxShadow: disabled ? 'none' : '0 1px 3px rgba(0, 0, 0, 0.35)',
+  });
+
   regenerateReportNow = async () => {
     const { uiNotificationService } = this.props.servicesManager.services;
     const viewportInfo = this.getActiveViewportInfo();
@@ -1880,16 +1901,29 @@ export default class AiAnalysisPanel extends Component {
 
             {reportResult && (
               <div className="generatedReport">
-                <div className="generatedReportHeader">
-                  <h3 className="generatedReportTitle">Rapport médical généré</h3>
+                <div
+                  className="generatedReportHeader"
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '10px',
+                    marginBottom: '8px',
+                  }}
+                >
+                  <h3 className="generatedReportTitle" style={{ margin: 0 }}>
+                    Rapport médical généré
+                  </h3>
                   <button
                     type="button"
                     className="regenerateReportButton"
                     disabled={this.state.regeneratingReport}
                     title="Régénérer le rapport avec toutes vos corrections"
                     onClick={this.regenerateReportNow}
+                    style={this.regenerateButtonStyle(this.state.regeneratingReport)}
                   >
-                    <span className="regenerateReportIcon" aria-hidden="true">↻</span>
+                    <span style={{ fontSize: '15px', lineHeight: 1 }} aria-hidden="true">↻</span>
                     {this.state.regeneratingReport ? 'Régénération…' : 'Régénérer le rapport'}
                   </button>
                 </div>
