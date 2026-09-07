@@ -846,7 +846,7 @@ export default class AiAnalysisPanel extends Component {
   doctorConfirmedBadge = corrected =>
     corrected ? (
       <div className="doctorConfirmedRow">
-        <span className="lesionCorrectionBadge">✓ Confirmé par le médecin</span>
+        <span className="lesionCorrectionBadge">✓ Corrigé par le médecin</span>
       </div>
     ) : null;
 
