@@ -264,37 +264,53 @@
   }
 
   // ── MutationObserver pour les modifications dynamiques du DOM ───────────────
+  // React reutilise souvent un noeud texte et se contente d'en changer la valeur:
+  // sans characterData la liste des etudes n'etait jamais vue. Et un debounce qui
+  // ne garde que le dernier lot de mutations perd tous les lots annules, donc on
+  // rebalaye tout le document, ce qui est sur car traduire un texte deja francais
+  // ne le change plus.
   let debounceTimer = null;
+  let rescanTimer = null;
+  let applying = false;
 
-  const observer = new MutationObserver((mutations) => {
+  function scheduleTranslate(delay) {
     clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            translateElement(node);
-          } else if (node.nodeType === Node.TEXT_NODE) {
-            const original = node.nodeValue;
-            if (original && original.trim()) {
-              const translated = translate(original);
-              if (translated !== original) {
-                node.nodeValue = translated;
-              }
-            }
-          }
-        }
+    debounceTimer = setTimeout(function () {
+      if (!document.body) return;
+      applying = true;
+      try {
+        translateElement(document.body);
+      } catch (e) {
+      } finally {
+        setTimeout(function () {
+          applying = false;
+        }, 0);
       }
-    }, 40);
+    }, delay);
+  }
+
+  const observer = new MutationObserver(function () {
+    if (applying) return;
+    scheduleTranslate(120);
   });
 
   function startObserver() {
-    if (document.body) {
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-      });
-      translateElement(document.body);
-    }
+    if (!document.body) return;
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+    translateElement(document.body);
+
+    // Les donnees DICOM arrivent parfois plus de quinze secondes apres
+    // l'ouverture: on repasse regulierement pendant une minute.
+    let passes = 0;
+    rescanTimer = setInterval(function () {
+      passes++;
+      scheduleTranslate(0);
+      if (passes >= 30) clearInterval(rescanTimer);
+    }, 2000);
   }
 
   if (document.readyState === 'loading') {
