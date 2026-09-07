@@ -510,8 +510,8 @@ export default class AiAnalysisPanel extends Component {
       uiNotificationService.show({
         title: 'Grade RD',
         message: grade
-          ? `Grade corrigé : ${this.drGradeLabel(grade)}. Rapport en cours de régénération…`
-          : 'Grade IA rétabli. Rapport en cours de régénération…',
+          ? `Grade corrigé : ${this.drGradeLabel(grade)}.`
+          : 'Grade IA rétabli.',
         type: 'success',
         duration: 5000,
       });
@@ -595,8 +595,8 @@ export default class AiAnalysisPanel extends Component {
       uiNotificationService.show({
         title: 'DMLA',
         message: reverted
-          ? 'Valeur IA rétablie. Rapport en cours de régénération…'
-          : 'Correction DMLA enregistrée. Rapport en cours de régénération…',
+          ? 'Valeur IA rétablie.'
+          : 'Correction DMLA enregistrée.',
         type: 'success',
         duration: 5000,
       });
