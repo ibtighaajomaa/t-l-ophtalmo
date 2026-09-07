@@ -438,16 +438,19 @@ export default class AiAnalysisPanel extends Component {
 
   drGradeLabel = key => DR_GRADE_OPTIONS.find(option => option.key === key)?.label || key || 'Inconnu';
 
+  // Ticking a class saves straight away: no Enregistrer, no Annuler. Ticking
+  // the class that is already the doctor's choice reverts to the AI grade.
   selectDrGrade = (side, key) => {
     if (!side) return;
     const report = this.getReportForSide(side) || {};
     const correctedKey = this.normalizeDrGradeKey(report.doctor_dr_correction?.grade);
-    this.setState(state => ({
-      pendingDrGradeByEye: {
-        ...state.pendingDrGradeByEye,
-        [side]: key === correctedKey ? null : key,
-      },
-    }));
+    const next = key === correctedKey ? null : key;
+    this.setState(
+      state => ({
+        pendingDrGradeByEye: { ...state.pendingDrGradeByEye, [side]: next },
+      }),
+      () => this.saveDrGradeCorrection(side, next)
+    );
   };
 
   cancelDrGradeSelection = side => {
@@ -527,23 +530,23 @@ export default class AiAnalysisPanel extends Component {
     }
   };
 
+  // Clicking a chip saves that factor straight away. Clicking the value that is
+  // already displayed reverts this factor to the AI prediction.
   selectDmlaValue = (side, factor, option, currentLabel) => {
     if (!side) return;
-    this.setState(state => {
-      const pending = { ...(state.pendingDmlaByEye?.[side] || {}) };
-      if (option === currentLabel) {
-        delete pending[factor];
-      } else {
-        pending[factor] = option;
-      }
-      return { pendingDmlaByEye: { ...state.pendingDmlaByEye, [side]: pending } };
-    });
-  };
-
-  cancelDmlaSelection = side => {
-    this.setState(state => ({
-      pendingDmlaByEye: { ...state.pendingDmlaByEye, [side]: {} },
-    }));
+    const revert = option === currentLabel;
+    this.setState(
+      state => {
+        const pending = { ...(state.pendingDmlaByEye?.[side] || {}) };
+        if (revert) {
+          delete pending[factor];
+        } else {
+          pending[factor] = option;
+        }
+        return { pendingDmlaByEye: { ...state.pendingDmlaByEye, [side]: pending } };
+      },
+      () => this.saveDmlaCorrections(side, [[factor, revert ? null : option]])
+    );
   };
 
   saveDmlaCorrections = async (side, entries) => {
@@ -1332,27 +1335,12 @@ export default class AiAnalysisPanel extends Component {
                 );
               })}
             </div>
-            {canEdit && pendingKey && (
-              <div className="drGradeActionBar">
-                <span className="drGradeActionLabel">
-                  Grade médecin : <strong style={{ color: pendingColor }}>{this.drGradeLabel(pendingKey)}</strong>
-                </span>
-                <button
-                  type="button"
-                  className="drGradeButton primary"
-                  disabled={saving}
-                  onClick={() => this.saveDrGradeCorrection(side, pendingKey)}
-                >
-                  {saving ? 'Enregistrement…' : 'Enregistrer et régénérer le rapport'}
-                </button>
-                <button
-                  type="button"
-                  className="drGradeButton"
-                  disabled={saving}
-                  onClick={() => this.cancelDrGradeSelection(side)}
-                >
-                  Annuler
-                </button>
+            {canEdit && saving && (
+              <div className="drGradeStatusLine">
+                <span className="metricStatus">Enregistrement…</span>
+                {pendingKey && (
+                  <span style={{ color: pendingColor }}>{this.drGradeLabel(pendingKey)}</span>
+                )}
               </div>
             )}
             {canEdit && corrected && !pendingKey && (
@@ -1595,28 +1583,16 @@ export default class AiAnalysisPanel extends Component {
             </div>
           );
         })}
-        {canEdit && pendingEntries.length > 0 && (
-          <div className="drGradeActionBar">
-            <span className="drGradeActionLabel">
-              Corrections DMLA :{' '}
-              {pendingEntries.map(([key, value]) => `${titleFor(key)} → ${labelMap[value] || value}`).join(' · ')}
-            </span>
-            <button
-              type="button"
-              className="drGradeButton primary"
-              disabled={saving}
-              onClick={() => this.saveDmlaCorrections(side, pendingEntries)}
-            >
-              {saving ? 'Enregistrement…' : 'Enregistrer et régénérer le rapport'}
-            </button>
-            <button
-              type="button"
-              className="drGradeButton"
-              disabled={saving}
-              onClick={() => this.cancelDmlaSelection(side)}
-            >
-              Annuler
-            </button>
+        {canEdit && saving && (
+          <div className="drGradeStatusLine">
+            <span className="metricStatus">Enregistrement…</span>
+            {pendingEntries.length > 0 && (
+              <span>
+                {pendingEntries
+                  .map(([key, value]) => `${titleFor(key)} → ${labelMap[value] || value}`)
+                  .join(' · ')}
+              </span>
+            )}
           </div>
         )}
         <div className="row" style={{ marginTop: '8px', borderTop: '1px solid #475569', paddingTop: '8px' }}>
