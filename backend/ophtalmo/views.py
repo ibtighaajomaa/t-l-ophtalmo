@@ -1645,15 +1645,15 @@ def save_dr_grade_correction(request):
     )
     has_seg_correction = bool(report_json.get('doctor_segmentation_corrections'))
     report_json['status'] = 'DOCTOR_CORRECTED' if (has_grade_correction or has_seg_correction) else 'AI_ANALYZED'
+    # The doctor regenerates the report once, from the toolbar, when every
+    # correction is done: a correction on its own only persists the values.
+    regenerate = bool(request.data.get('regenerate', False))
     if regenerate:
         report_json['report_generation_status'] = 'pending'
         report_json['report_generation_error'] = ''
     report.report_json = report_json
     report.save(update_fields=['report_json'])
 
-    # The doctor regenerates the report once, from the toolbar, when every
-    # correction is done: a correction on its own only persists the values.
-    regenerate = bool(request.data.get('regenerate', False))
     exam = Exam.objects.filter(study_instance_uid=study_uid).first()
     task_id = None
     if exam and regenerate:
@@ -1789,15 +1789,15 @@ def save_dmla_correction(request):
     report_json['status'] = (
         'DOCTOR_CORRECTED' if (has_dr_correction or has_dmla_correction or has_seg_correction) else 'AI_ANALYZED'
     )
+    # The doctor regenerates the report once, from the toolbar, when every
+    # correction is done: a correction on its own only persists the values.
+    regenerate = bool(request.data.get('regenerate', False))
     if regenerate:
         report_json['report_generation_status'] = 'pending'
         report_json['report_generation_error'] = ''
     report.report_json = report_json
     report.save(update_fields=['report_json'])
 
-    # The doctor regenerates the report once, from the toolbar, when every
-    # correction is done: a correction on its own only persists the values.
-    regenerate = bool(request.data.get('regenerate', False))
     exam = Exam.objects.filter(study_instance_uid=study_uid).first()
     task_id = None
     if exam and regenerate:
@@ -2032,15 +2032,15 @@ def save_metrics_correction(request):
     has_doctor_decision = any(_eye_has_doctor_decision(item) for item in per_eye.values())
     has_seg_correction = bool(report_json.get('doctor_segmentation_corrections'))
     report_json['status'] = 'DOCTOR_CORRECTED' if (has_doctor_decision or has_seg_correction) else 'AI_ANALYZED'
+    # The doctor regenerates the report once, from the toolbar, when every
+    # correction is done: a correction on its own only persists the values.
+    regenerate = bool(request.data.get('regenerate', False))
     if regenerate:
         report_json['report_generation_status'] = 'pending'
         report_json['report_generation_error'] = ''
     report.report_json = report_json
     report.save(update_fields=['report_json'])
 
-    # The doctor regenerates the report once, from the toolbar, when every
-    # correction is done: a correction on its own only persists the values.
-    regenerate = bool(request.data.get('regenerate', False))
     exam = Exam.objects.filter(study_instance_uid=study_uid).first()
     task_id = None
     if exam and regenerate:
