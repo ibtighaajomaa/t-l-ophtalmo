@@ -1698,6 +1698,9 @@ export default class AiAnalysisPanel extends Component {
     const classifiersAgree = classifierGrades.length > 1 &&
       classifierGrades.every(modelGrade => modelGrade === classifierGrades[0]);
     const isDoctorAdjudication = adjudication?.method === 'doctor_correction';
+    // The grade now comes from CLIP-DR itself, so there is no MedGemma-vs-classifier
+    // discordance left to report.
+    const isClipDrAdjudication = adjudication?.method === 'clip_dr_selected';
     const concordanceLabel = !hasMedGemmaAdjudication
       ? null
       : isDoctorAdjudication
@@ -1709,7 +1712,7 @@ export default class AiAnalysisPanel extends Component {
           : medGemmaMatches
             ? 'Concordance partielle'
             : 'Discordance';
-    const reviewRequired = hasMedGemmaAdjudication && !isDoctorAdjudication && (
+    const reviewRequired = hasMedGemmaAdjudication && !isDoctorAdjudication && !isClipDrAdjudication && (
       adjudication.requires_ophthalmologist_review ||
       adjudication.status !== 'supported' ||
       !hasMultimodalMedGemma ||
@@ -1749,7 +1752,7 @@ export default class AiAnalysisPanel extends Component {
                   {this.renderDrModelCard(title, model, report, side)}
                 </React.Fragment>
               ))}
-              {hasMedGemmaAdjudication && !exactGradeMatch && !report.doctor_dr_correction && (
+              {hasMedGemmaAdjudication && !exactGradeMatch && !isClipDrAdjudication && !report.doctor_dr_correction && (
                 <div style={{ width: '100%', color: '#fbbf24', fontSize: '10px' }}>
                   Aucun classifieur ne prédit exactement le grade proposé par MedGemma.
                 </div>

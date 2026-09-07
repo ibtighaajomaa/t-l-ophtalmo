@@ -947,7 +947,7 @@ def tache_generate_ai_report(self, exam_id, study_uid=None, force=False):
                     and existing_method == "doctor_correction"
                     and existing_adjudication.get("grade") == doctor_grade
                 )
-                or (not doctor_grade and existing_method == "medgemma_multimodal_two_stage")
+                or (not doctor_grade and existing_method == "clip_dr_selected")
             )
         if (
             existing_eye.get("status") == "generated"

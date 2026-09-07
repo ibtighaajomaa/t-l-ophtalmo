@@ -208,7 +208,11 @@ def format_analysis_data(report_data: dict) -> str:
             "et ne présente pas les probabilités des classifieurs comme conclusion."
         )
     elif cls:
-        lines.append("## Classification RD principale")
+        lines.append("## Classification RD principale (grade fourni par le classifieur CLIP-DR)")
+        lines.append(
+            "- Consigne: ce grade est celui du classifieur CLIP-DR; reprends-le tel quel, "
+            "ne propose pas un autre grade et ne le recalcule pas a partir de l'image."
+        )
         lines.append(f"- Grade predit: {cls.get('predicted_grade') or cls.get('grade') or 'N/A'}")
         lines.append(f"- Confiance: {_format_percent(cls.get('confidence'))}")
         probabilities = cls.get("probabilities") or []
@@ -349,6 +353,7 @@ Règles obligatoires :
 - Ta réponse complète doit être uniquement : <RAPPORT>{report_title} [paragraphe]</RAPPORT>
 - N'écris strictement rien avant <RAPPORT>, ni après </RAPPORT> : pas de plan, pas de brouillon, pas de vérification de longueur, pas de réflexion visible.
 - Utilise les sorties des modèles, sans modifier ni inventer les valeurs.
+- Le grade de rétinopathie diabétique est fourni par le classificateur CLIP-DR : reprends exactement ce grade, ne le remets pas en cause et n'en propose aucun autre à partir de l'image.
 {doctor_rule}- Résume les résultats importants sans recopier toutes les données techniques.
 - N'utilise aucun mot anglais pour désigner les diagnostics ou les stades.
 - N'utilise ni liste, ni tableau, ni sous-rubrique.
@@ -486,6 +491,55 @@ def _doctor_dr_grade(report_data):
         return None, None
     grade = _normalize_dr_grade_key(doctor.get("grade"))
     return (grade, doctor) if grade else (None, None)
+
+
+def _clip_dr_adjudication(report_data: dict):
+    """The DR grade is decided by the CLIP-DR classifier, not by MedGemma.
+
+    MedGemma is only asked to write the report text, so the grade record is
+    built straight from the CLIP-DR output, falling back to the conservative
+    selection when CLIP-DR is unavailable."""
+    models = report_data.get("dr_classification_models") or {}
+    clip = models.get("clip_dr") if isinstance(models, dict) else None
+    from_clip = isinstance(clip, dict) and clip.get("status") == "ok"
+    selected = (
+        clip
+        if from_clip
+        else (report_data.get("selected_dr_classification") or report_data.get("dr_classification") or {})
+    )
+    if not isinstance(selected, dict):
+        return None
+    grade = _normalize_dr_grade_key(selected.get("grade") or selected.get("predicted_grade"))
+    if not grade:
+        try:
+            index = int(selected.get("grade_index"))
+            grade = DR_GRADES[index] if 0 <= index < len(DR_GRADES) else None
+        except (TypeError, ValueError):
+            grade = None
+    if not grade:
+        return None
+    try:
+        confidence = max(0.0, min(1.0, float(selected.get("confidence") or 0.0)))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return {
+        "status": "supported",
+        "grade": grade,
+        "grade_index": DR_GRADES.index(grade),
+        "confidence": confidence,
+        "calibration_status": selected.get("calibration_status") or "not_locally_calibrated",
+        "evidence": ["Grade fourni par le classifieur CLIP-DR"],
+        "contradictions": [],
+        "limitations": (
+            []
+            if from_clip
+            else ["Resultat CLIP-DR indisponible; grade repris de la selection conservatrice des classifieurs"]
+        ),
+        "requires_ophthalmologist_review": False,
+        "model_id": MODEL_ID,
+        "method": "clip_dr_selected",
+        "grade_source": "clip_dr" if from_clip else "selected_dr_classification",
+    }
 
 
 def _doctor_adjudication(report_data: dict):
@@ -751,45 +805,14 @@ class MedGemmaEngine:
         max_new_tokens: int | None = None,
     ) -> dict:
         working_report_data = dict(report_data or {})
-        doctor_adjudication = _doctor_adjudication(working_report_data)
-        if doctor_adjudication is not None:
-            adjudication = doctor_adjudication
-        elif image is None:
-            adjudication = _fallback_adjudication(
-                working_report_data,
-                "Image couleur indisponible pour l'arbitrage multimodal MedGemma",
-            )
-        else:
-            adjudication = None
-            adjudication_error = None
-            for attempt in range(2):
-                try:
-                    prompt = _adjudication_prompt(
-                        patient_id, patient_age, eye, working_report_data
-                    )
-                    if attempt:
-                        prompt += (
-                            "\nRAPPEL: réponds immédiatement avec le caractère {, "
-                            "puis uniquement l'objet JSON demandé."
-                        )
-                    adjudication_text = self.generate_text(
-                        prompt,
-                        image=image,
-                        max_new_tokens=min(_generation_token_limit(max_new_tokens), 512),
-                    )
-                    adjudication = _normalize_adjudication(
-                        _extract_json(adjudication_text)
-                    )
-                    break
-                except Exception as exc:
-                    adjudication_error = exc
-            if adjudication is None:
-                adjudication = _fallback_adjudication(
-                    working_report_data,
-                    f"Arbitrage MedGemma indisponible après 2 tentatives: "
-                    f"{str(adjudication_error)[:160]}",
-                )
-        working_report_data["medgemma_dr_adjudication"] = adjudication
+        # MedGemma never predicts the DR grade: the doctor's correction wins,
+        # otherwise the grade comes from the CLIP-DR classifier. MedGemma is
+        # only asked to write the report text from it.
+        adjudication = _doctor_adjudication(working_report_data) or _clip_dr_adjudication(
+            working_report_data
+        )
+        if adjudication is not None:
+            working_report_data["medgemma_dr_adjudication"] = adjudication
         prompt = _report_prompt(
             patient_id=patient_id,
             report_data=working_report_data,
