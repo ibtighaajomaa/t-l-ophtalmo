@@ -13,9 +13,9 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   let foveaVisible = false;
   // Crayon and Gomme keep independent brush sizes (in canvas pixels). They
   // persist in localStorage so the doctor's preferred sizes survive reloads.
-  const BRUSH_MIN = 2;
+  const BRUSH_MIN = 1;
   const BRUSH_MAX = 120;
-  const BRUSH_STEP = 2;
+  const BRUSH_STEP = 1;
   const BRUSH_STORAGE_KEY = 'teleophtalmo.segmentation.brushSizes';
   const brushPanels = new Map(); // viewportId -> { panel, refresh }
   const brushSizes = loadBrushSizes();
@@ -597,12 +597,13 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     const scalarData = accessor?.getScalarData?.();
     if (!scalarData) return 0;
 
-    const radius = Math.max(2, brushSize / 2);
+    const radius = Math.max(0.5, brushSize / 2);
     const radiusSquared = radius * radius;
+    const span = Math.max(0, Math.ceil(radius - 0.5));
     let changed = 0;
 
-    for (let dy = -radius; dy <= radius; dy++) {
-      for (let dx = -radius; dx <= radius; dx++) {
+    for (let dy = -span; dy <= span; dy++) {
+      for (let dx = -span; dx <= span; dx++) {
         if (dx * dx + dy * dy > radiusSquared) continue;
         const offset = scalarOffsetFromCanvas(viewport, canvasX + dx, canvasY + dy);
         if (offset == null) continue;
