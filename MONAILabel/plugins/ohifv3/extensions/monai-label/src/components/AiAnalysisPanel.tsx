@@ -716,13 +716,12 @@ export default class AiAnalysisPanel extends Component {
           reportGenerationError: '',
         };
       });
-      setTimeout(() => {
-        this.setState(state => (
-          state.metricsSavedByEye?.[side] === section
-            ? { metricsSavedByEye: { ...state.metricsSavedByEye, [side]: null } }
-            : null
-        ));
-      }, 2500);
+      uiNotificationService.show({
+        title,
+        message: values ? 'Valeurs corrigées.' : 'Valeurs IA rétablies.',
+        type: 'success',
+        duration: 3000,
+      });
       this.pollSavedAnalysis();
     } catch (err) {
       this.setState(state => ({
@@ -766,6 +765,25 @@ export default class AiAnalysisPanel extends Component {
       onBlur={() => this.queueMetricsSave(side, section, current, true)}
     />
   );
+
+  // Placed under the fields rather than in the section title, so the header
+  // keeps only the section name and the doctor-corrected badge.
+  metricsRevertLink = (side, section, corrected, saving) => {
+    if (!side || !corrected) return null;
+    return (
+      <div className="drGradeLinks">
+        <button
+          type="button"
+          className="drGradeLink danger"
+          style={{ textTransform: 'none' }}
+          disabled={saving}
+          onClick={() => this.saveMetricsCorrection(side, section, null)}
+        >
+          Rétablir les valeurs IA
+        </button>
+      </div>
+    );
+  };
 
   renderLesionsSection = (report, side = null) => {
     const lesions = report?.lesions || {};
@@ -811,17 +829,6 @@ export default class AiAnalysisPanel extends Component {
         <div className="sectionTitle metricSectionTitle">
           <span>Lésions</span>
           {corrected && <span className="drCorrectedBadge">✓ Corrigé par le médecin</span>}
-          {this.renderMetricsStatus(side, 'lesions')}
-          {canEdit && corrected && (
-            <button
-              type="button"
-              className="drGradeLink danger"
-              disabled={saving}
-              onClick={() => this.saveMetricsCorrection(side, 'lesions', null)}
-            >
-              Rétablir les valeurs IA
-            </button>
-          )}
         </div>
         {fields.map(field => {
           const aiValue = aiValues[field.key];
@@ -846,6 +853,7 @@ export default class AiAnalysisPanel extends Component {
             </div>
           );
         })}
+        {this.metricsRevertLink(side, 'lesions', corrected, saving)}
       </div>
     );
   };
@@ -898,18 +906,6 @@ export default class AiAnalysisPanel extends Component {
         <div className="sectionTitle metricSectionTitle" style={{ textTransform: 'uppercase' }}>
           <span>Évaluation du glaucome</span>
           {corrected && <span className="drCorrectedBadge">✓ Corrigé par le médecin</span>}
-          {this.renderMetricsStatus(side, 'glaucoma')}
-          {canEdit && corrected && (
-            <button
-              type="button"
-              className="drGradeLink danger"
-              style={{ textTransform: 'none' }}
-              disabled={saving}
-              onClick={() => this.saveMetricsCorrection(side, 'glaucoma', null)}
-            >
-              Rétablir les valeurs IA
-            </button>
-          )}
         </div>
 
         <div className="glaucomaRiskBlock">
@@ -966,6 +962,7 @@ export default class AiAnalysisPanel extends Component {
             </span>
           </div>
         ))}
+        {this.metricsRevertLink(side, 'glaucoma', corrected, saving)}
       </div>
     );
   };
