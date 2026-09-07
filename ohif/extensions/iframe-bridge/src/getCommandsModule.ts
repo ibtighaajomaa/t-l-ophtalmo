@@ -22,7 +22,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // "Baguette" (magic wand): one click on a lesion, seeded region growing on the
   // fundus image fills the whole lesion. Two doctor-facing settings, persisted.
   const WAND_STORAGE_KEY = 'teleophtalmo.segmentation.wand';
-  const WAND_LIMITS = { tolerance: [5, 80], radius: [10, 150] };
+  const WAND_LIMITS = { tolerance: [5, 80], radius: [2, 150] };
   const WAND_DEFAULTS = { tolerance: 25, radius: 40 };
   const WAND_MAX_ERASE_COMPONENT = 250000; // px, guards Alt+click on a vessel tree
   const wandPanels = new Map(); // viewportId -> { panel, refresh }
@@ -1903,7 +1903,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     title.textContent = 'Baguette';
     Object.assign(title.style, { fontWeight: '600', color: accent });
     const tolerance = buildSettingRow({ label: 'Tolérance', key: 'tolerance', unit: '', step: 1, accent });
-    const radius = buildSettingRow({ label: 'Rayon max', key: 'radius', unit: ' px', step: 2, accent });
+    const radius = buildSettingRow({ label: 'Rayon max', key: 'radius', unit: ' px', step: 1, accent });
     const hint = document.createElement('div');
     hint.textContent = 'Clic : dessiner la lésion · Alt + clic : supprimer';
     Object.assign(hint.style, { color: '#94a3b8', fontSize: '11px' });
@@ -2114,7 +2114,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           setWandSetting('tolerance', getWandSetting('tolerance') + (event.deltaY > 0 ? -1 : 1));
           event.preventDefault();
         } else if (event.altKey) {
-          setWandSetting('radius', getWandSetting('radius') + (event.deltaY > 0 ? -2 : 2));
+          setWandSetting('radius', getWandSetting('radius') + (event.deltaY > 0 ? -1 : 1));
           event.preventDefault();
         }
       };
