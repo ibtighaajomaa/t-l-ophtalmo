@@ -838,3 +838,40 @@
   font-weight: 400;
   margin-left: 4px;
 }
+
+/* --- Always-editable metric rows with automatic saving --- */
+.aiAnalysisPanel .metricSectionTitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.aiAnalysisPanel .metricValueCell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+.aiAnalysisPanel .metricValueCell .metricInput {
+  margin-top: 0;
+}
+.aiAnalysisPanel .metricUnit {
+  color: #94a3b8;
+  font-size: 11px;
+}
+.aiAnalysisPanel .metricStatus {
+  color: #7dd3fc;
+  font-size: 10px;
+  font-weight: 600;
+}
+.aiAnalysisPanel .metricStatus.ok {
+  color: #86efac;
+}
+.aiAnalysisPanel .glaucomaRiskBlock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+}

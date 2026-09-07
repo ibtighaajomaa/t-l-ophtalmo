@@ -43,9 +43,9 @@ export default class AiAnalysisPanel extends Component {
       savingDrCorrection: false,
       pendingDmlaByEye: { right: {}, left: {} },
       savingDmlaCorrection: false,
-      editingMetricsByEye: { right: null, left: null },
       metricsDraftByEye: { right: {}, left: {} },
-      savingMetrics: false,
+      metricsSavingByEye: { right: null, left: null },
+      metricsSavedByEye: { right: null, left: null },
     };
     this.serverURI = (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1') + '/monai/';
   }
@@ -605,32 +605,54 @@ export default class AiAnalysisPanel extends Component {
     }
   };
 
-  startMetricsEdit = (side, section, fields) => {
-    if (!side) return;
-    const draft = {};
-    fields.forEach(field => {
-      draft[field.key] = field.value;
+  // Lesion counts and glaucoma metrics are always editable and saved on their
+  // own: no "Corriger", no "Enregistrer", no "Annuler". Typing is debounced,
+  // leaving a field or picking a risk chip saves immediately. Only the fields
+  // that actually differ from the stored values are sent.
+  METRICS_SAVE_DELAY = 1000;
+  _metricsTimers = {};
+
+  metricsDraft = (side, section) =>
+    (side && this.state.metricsDraftByEye?.[side]?.[section]) || {};
+
+  setMetricsDraft = (side, section, key, value) => {
+    this.setState(state => {
+      const forSide = { ...(state.metricsDraftByEye?.[side] || {}) };
+      forSide[section] = { ...(forSide[section] || {}), [key]: value };
+      return { metricsDraftByEye: { ...state.metricsDraftByEye, [side]: forSide } };
     });
-    this.setState(state => ({
-      editingMetricsByEye: { ...state.editingMetricsByEye, [side]: section },
-      metricsDraftByEye: { ...state.metricsDraftByEye, [side]: draft },
-    }));
   };
 
-  updateMetricsDraft = (side, key, value) => {
-    this.setState(state => ({
-      metricsDraftByEye: {
-        ...state.metricsDraftByEye,
-        [side]: { ...(state.metricsDraftByEye?.[side] || {}), [key]: value },
-      },
-    }));
+  changedMetricsValues = (side, section, current) => {
+    const draft = this.metricsDraft(side, section);
+    const values = {};
+    Object.entries(draft).forEach(([key, raw]) => {
+      if (raw === '' || raw === null || raw === undefined) return;
+      if (key === 'risk') {
+        if (String(raw) !== String(current[key] ?? '')) values[key] = raw;
+        return;
+      }
+      const next = Number(raw);
+      if (!Number.isFinite(next)) return;
+      if (Number(current[key]) !== next) values[key] = next;
+    });
+    return values;
   };
 
-  cancelMetricsEdit = side => {
-    this.setState(state => ({
-      editingMetricsByEye: { ...state.editingMetricsByEye, [side]: null },
-      metricsDraftByEye: { ...state.metricsDraftByEye, [side]: {} },
-    }));
+  queueMetricsSave = (side, section, current, immediate = false) => {
+    if (!side) return;
+    const timerKey = `${side}:${section}`;
+    clearTimeout(this._metricsTimers[timerKey]);
+    const run = () => {
+      const values = this.changedMetricsValues(side, section, current);
+      if (!Object.keys(values).length) return;
+      this.saveMetricsCorrection(side, section, values);
+    };
+    if (immediate) {
+      run();
+    } else {
+      this._metricsTimers[timerKey] = setTimeout(run, this.METRICS_SAVE_DELAY);
+    }
   };
 
   saveMetricsCorrection = async (side, section, values) => {
@@ -642,7 +664,11 @@ export default class AiAnalysisPanel extends Component {
       return;
     }
     const title = section === 'lesions' ? 'Lésions' : 'Glaucome';
-    this.setState({ savingMetrics: true, reportError: null, reportGenerationError: '' });
+    this.setState(state => ({
+      metricsSavingByEye: { ...state.metricsSavingByEye, [side]: section },
+      reportError: null,
+      reportGenerationError: '',
+    }));
     try {
       const token = this.getAuthToken();
       const response = await fetch('/api/exams/metrics-correction/', {
@@ -651,36 +677,49 @@ export default class AiAnalysisPanel extends Component {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ study_instance_uid: studyUid, eye: side, section, values: values || null }),
+        body: JSON.stringify({
+          study_instance_uid: studyUid,
+          eye: side,
+          section,
+          values: values || null,
+        }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(data.error || `HTTP ${response.status}`);
       }
       const normalized = this.normalizeAnalysis(data.analysis || data);
-      this.setState(state => ({
-        ...normalized,
-        activeEye: side,
-        savingMetrics: false,
-        editingMetricsByEye: { ...state.editingMetricsByEye, [side]: null },
-        metricsDraftByEye: { ...state.metricsDraftByEye, [side]: {} },
-        reportGenerationStatus:
-          data.report_generation_status === 'not_queued' ? state.reportGenerationStatus : 'pending',
-        reportGenerationError: '',
-        savedMedicalReportHtml: '',
-        summaryReportResult: null,
-      }));
-      uiNotificationService.show({
-        title,
-        message: values
-          ? 'Valeurs corrigées. Rapport en cours de régénération…'
-          : 'Valeurs IA rétablies. Rapport en cours de régénération…',
-        type: 'success',
-        duration: 5000,
+      this.setState(state => {
+        const forSide = { ...(state.metricsDraftByEye?.[side] || {}) };
+        delete forSide[section];
+        return {
+          ...normalized,
+          activeEye: side,
+          metricsDraftByEye: { ...state.metricsDraftByEye, [side]: forSide },
+          metricsSavingByEye: { ...state.metricsSavingByEye, [side]: null },
+          metricsSavedByEye: { ...state.metricsSavedByEye, [side]: section },
+          reportGenerationStatus:
+            data.report_generation_status === 'not_queued'
+              ? state.reportGenerationStatus
+              : 'pending',
+          reportGenerationError: '',
+          savedMedicalReportHtml: '',
+          summaryReportResult: null,
+        };
       });
+      setTimeout(() => {
+        this.setState(state => (
+          state.metricsSavedByEye?.[side] === section
+            ? { metricsSavedByEye: { ...state.metricsSavedByEye, [side]: null } }
+            : null
+        ));
+      }, 2500);
       this.pollSavedAnalysis();
     } catch (err) {
-      this.setState({ savingMetrics: false, reportError: err.message || 'Échec de la correction.' });
+      this.setState(state => ({
+        metricsSavingByEye: { ...state.metricsSavingByEye, [side]: null },
+        reportError: err.message || 'Échec de la correction.',
+      }));
       uiNotificationService.show({
         title,
         message: err.message || 'Échec de la correction.',
@@ -690,20 +729,33 @@ export default class AiAnalysisPanel extends Component {
     }
   };
 
-  renderMetricsActionBar = (side, section, draft, saving) => (
-    <div className="drGradeActionBar">
-      <button
-        type="button"
-        className="drGradeButton primary"
-        disabled={saving}
-        onClick={() => this.saveMetricsCorrection(side, section, draft)}
-      >
-        {saving ? 'Enregistrement…' : 'Enregistrer et régénérer le rapport'}
-      </button>
-      <button type="button" className="drGradeButton" disabled={saving} onClick={() => this.cancelMetricsEdit(side)}>
-        Annuler
-      </button>
-    </div>
+  renderMetricsStatus = (side, section) => {
+    const saving = this.state.metricsSavingByEye?.[side] === section;
+    const saved = this.state.metricsSavedByEye?.[side] === section;
+    if (!saving && !saved) return null;
+    return (
+      <span className={`metricStatus ${saved ? 'ok' : ''}`}>
+        {saving ? 'Enregistrement…' : '✓ Enregistré'}
+      </span>
+    );
+  };
+
+  renderMetricNumber = (side, section, field, current, saving) => (
+    <input
+      type="number"
+      className="metricInput"
+      min={0}
+      max={field.max}
+      step={field.step || 1}
+      value={this.metricsDraft(side, section)[field.key] ?? current[field.key]}
+      disabled={saving}
+      aria-label={field.label}
+      onChange={event => {
+        this.setMetricsDraft(side, section, field.key, event.target.value);
+        this.queueMetricsSave(side, section, current);
+      }}
+      onBlur={() => this.queueMetricsSave(side, section, current, true)}
+    />
   );
 
   renderLesionsSection = (report, side = null) => {
@@ -715,82 +767,43 @@ export default class AiAnalysisPanel extends Component {
     ) {
       return null;
     }
+    const hasCoverage = lesions.coverage_pct !== undefined;
+    const current = {
+      microaneurysms: Number(lesions.microaneurysms ?? 0),
+      hemorrhages: Number(lesions.hemorrhages ?? 0),
+      hard_exudates: Number(lesions.hard_exudates ?? lesions.exudates ?? 0),
+      soft_exudates: Number(lesions.soft_exudates ?? lesions.cotton_wool_spots ?? 0),
+      neovascularization: Number(lesions.neovascularization ?? 0),
+    };
+    if (hasCoverage) current.coverage_pct = Number(lesions.coverage_pct) || 0;
+
     const fields = [
-      { key: 'microaneurysms', label: 'Microanévrismes', value: lesions.microaneurysms ?? 0 },
-      { key: 'hemorrhages', label: 'Hémorragies', value: lesions.hemorrhages ?? 0 },
-      { key: 'hard_exudates', label: 'Exsudats', value: lesions.hard_exudates ?? lesions.exudates ?? 0 },
-      { key: 'soft_exudates', label: 'Nodules cotonneux', value: lesions.soft_exudates ?? lesions.cotton_wool_spots ?? 0 },
-      { key: 'neovascularization', label: 'Néovascularisation', value: lesions.neovascularization ?? 0 },
-      ...(lesions.coverage_pct !== undefined
-        ? [{ key: 'coverage_pct', label: 'Couverture', value: Number(lesions.coverage_pct) || 0, unit: '%', step: 0.1 }]
+      { key: 'microaneurysms', label: 'Microanévrismes' },
+      { key: 'hemorrhages', label: 'Hémorragies' },
+      { key: 'hard_exudates', label: 'Exsudats' },
+      { key: 'soft_exudates', label: 'Nodules cotonneux' },
+      { key: 'neovascularization', label: 'Néovascularisation' },
+      ...(hasCoverage
+        ? [{ key: 'coverage_pct', label: 'Couverture', step: 0.1, max: 100, unit: '%' }]
         : []),
     ];
     const canEdit = !!side;
-    const editing = canEdit && this.state.editingMetricsByEye?.[side] === 'lesions';
-    const draft = editing ? this.state.metricsDraftByEye?.[side] || {} : {};
-    const saving = !!this.state.savingMetrics;
+    const saving = this.state.metricsSavingByEye?.[side] === 'lesions';
     const doctorValues =
       lesions.doctor_values && typeof lesions.doctor_values === 'object' ? lesions.doctor_values : {};
-    const aiValues = lesions.ai_values && typeof lesions.ai_values === 'object' ? lesions.ai_values : {};
-    const manuallyCorrected = Object.keys(doctorValues).length > 0;
-    const format = (key, value) =>
-      key === 'coverage_pct' ? `${(Number(value) || 0).toFixed(1)}%` : String(value ?? 0);
+    const aiValues =
+      lesions.ai_values && typeof lesions.ai_values === 'object' ? lesions.ai_values : {};
+    const corrected = Object.keys(doctorValues).length > 0;
+    const show = (key, value) =>
+      key === 'coverage_pct' ? `${(Number(value) || 0).toFixed(1)}%` : `${value ?? 0}`;
 
     return (
-      <div className="section">
-        <div className="sectionTitle" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          Lésions
-          {canEdit && !editing && (
-            <button
-              type="button"
-              className="drGradeLink"
-              disabled={saving}
-              onClick={() => this.startMetricsEdit(side, 'lesions', fields)}
-            >
-              Corriger
-            </button>
-          )}
-        </div>
-        {lesions.doctor_corrected && !editing && (
-          <div className="lesionCorrectionBadge">
-            {manuallyCorrected ? '✓ Valeurs corrigées par le médecin' : 'Correction médecin appliquée'}
-            {lesions.doctor_corrected_by_name ? ` · ${lesions.doctor_corrected_by_name}` : ''}
-          </div>
-        )}
-        {fields.map(field => {
-          const aiValue = aiValues[field.key];
-          const changed =
-            manuallyCorrected &&
-            field.key in doctorValues &&
-            aiValue !== undefined &&
-            aiValue !== null &&
-            Number(aiValue) !== Number(field.value);
-          return (
-            <div className="row" key={field.key}>
-              <span className="label">{field.label}</span>
-              {editing ? (
-                <input
-                  type="number"
-                  className="metricInput"
-                  min={0}
-                  step={field.step || 1}
-                  value={draft[field.key] ?? field.value}
-                  disabled={saving}
-                  aria-label={field.label}
-                  onChange={event => this.updateMetricsDraft(side, field.key, event.target.value)}
-                />
-              ) : (
-                <span className="value">
-                  {format(field.key, field.value)}
-                  {changed && <span className="metricAiNote"> (IA : {format(field.key, aiValue)})</span>}
-                </span>
-              )}
-            </div>
-          );
-        })}
-        {editing && this.renderMetricsActionBar(side, 'lesions', draft, saving)}
-        {canEdit && !editing && manuallyCorrected && (
-          <div className="drGradeLinks">
+      <div className="section" style={corrected ? { borderColor: '#f59e0b' } : undefined}>
+        <div className="sectionTitle metricSectionTitle">
+          <span>Lésions</span>
+          {corrected && <span className="drCorrectedBadge">✓ Corrigé par le médecin</span>}
+          {this.renderMetricsStatus(side, 'lesions')}
+          {canEdit && corrected && (
             <button
               type="button"
               className="drGradeLink danger"
@@ -799,8 +812,31 @@ export default class AiAnalysisPanel extends Component {
             >
               Rétablir les valeurs IA
             </button>
-          </div>
-        )}
+          )}
+        </div>
+        {fields.map(field => {
+          const aiValue = aiValues[field.key];
+          const changed =
+            corrected &&
+            field.key in doctorValues &&
+            aiValue !== undefined &&
+            aiValue !== null &&
+            Number(aiValue) !== Number(current[field.key]);
+          return (
+            <div className="row" key={field.key}>
+              <span className="label">{field.label}</span>
+              <span className="metricValueCell">
+                {changed && <span className="metricAiNote">IA : {show(field.key, aiValue)}</span>}
+                {canEdit ? (
+                  this.renderMetricNumber(side, 'lesions', field, current, saving)
+                ) : (
+                  <span className="value">{show(field.key, current[field.key])}</span>
+                )}
+                {field.unit && <span className="metricUnit">{field.unit}</span>}
+              </span>
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -821,159 +857,106 @@ export default class AiAnalysisPanel extends Component {
       if (key.includes('modere')) return '#ffa726';
       return '#66bb6a';
     };
-    const fields = [
-      { key: 'vcdr', value: Number(glaucoma.vcdr) || 0 },
-      { key: 'risk', value: glaucoma.risk || '' },
-      { key: 'disc_area_px', value: Number(glaucoma.disc_area_px) || 0 },
-      { key: 'cup_area_px', value: Number(glaucoma.cup_area_px) || 0 },
-    ];
+    const current = {
+      vcdr: Number(glaucoma.vcdr) || 0,
+      risk: glaucoma.risk || '',
+      disc_area_px: Number(glaucoma.disc_area_px) || 0,
+      cup_area_px: Number(glaucoma.cup_area_px) || 0,
+    };
     const canEdit = !!side;
-    const editing = canEdit && this.state.editingMetricsByEye?.[side] === 'glaucoma';
-    const draft = editing ? this.state.metricsDraftByEye?.[side] || {} : {};
-    const saving = !!this.state.savingMetrics;
+    const draft = this.metricsDraft(side, 'glaucoma');
+    const saving = this.state.metricsSavingByEye?.[side] === 'glaucoma';
     const doctorValues =
-      glaucoma.doctor_values && typeof glaucoma.doctor_values === 'object' ? glaucoma.doctor_values : {};
-    const aiValues = glaucoma.ai_values && typeof glaucoma.ai_values === 'object' ? glaucoma.ai_values : {};
+      glaucoma.doctor_values && typeof glaucoma.doctor_values === 'object'
+        ? glaucoma.doctor_values
+        : {};
+    const aiValues =
+      glaucoma.ai_values && typeof glaucoma.ai_values === 'object' ? glaucoma.ai_values : {};
     const corrected = Object.keys(doctorValues).length > 0;
     const aiNote = key =>
       corrected && key in doctorValues && aiValues[key] !== undefined && aiValues[key] !== null
         ? aiValues[key]
         : null;
-    const cellStyle = { background: '#1c1f27', padding: '8px', borderRadius: '4px' };
-    const labelStyle = { fontSize: '11px', color: '#888', textTransform: 'uppercase' };
-    const draftRisk = draft.risk ?? glaucoma.risk ?? '';
+    const draftRisk = draft.risk ?? current.risk;
+    const numberFields = [
+      { key: 'vcdr', label: 'VCDR', step: 0.01, max: 1, format: v => Number(v).toFixed(4) },
+      { key: 'disc_area_px', label: 'Surface du disque', unit: 'px' },
+      { key: 'cup_area_px', label: "Surface de l'excavation", unit: 'px' },
+    ];
 
     return (
       <div className="section" style={corrected ? { borderColor: '#f59e0b' } : undefined}>
-        <div
-          className="sectionTitle"
-          style={{ textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '8px' }}
-        >
-          Évaluation du glaucome
-          {corrected && !editing && <span className="drCorrectedBadge">✓ Corrigé par le médecin</span>}
-          {canEdit && !editing && (
-            <button
-              type="button"
-              className="drGradeLink"
-              style={{ textTransform: 'none' }}
-              disabled={saving}
-              onClick={() => this.startMetricsEdit(side, 'glaucoma', fields)}
-            >
-              Corriger
-            </button>
-          )}
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
-          <div style={cellStyle}>
-            <div style={labelStyle}>VCDR</div>
-            {editing ? (
-              <input
-                type="number"
-                className="metricInput"
-                min={0}
-                max={1}
-                step={0.01}
-                value={draft.vcdr ?? Number(glaucoma.vcdr).toFixed(4)}
-                disabled={saving}
-                aria-label="VCDR"
-                onChange={event => this.updateMetricsDraft(side, 'vcdr', event.target.value)}
-              />
-            ) : (
-              <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#fff', marginTop: '4px' }}>
-                {Number(glaucoma.vcdr).toFixed(4)}
-                {aiNote('vcdr') !== null && (
-                  <span className="metricAiNote"> (IA : {Number(aiNote('vcdr')).toFixed(4)})</span>
-                )}
-              </div>
-            )}
-          </div>
-          <div style={cellStyle}>
-            <div style={labelStyle}>Risque</div>
-            {editing ? (
-              <div className="dmlaChoices" role="radiogroup" aria-label="Risque de glaucome">
-                {riskOptions.map(option => {
-                  const active = plain(option) === plain(draftRisk);
-                  return (
-                    <button
-                      type="button"
-                      key={option}
-                      role="radio"
-                      aria-checked={active}
-                      disabled={saving}
-                      className={`dmlaChip ${active ? 'active' : ''}`}
-                      style={active ? { borderColor: riskColor(option), color: riskColor(option) } : undefined}
-                      onClick={() => this.updateMetricsDraft(side, 'risk', option)}
-                    >
-                      {option}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div style={{ fontSize: '16px', fontWeight: 'bold', marginTop: '4px', color: riskColor(glaucoma.risk) }}>
-                {glaucoma.risk || '—'}
-                {aiNote('risk') !== null && <span className="metricAiNote"> (IA : {aiNote('risk')})</span>}
-              </div>
-            )}
-          </div>
-          <div style={cellStyle}>
-            <div style={labelStyle}>Surface du disque</div>
-            {editing ? (
-              <input
-                type="number"
-                className="metricInput"
-                min={0}
-                step={1}
-                value={draft.disc_area_px ?? (Number(glaucoma.disc_area_px) || 0)}
-                disabled={saving}
-                aria-label="Surface du disque"
-                onChange={event => this.updateMetricsDraft(side, 'disc_area_px', event.target.value)}
-              />
-            ) : (
-              <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#fff', marginTop: '4px' }}>
-                {glaucoma.disc_area_px || '—'} px
-                {aiNote('disc_area_px') !== null && (
-                  <span className="metricAiNote"> (IA : {aiNote('disc_area_px')} px)</span>
-                )}
-              </div>
-            )}
-          </div>
-          <div style={cellStyle}>
-            <div style={labelStyle}>Surface de l'excavation</div>
-            {editing ? (
-              <input
-                type="number"
-                className="metricInput"
-                min={0}
-                step={1}
-                value={draft.cup_area_px ?? (Number(glaucoma.cup_area_px) || 0)}
-                disabled={saving}
-                aria-label="Surface de l'excavation"
-                onChange={event => this.updateMetricsDraft(side, 'cup_area_px', event.target.value)}
-              />
-            ) : (
-              <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#fff', marginTop: '4px' }}>
-                {glaucoma.cup_area_px || '—'} px
-                {aiNote('cup_area_px') !== null && (
-                  <span className="metricAiNote"> (IA : {aiNote('cup_area_px')} px)</span>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-        {editing && this.renderMetricsActionBar(side, 'glaucoma', draft, saving)}
-        {canEdit && !editing && corrected && (
-          <div className="drGradeLinks">
+        <div className="sectionTitle metricSectionTitle" style={{ textTransform: 'uppercase' }}>
+          <span>Évaluation du glaucome</span>
+          {corrected && <span className="drCorrectedBadge">✓ Corrigé par le médecin</span>}
+          {this.renderMetricsStatus(side, 'glaucoma')}
+          {canEdit && corrected && (
             <button
               type="button"
               className="drGradeLink danger"
+              style={{ textTransform: 'none' }}
               disabled={saving}
               onClick={() => this.saveMetricsCorrection(side, 'glaucoma', null)}
             >
               Rétablir les valeurs IA
             </button>
+          )}
+        </div>
+
+        <div className="glaucomaRiskBlock">
+          <span className="label">Risque</span>
+          {canEdit ? (
+            <div className="dmlaChoices" role="radiogroup" aria-label="Risque de glaucome">
+              {riskOptions.map(option => {
+                const active = plain(option) === plain(draftRisk);
+                return (
+                  <button
+                    type="button"
+                    key={option}
+                    role="radio"
+                    aria-checked={active}
+                    disabled={saving}
+                    className={`dmlaChip ${active ? 'active' : ''}`}
+                    style={active ? { borderColor: riskColor(option), color: riskColor(option) } : undefined}
+                    onClick={() => {
+                      this.setMetricsDraft(side, 'glaucoma', 'risk', option);
+                      setTimeout(() => this.queueMetricsSave(side, 'glaucoma', current, true), 0);
+                    }}
+                  >
+                    {option}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <span className="value" style={{ color: riskColor(current.risk) }}>
+              {current.risk || '—'}
+            </span>
+          )}
+          {aiNote('risk') !== null && <span className="metricAiNote">IA : {aiNote('risk')}</span>}
+        </div>
+
+        {numberFields.map(field => (
+          <div className="row" key={field.key}>
+            <span className="label">{field.label}</span>
+            <span className="metricValueCell">
+              {aiNote(field.key) !== null && (
+                <span className="metricAiNote">
+                  IA : {field.format ? field.format(aiNote(field.key)) : aiNote(field.key)}
+                  {field.unit ? ` ${field.unit}` : ''}
+                </span>
+              )}
+              {canEdit ? (
+                this.renderMetricNumber(side, 'glaucoma', field, current, saving)
+              ) : (
+                <span className="value">
+                  {field.format ? field.format(current[field.key]) : current[field.key]}
+                </span>
+              )}
+              {field.unit && <span className="metricUnit">{field.unit}</span>}
+            </span>
           </div>
-        )}
+        ))}
       </div>
     );
   };
