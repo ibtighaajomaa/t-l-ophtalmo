@@ -776,6 +776,103 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     }
   }
 
+  // An AI DICOM-SEG only carries the classes it actually found: a lesion mask
+  // with no cotton-wool spot has no segment 4 at all, so the doctor cannot draw
+  // one. Declare the full class list of each model and add whatever is missing
+  // to the loaded segmentation, so every class shows up in the Segmentations
+  // panel and can be painted into.
+  const SEGMENTATION_CLASS_SETS = [
+    {
+      match: /l[eé]sion/i,
+      segments: [
+        { index: 1, label: 'Microanévrismes', color: [255, 50, 50, 255] },
+        { index: 2, label: 'Hémorragies', color: [59, 130, 246, 255] },
+        { index: 3, label: 'Exsudats', color: [255, 255, 255, 255] },
+        { index: 4, label: 'Nodules cotonneux', color: [0, 255, 0, 255] },
+      ],
+    },
+    {
+      match: /neovasc|néovasc/i,
+      segments: [{ index: 1, label: 'Néovascularisation', color: [255, 200, 0, 255] }],
+    },
+    {
+      match: /vaiss|vessel/i,
+      segments: [{ index: 1, label: 'Vaisseaux', color: [220, 38, 38, 255] }],
+    },
+    {
+      match: /optic|disc|exca|cup/i,
+      segments: [
+        { index: 1, label: 'Disque optique', color: [0, 180, 130, 255] },
+        { index: 2, label: 'Excavation papillaire', color: [255, 80, 160, 255] },
+      ],
+    },
+  ];
+
+  function segmentationDisplayName(segmentation) {
+    if (!segmentation) return '';
+    return [
+      segmentation.label,
+      segmentation.cachedStats?.info,
+      segmentation.segmentationId,
+    ]
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  function ensureAllSegmentClasses(segmentationId, viewportId) {
+    const { segmentationService } = servicesManager.services;
+    if (!segmentationId || !segmentationService?.addSegment) return 0;
+    let segmentation = null;
+    try {
+      segmentation = segmentationService.getSegmentation(segmentationId);
+    } catch (_) {
+      return 0;
+    }
+    if (!segmentation) return 0;
+
+    const name = segmentationDisplayName(segmentation);
+    const set = SEGMENTATION_CLASS_SETS.find(entry => entry.match.test(name));
+    // Unknown SEG kind: never invent classes for it.
+    if (!set) return 0;
+
+    const existing = segmentation.segments || {};
+    const missing = set.segments.filter(item => !existing[item.index]);
+    if (!missing.length) return 0;
+
+    // addSegment() makes the new segment active; restore the doctor's choice.
+    const previousActive = viewportId ? resolveActiveSegmentIndex(viewportId) : undefined;
+    let added = 0;
+    missing.forEach(item => {
+      try {
+        segmentationService.addSegment(segmentationId, {
+          segmentIndex: item.index,
+          label: item.label,
+          color: item.color,
+          visibility: true,
+          isLocked: false,
+        });
+        added++;
+      } catch (err) {
+        console.warn('[SegmentationEdit] addSegment failed for', item.label, err);
+      }
+    });
+    if (added) {
+      console.log(
+        '[SegmentationEdit] added', added, 'missing class(es) to', segmentationId,
+        missing.map(item => item.label)
+      );
+      try {
+        segmentationService.setActiveSegment(
+          segmentationId,
+          previousActive || set.segments[0].index
+        );
+      } catch (_) {
+        // non fatal
+      }
+    }
+    return added;
+  }
+
   function segmentsForSegmentation(segmentationId) {
     const { segmentationService } = servicesManager.services;
     if (!segmentationId) return [];
@@ -809,6 +906,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       });
       return;
     }
+    ensureAllSegmentClasses(segmentationId, activeViewportId);
     const segments = segmentsForSegmentation(segmentationId);
     if (!segments.length) {
       uiNotificationService.show({
@@ -1071,6 +1169,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         return;
       }
 
+      ensureAllSegmentClasses(segmentationId, activeViewportId);
       ensureOriginalSnapshot(accessor);
 
       let drawing = false;
@@ -1859,6 +1958,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         return;
       }
 
+      ensureAllSegmentClasses(segmentationId, activeViewportId);
       ensureOriginalSnapshot(accessor);
       const previousCursor = element.style.cursor;
       element.style.cursor = 'none';
