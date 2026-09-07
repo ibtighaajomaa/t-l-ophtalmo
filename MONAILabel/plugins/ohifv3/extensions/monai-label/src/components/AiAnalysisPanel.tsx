@@ -46,6 +46,7 @@ export default class AiAnalysisPanel extends Component {
       metricsDraftByEye: { right: {}, left: {} },
       metricsSavingByEye: { right: null, left: null },
       metricsSavedByEye: { right: null, left: null },
+      regeneratingReport: false,
     };
     this.serverURI = (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1') + '/monai/';
   }
@@ -770,6 +771,57 @@ export default class AiAnalysisPanel extends Component {
   // keeps only the section name and the doctor-corrected badge.
   // Same green confirmation badge everywhere, on its own line under the section
   // title, instead of the amber pill that used to sit inside the title row.
+  // The doctor corrects everything, checks it, then asks for one regeneration
+  // from here, next to the report itself.
+  regenerateReportNow = async () => {
+    const { uiNotificationService } = this.props.servicesManager.services;
+    const viewportInfo = this.getActiveViewportInfo();
+    const studyUid = viewportInfo?.displaySet?.StudyInstanceUID;
+    if (!studyUid) {
+      this.setState({ reportError: "Étude introuvable dans le viewport actif." });
+      return;
+    }
+    this.setState({ regeneratingReport: true, reportError: null, reportGenerationError: '' });
+    try {
+      const token = this.getAuthToken();
+      const response = await fetch('/api/exams/regenerate-report/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ study_instance_uid: studyUid }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      this.setState({
+        regeneratingReport: false,
+        reportGenerationStatus: 'pending',
+        reportGenerationError: '',
+      });
+      uiNotificationService.show({
+        title: 'Rapport IA',
+        message: 'Régénération lancée. Le texte se mettra à jour automatiquement.',
+        type: 'success',
+        duration: 5000,
+      });
+      this.pollSavedAnalysis();
+    } catch (err) {
+      this.setState({
+        regeneratingReport: false,
+        reportError: err.message || 'Échec du lancement de la régénération.',
+      });
+      uiNotificationService.show({
+        title: 'Rapport IA',
+        message: err.message || 'Échec du lancement de la régénération.',
+        type: 'error',
+        duration: 6000,
+      });
+    }
+  };
+
   doctorConfirmedBadge = corrected =>
     corrected ? (
       <div className="doctorConfirmedRow">
@@ -1834,7 +1886,18 @@ export default class AiAnalysisPanel extends Component {
 
             {reportResult && (
               <div className="generatedReport">
-                <h3 className="generatedReportTitle">Rapport médical généré</h3>
+                <div className="generatedReportHeader">
+                  <h3 className="generatedReportTitle">Rapport médical généré</h3>
+                  <button
+                    type="button"
+                    className="regenerateReportButton"
+                    disabled={this.state.regeneratingReport}
+                    title="Régénérer le rapport avec toutes vos corrections"
+                    onClick={this.regenerateReportNow}
+                  >
+                    {this.state.regeneratingReport ? 'Régénération…' : '↻ Régénérer le rapport'}
+                  </button>
+                </div>
                 {this.renderEditorToolbar()}
                 <div
                   ref={this.reportEditorRef}

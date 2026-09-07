@@ -32,7 +32,7 @@ index 59a265e..0142e25 100644
          'Capture',
          'Layout',
          'Crosshairs',
-@@ -142,6 +151,18 @@ function modeFactory({ modeConfiguration }) {
+@@ -142,6 +151,17 @@ function modeFactory({ modeConfiguration }) {
          'LivewireContour',
        ]);
  
@@ -45,13 +45,12 @@ index 59a265e..0142e25 100644
 +        'SegmentationRedo',
 +        'SegmentationResetToAI',
 +        'SaveSegmentationCorrections',
-+        'RegenerateAiReport',
 +      ]);
 +
        toolbarService.updateSection('MoreTools', [
          'Reset',
          'rotate-right',
-@@ -247,7 +268,11 @@ function modeFactory({ modeConfiguration }) {
+@@ -247,7 +267,11 @@ function modeFactory({ modeConfiguration }) {
              props: {
                leftPanels: [tracked.thumbnailList],
                leftPanelResizable: true,
@@ -84,7 +83,7 @@ index c9db3f2..bdf188f 100644
      },
    },
    {
-@@ -610,6 +617,127 @@ const toolbarButtons: Button[] = [
+@@ -610,6 +617,116 @@ const toolbarButtons: Button[] = [
        },
      },
    },
@@ -184,17 +183,6 @@ index c9db3f2..bdf188f 100644
 +      label: 'Réinitialiser',
 +      tooltip: 'Revenir au masque IA initial',
 +      commands: 'resetSegmentationToOriginal',
-+      evaluate: 'evaluate.action',
-+    },
-+  },
-+  {
-+    id: 'RegenerateAiReport',
-+    uiType: 'ohif.toolButton',
-+    props: {
-+      icon: 'clipboard',
-+      label: 'Rapport',
-+      tooltip: 'Régénérer le rapport une fois toutes les corrections terminées',
-+      commands: 'regenerateAiReport',
 +      evaluate: 'evaluate.action',
 +    },
 +  },
