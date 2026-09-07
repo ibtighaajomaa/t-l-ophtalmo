@@ -1753,12 +1753,6 @@ export default class AiAnalysisPanel extends Component {
       <div className="eyeReportContent">
         <div className="reportTitle">
           Rapport d'analyse par AI{eyeLabel ? ` (${eyeLabel})` : ''}
-          {(lesions.doctor_corrected || report.doctor_dr_correction || report.glaucoma?.doctor_corrected ||
-            Object.keys(report.deepseenet_plus?.doctor_corrections || {}).length > 0) && (
-            <span className="lesionCorrectionBadge" style={{ marginLeft: '8px' }}>
-              ✓ Confirmé par le médecin
-            </span>
-          )}
         </div>
 
         {(dr.grade || clipDr) && (
