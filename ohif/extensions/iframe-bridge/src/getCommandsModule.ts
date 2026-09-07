@@ -2154,6 +2154,52 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     toggleSegmentationEdit('pencil');
   }
 
+  // Single entry point for the toolbar: regenerate the AI report once the
+  // doctor has finished correcting and checking everything.
+  async function regenerateAiReport() {
+    const studyInstanceUid = currentStudyInstanceUid();
+    if (!studyInstanceUid) {
+      uiNotificationService.show({
+        title: 'Rapport IA',
+        message: "Aucune étude active.",
+        type: 'warning',
+        duration: 3000,
+      });
+      return;
+    }
+    const token = window.localStorage.getItem('teleoph.token')
+      || window.sessionStorage.getItem('teleoph.token');
+    try {
+      const response = await fetch('/api/exams/regenerate-report/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ study_instance_uid: studyInstanceUid }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      uiNotificationService.show({
+        title: 'Rapport IA',
+        message: 'Régénération du rapport lancée. Le texte se mettra à jour automatiquement.',
+        type: 'success',
+        duration: 5000,
+      });
+      return data;
+    } catch (err) {
+      console.error('[AiReport] regeneration failed:', err);
+      uiNotificationService.show({
+        title: 'Rapport IA',
+        message: err?.message || 'Échec du lancement de la régénération.',
+        type: 'error',
+        duration: 6000,
+      });
+    }
+  }
+
   async function saveSegmentationCorrections({ eye } = {}) {
     await loadCornerstone();
     const summary = summarizeActiveSegmentation();
@@ -2273,6 +2319,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     redoSegmentationEdit,
     resetSegmentationToOriginal,
     saveSegmentationCorrections,
+    regenerateAiReport,
     notifyStudyOpened: ({ studyInstanceUid }) => {
       sendToParent('study-opened', { studyInstanceUid });
     },
@@ -2319,6 +2366,9 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     },
     saveSegmentationCorrections: {
       commandFn: actions.saveSegmentationCorrections,
+    },
+    regenerateAiReport: {
+      commandFn: actions.regenerateAiReport,
     },
   };
 

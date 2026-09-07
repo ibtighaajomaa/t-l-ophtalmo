@@ -298,6 +298,17 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'RegenerateAiReport',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'clipboard',
+      label: 'Rapport',
+      tooltip: 'Régénérer le rapport une fois toutes les corrections terminées',
+      commands: 'regenerateAiReport',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
     id: 'SaveSegmentationCorrections',
     uiType: 'ohif.toolButton',
     props: {

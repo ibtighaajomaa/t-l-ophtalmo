@@ -79,6 +79,7 @@ function modeFactory({ modeConfiguration }) {
         'SegmentationRedo',
         'SegmentationResetToAI',
         'SaveSegmentationCorrections',
+        'RegenerateAiReport',
         'MoreTools',
       ]);
 

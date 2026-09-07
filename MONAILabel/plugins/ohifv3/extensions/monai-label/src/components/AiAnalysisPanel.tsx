@@ -482,7 +482,12 @@ export default class AiAnalysisPanel extends Component {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ study_instance_uid: studyUid, eye: side, grade: grade || null }),
+        body: JSON.stringify({
+          study_instance_uid: studyUid,
+          eye: side,
+          grade: grade || null,
+          regenerate: false,
+        }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -498,8 +503,6 @@ export default class AiAnalysisPanel extends Component {
         reportGenerationStatus:
           data.report_generation_status === 'not_queued' ? state.reportGenerationStatus : 'pending',
         reportGenerationError: '',
-        savedMedicalReportHtml: '',
-        summaryReportResult: null,
       }));
       uiNotificationService.show({
         title: 'Grade RD',
@@ -562,7 +565,13 @@ export default class AiAnalysisPanel extends Component {
             'Content-Type': 'application/json',
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
-          body: JSON.stringify({ study_instance_uid: studyUid, eye: side, factor, label: label || null }),
+          body: JSON.stringify({
+            study_instance_uid: studyUid,
+            eye: side,
+            factor,
+            label: label || null,
+            regenerate: false,
+          }),
         });
         data = await response.json().catch(() => ({}));
         if (!response.ok) {
@@ -578,8 +587,6 @@ export default class AiAnalysisPanel extends Component {
         reportGenerationStatus:
           data.report_generation_status === 'not_queued' ? state.reportGenerationStatus : 'pending',
         reportGenerationError: '',
-        savedMedicalReportHtml: '',
-        summaryReportResult: null,
       }));
       const reverted = entries.every(([, label]) => !label);
       uiNotificationService.show({
@@ -682,6 +689,7 @@ export default class AiAnalysisPanel extends Component {
           eye: side,
           section,
           values: values || null,
+          regenerate: false,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -703,8 +711,6 @@ export default class AiAnalysisPanel extends Component {
               ? state.reportGenerationStatus
               : 'pending',
           reportGenerationError: '',
-          savedMedicalReportHtml: '',
-          summaryReportResult: null,
         };
       });
       setTimeout(() => {
@@ -988,7 +994,7 @@ export default class AiAnalysisPanel extends Component {
         summaryReportResult: null,
       });
 
-      await this.generateReport(correctedReport);
+      // Regeneration is now explicit, via the Rapport toolbar button.
     } catch (err) {
       this.setState({
         savingSegmentationCorrection: false,

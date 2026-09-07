@@ -1645,14 +1645,18 @@ def save_dr_grade_correction(request):
     )
     has_seg_correction = bool(report_json.get('doctor_segmentation_corrections'))
     report_json['status'] = 'DOCTOR_CORRECTED' if (has_grade_correction or has_seg_correction) else 'AI_ANALYZED'
-    report_json['report_generation_status'] = 'pending'
-    report_json['report_generation_error'] = ''
+    if regenerate:
+        report_json['report_generation_status'] = 'pending'
+        report_json['report_generation_error'] = ''
     report.report_json = report_json
     report.save(update_fields=['report_json'])
 
+    # The doctor regenerates the report once, from the toolbar, when every
+    # correction is done: a correction on its own only persists the values.
+    regenerate = bool(request.data.get('regenerate', False))
     exam = Exam.objects.filter(study_instance_uid=study_uid).first()
     task_id = None
-    if exam:
+    if exam and regenerate:
         exam.report_generation_status = Exam.ReportGenerationStatus.PENDING
         exam.report_generation_error = ''
         exam.report_generated_at = None
@@ -1677,7 +1681,7 @@ def save_dr_grade_correction(request):
         'doctor_dr_correction': correction,
         'analysis': per_eye,
         'task_id': task_id,
-        'report_generation_status': 'pending' if exam else 'not_queued',
+        'report_generation_status': 'pending' if (exam and regenerate) else 'not_queued',
     })
 
 
@@ -1785,14 +1789,18 @@ def save_dmla_correction(request):
     report_json['status'] = (
         'DOCTOR_CORRECTED' if (has_dr_correction or has_dmla_correction or has_seg_correction) else 'AI_ANALYZED'
     )
-    report_json['report_generation_status'] = 'pending'
-    report_json['report_generation_error'] = ''
+    if regenerate:
+        report_json['report_generation_status'] = 'pending'
+        report_json['report_generation_error'] = ''
     report.report_json = report_json
     report.save(update_fields=['report_json'])
 
+    # The doctor regenerates the report once, from the toolbar, when every
+    # correction is done: a correction on its own only persists the values.
+    regenerate = bool(request.data.get('regenerate', False))
     exam = Exam.objects.filter(study_instance_uid=study_uid).first()
     task_id = None
-    if exam:
+    if exam and regenerate:
         exam.report_generation_status = Exam.ReportGenerationStatus.PENDING
         exam.report_generation_error = ''
         exam.report_generated_at = None
@@ -1819,7 +1827,7 @@ def save_dmla_correction(request):
         'patient_summary': patient_summary,
         'analysis': per_eye,
         'task_id': task_id,
-        'report_generation_status': 'pending' if exam else 'not_queued',
+        'report_generation_status': 'pending' if (exam and regenerate) else 'not_queued',
     })
 
 
@@ -2024,14 +2032,18 @@ def save_metrics_correction(request):
     has_doctor_decision = any(_eye_has_doctor_decision(item) for item in per_eye.values())
     has_seg_correction = bool(report_json.get('doctor_segmentation_corrections'))
     report_json['status'] = 'DOCTOR_CORRECTED' if (has_doctor_decision or has_seg_correction) else 'AI_ANALYZED'
-    report_json['report_generation_status'] = 'pending'
-    report_json['report_generation_error'] = ''
+    if regenerate:
+        report_json['report_generation_status'] = 'pending'
+        report_json['report_generation_error'] = ''
     report.report_json = report_json
     report.save(update_fields=['report_json'])
 
+    # The doctor regenerates the report once, from the toolbar, when every
+    # correction is done: a correction on its own only persists the values.
+    regenerate = bool(request.data.get('regenerate', False))
     exam = Exam.objects.filter(study_instance_uid=study_uid).first()
     task_id = None
-    if exam:
+    if exam and regenerate:
         exam.report_generation_status = Exam.ReportGenerationStatus.PENDING
         exam.report_generation_error = ''
         exam.report_generated_at = None
@@ -2057,8 +2069,58 @@ def save_metrics_correction(request):
         'values': cleaned,
         'analysis': per_eye,
         'task_id': task_id,
-        'report_generation_status': 'pending' if exam else 'not_queued',
+        'report_generation_status': 'pending' if (exam and regenerate) else 'not_queued',
     })
+
+
+@api_view(['POST'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([AllowAny])
+def regenerate_report(request):
+    """Regenerate the AI report on demand, once the doctor has finished
+    correcting the segmentation, the grade and the metrics."""
+    study_uid = request.data.get('study_instance_uid')
+    if not study_uid:
+        return Response({'error': 'study_instance_uid is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    report = AnalysisReport.objects.filter(series_instance_uid=study_uid).first()
+    if not report:
+        return Response({'error': 'Analysis not found'}, status=status.HTTP_404_NOT_FOUND)
+    exam = Exam.objects.filter(study_instance_uid=study_uid).first()
+    if not exam:
+        return Response(
+            {'error': "Aucun examen ne correspond a cette etude"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    report_json = report.report_json or {}
+    report_json['report_generation_status'] = 'pending'
+    report_json['report_generation_error'] = ''
+    report.report_json = report_json
+    report.save(update_fields=['report_json'])
+
+    exam.report_generation_status = Exam.ReportGenerationStatus.PENDING
+    exam.report_generation_error = ''
+    exam.report_generated_at = None
+    exam.save(update_fields=[
+        'report_generation_status',
+        'report_generation_error',
+        'report_generated_at',
+        'updated_at',
+    ])
+
+    from .tasks import tache_generate_ai_report
+
+    async_result = tache_generate_ai_report.apply_async(
+        args=[exam.id, report.series_instance_uid, True],
+        queue='reports',
+    )
+    return Response({
+        'status': 'queued',
+        'study_instance_uid': study_uid,
+        'task_id': async_result.id,
+        'report_generation_status': 'pending',
+    }, status=status.HTTP_202_ACCEPTED)
 
 
 @api_view(['GET'])
