@@ -135,6 +135,22 @@ def _apply_doctor_lesion_correction(report_json, correction):
     return _apply_doctor_lesion_correction_to_eye(updated, correction)
 
 
+def _resolve_exam_for_report(study_instance_uid=None, series_instance_uid=None):
+    """Find the Exam a saved report belongs to, from its study or series UID."""
+    exam = None
+    if study_instance_uid:
+        exam = Exam.objects.filter(study_instance_uid=study_instance_uid).first()
+    if not exam and series_instance_uid:
+        exam = (
+            Exam.objects.filter(
+                image_quality_results__series_instance_uid=series_instance_uid
+            )
+            .distinct()
+            .first()
+        )
+    return exam
+
+
 def _mark_exam_interpreted(study_instance_uid=None, series_instance_uid=None):
     """Mark the exam linked to a saved medical report as interpreted."""
     exam = None
@@ -149,7 +165,10 @@ def _mark_exam_interpreted(study_instance_uid=None, series_instance_uid=None):
             .first()
         )
 
-    if not exam or exam.status != Exam.Status.EN_COURS:
+    # An exam that was never assigned stays "En attente"; saving its report is
+    # still an interpretation, so accept both states and only skip the ones
+    # already interpreted.
+    if not exam or exam.status == Exam.Status.INTERPRETE:
         return exam
 
     exam.status = Exam.Status.INTERPRETE
@@ -2419,6 +2438,13 @@ def medical_report_list(request):
                 {'error': 'patient_id and examination_id are required'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # OHIF sends the DICOM SeriesInstanceUID as examination_id, while the
+        # worklist and the Celery report task key reports on the numeric Exam id.
+        # Normalise here, otherwise a report saved from the viewer is invisible
+        # from the worklist ("Compte rendu non disponible").
+        linked_exam = _resolve_exam_for_report(study_instance_uid, examination_id)
+        if linked_exam:
+            examination_id = str(linked_exam.id)
         report = MedicalReport.objects.create(
             patient_id=patient_id,
             examination_id=examination_id,
