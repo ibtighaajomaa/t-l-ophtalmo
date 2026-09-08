@@ -22,8 +22,8 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // "Baguette" (magic wand): one click on a lesion, seeded region growing on the
   // fundus image fills the whole lesion. Two doctor-facing settings, persisted.
   const WAND_STORAGE_KEY = 'teleophtalmo.segmentation.wand';
-  const WAND_LIMITS = { tolerance: [1, 80], radius: [1, 150], edges: [0, 99] };
-  const WAND_DEFAULTS = { tolerance: 12, radius: 40, edges: 90 };
+  const WAND_LIMITS = { tolerance: [1, 80], radius: [1, 150], edges: [0, 99], flatten: [0, 1] };
+  const WAND_DEFAULTS = { tolerance: 12, radius: 40, edges: 90, flatten: 1 };
   // The acceptance threshold is max(tolerance, K_SIGMA * sigma of the region):
   // the slider is a floor, and a noisy or heterogeneous lesion widens it on its
   // own instead of forcing the doctor to retune.
@@ -48,6 +48,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         tolerance: clampWandSetting('tolerance', saved.tolerance ?? WAND_DEFAULTS.tolerance),
         radius: clampWandSetting('radius', saved.radius ?? WAND_DEFAULTS.radius),
         edges: clampWandSetting('edges', saved.edges ?? WAND_DEFAULTS.edges),
+        flatten: clampWandSetting('flatten', saved.flatten ?? WAND_DEFAULTS.flatten),
       };
     } catch (_) {
       return { ...WAND_DEFAULTS };
@@ -1387,10 +1388,13 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       for (let p = 0; p < total; p++) raw[p] = Math.round((pixels[p] - min) * scale);
     }
     const data = boxBlur3x3(raw, width, height);
+    // Both variants are computed once at activation and kept, so toggling the
+    // illumination correction costs nothing.
+    const flat = flattenIllumination(data, width, height);
     // Computed once when the tool is activated, then reused by every click and
     // every hover preview: O(width * height) here instead of per stroke.
     const gradient = sobelMagnitude(data, width, height);
-    return { data, gradient, width, height, imageId };
+    return { data, flat, gradient, width, height, imageId };
   }
 
   // Sobel gradient magnitude. A pixel sitting on a strong edge is a boundary,
@@ -1450,6 +1454,100 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       if (cumulative >= target) return b / scale;
     }
     return Infinity;
+  }
+
+  // A fundus photograph is brighter at the centre than at the periphery. That
+  // slow drift biases the ring-median background estimate, so the same lesion
+  // needs a different tolerance depending on where it sits in the image.
+  //
+  // Classic remedy in retinal lesion detection: estimate the illumination with
+  // grayscale morphology using a structuring element larger than any lesion,
+  // then subtract it. An opening erases structures brighter than their
+  // surroundings, a closing erases the darker ones, so the average of the two
+  // keeps neither bright nor dark lesions and leaves only the illumination.
+  //
+  // Both passes use a separable square element and a monotonic deque, so the
+  // cost is linear in the number of pixels and independent of the element size.
+  function slidingExtreme(src, dst, width, height, radius, wantMax) {
+    const deque = new Int32Array(Math.max(width, height));
+    // horizontal
+    for (let y = 0; y < height; y++) {
+      const row = y * width;
+      let head = 0;
+      let tail = 0;
+      for (let x = 0; x < width + radius; x++) {
+        if (x < width) {
+          const v = src[row + x];
+          while (tail > head) {
+            const last = src[row + deque[tail - 1]];
+            if (wantMax ? last <= v : last >= v) tail--;
+            else break;
+          }
+          deque[tail++] = x;
+        }
+        const out = x - radius;
+        if (out >= 0) {
+          while (deque[head] < out - radius) head++;
+          dst[row + out] = src[row + deque[head]];
+        }
+      }
+    }
+    // vertical, in place on dst
+    const column = new Uint8Array(height);
+    for (let x = 0; x < width; x++) {
+      for (let y = 0; y < height; y++) column[y] = dst[y * width + x];
+      let head = 0;
+      let tail = 0;
+      for (let y = 0; y < height + radius; y++) {
+        if (y < height) {
+          const v = column[y];
+          while (tail > head) {
+            const last = column[deque[tail - 1]];
+            if (wantMax ? last <= v : last >= v) tail--;
+            else break;
+          }
+          deque[tail++] = y;
+        }
+        const out = y - radius;
+        if (out >= 0) {
+          while (deque[head] < out - radius) head++;
+          dst[out * width + x] = column[deque[head]];
+        }
+      }
+    }
+  }
+
+  function grayOpen(src, width, height, radius) {
+    const eroded = new Uint8Array(src.length);
+    const opened = new Uint8Array(src.length);
+    slidingExtreme(src, eroded, width, height, radius, false);
+    slidingExtreme(eroded, opened, width, height, radius, true);
+    return opened;
+  }
+
+  function grayClose(src, width, height, radius) {
+    const dilated = new Uint8Array(src.length);
+    const closed = new Uint8Array(src.length);
+    slidingExtreme(src, dilated, width, height, radius, true);
+    slidingExtreme(dilated, closed, width, height, radius, false);
+    return closed;
+  }
+
+  function flattenIllumination(src, width, height) {
+    // The element must be larger than the biggest lesion we want to keep,
+    // hence a fraction of the image rather than a fixed number of pixels.
+    const radius = Math.max(12, Math.round(Math.min(width, height) * 0.06));
+    const opened = grayOpen(src, width, height, radius);
+    const closed = grayClose(src, width, height, radius);
+    const out = new Uint8Array(src.length);
+    for (let p = 0; p < src.length; p++) {
+      const background = (opened[p] + closed[p]) / 2;
+      // Recentre on 128 so the intensity scale, the polarity test and the
+      // tolerance keep the same meaning as on the raw channel.
+      const v = src[p] - background + 128;
+      out[p] = v < 0 ? 0 : v > 255 ? 255 : v;
+    }
+    return out;
   }
 
   function boxBlur3x3(src, width, height) {
@@ -1715,7 +1813,8 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   function computeWandRegion(fundus, viewport, canvasX, canvasY) {
     const offset = scalarOffsetFromCanvas(viewport, canvasX, canvasY);
     if (offset == null) return { error: 'outside' };
-    const { data: green, gradient, width, height } = fundus;
+    const { gradient, width, height } = fundus;
+    const green = getWandSetting('flatten') && fundus.flat ? fundus.flat : fundus.data;
     const seedI = offset % width;
     const seedJ = Math.floor(offset / width);
     const tolerance = getWandSetting('tolerance');
@@ -1755,7 +1854,8 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   function suggestTolerance(fundus, viewport, canvasX, canvasY) {
     const offset = scalarOffsetFromCanvas(viewport, canvasX, canvasY);
     if (offset == null || !fundus) return null;
-    const { data: green, width, height } = fundus;
+    const { width, height } = fundus;
+    const green = getWandSetting('flatten') && fundus.flat ? fundus.flat : fundus.data;
     const ci = offset % width;
     const cj = Math.floor(offset / width);
     let sum = 0;
@@ -2026,6 +2126,27 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     return { row, refresh };
   }
 
+  function buildToggleRow({ label, key, accent }) {
+    const row = document.createElement('label');
+    Object.assign(row.style, {
+      display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer',
+    });
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    Object.assign(box.style, { cursor: 'pointer', accentColor: accent, margin: 0 });
+    const name = document.createElement('span');
+    name.textContent = label;
+    Object.assign(name.style, { color: '#cbd5e1' });
+    const refresh = () => {
+      box.checked = !!getWandSetting(key);
+    };
+    box.addEventListener('change', () => setWandSetting(key, box.checked ? 1 : 0));
+    row.appendChild(box);
+    row.appendChild(name);
+    refresh();
+    return { row, refresh };
+  }
+
   function showWandPanel(element, viewportId) {
     hideWandPanel(viewportId);
     const accent = '#38bdf8';
@@ -2046,6 +2167,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     const tolerance = buildSettingRow({ label: 'Tolérance', key: 'tolerance', unit: '', step: 1, accent });
     const radius = buildSettingRow({ label: 'Rayon max', key: 'radius', unit: ' px', step: 1, accent });
     const edges = buildSettingRow({ label: 'Contours', key: 'edges', unit: ' %', step: 1, accent });
+    const flatten = buildToggleRow({ label: "Corriger l'éclairement", key: 'flatten', accent });
     const hint = document.createElement('div');
     hint.textContent = 'Clic : dessiner · Alt + clic : supprimer · Maj + clic : régler la tolérance';
     Object.assign(hint.style, { color: '#94a3b8', fontSize: '11px' });
@@ -2060,6 +2182,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     panel.appendChild(tolerance.row);
     panel.appendChild(radius.row);
     panel.appendChild(edges.row);
+    panel.appendChild(flatten.row);
     panel.appendChild(hint);
     element.appendChild(panel);
     const record = {
@@ -2068,6 +2191,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         tolerance.refresh();
         radius.refresh();
         edges.refresh();
+        flatten.refresh();
       },
     };
     wandPanels.set(viewportId, record);
