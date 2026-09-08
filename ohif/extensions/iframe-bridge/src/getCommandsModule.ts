@@ -1387,7 +1387,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       const scale = max > min ? 255 / (max - min) : 1;
       for (let p = 0; p < total; p++) raw[p] = Math.round((pixels[p] - min) * scale);
     }
-    const data = boxBlur3x3(raw, width, height);
+    const data = median3x3(raw, width, height);
     // Both variants are computed once at activation and kept, so toggling the
     // illumination correction costs nothing.
     const flat = flattenIllumination(data, width, height);
@@ -1550,24 +1550,49 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     return out;
   }
 
-  function boxBlur3x3(src, width, height) {
+  // A 3x3 mean blurs the lesion boundary as much as the noise, which weakens
+  // the Sobel barrier that is supposed to stop the growth on that very
+  // boundary. A median removes impulse noise while leaving edges sharp.
+  //
+  // The nine samples are sorted by the classic 19-comparison network rather
+  // than a generic sort: no allocation, no branching on data size, and the
+  // median lands in slot 4.
+  function median3x3(src, width, height) {
     const out = new Uint8Array(src.length);
+    const p = new Uint8Array(9);
+    const sort2 = (a, b) => {
+      if (p[a] > p[b]) {
+        const t = p[a];
+        p[a] = p[b];
+        p[b] = t;
+      }
+    };
     for (let j = 0; j < height; j++) {
-      const j0 = Math.max(0, j - 1);
-      const j1 = Math.min(height - 1, j + 1);
+      const jm = j > 0 ? j - 1 : 0;
+      const jp = j < height - 1 ? j + 1 : height - 1;
       for (let i = 0; i < width; i++) {
-        const i0 = Math.max(0, i - 1);
-        const i1 = Math.min(width - 1, i + 1);
-        let sum = 0;
-        let count = 0;
-        for (let jj = j0; jj <= j1; jj++) {
-          const row = jj * width;
-          for (let ii = i0; ii <= i1; ii++) {
-            sum += src[row + ii];
-            count++;
-          }
-        }
-        out[j * width + i] = Math.round(sum / count);
+        const im = i > 0 ? i - 1 : 0;
+        const ip = i < width - 1 ? i + 1 : width - 1;
+        const rowm = jm * width;
+        const row = j * width;
+        const rowp = jp * width;
+        p[0] = src[rowm + im];
+        p[1] = src[rowm + i];
+        p[2] = src[rowm + ip];
+        p[3] = src[row + im];
+        p[4] = src[row + i];
+        p[5] = src[row + ip];
+        p[6] = src[rowp + im];
+        p[7] = src[rowp + i];
+        p[8] = src[rowp + ip];
+        sort2(1, 2); sort2(4, 5); sort2(7, 8);
+        sort2(0, 1); sort2(3, 4); sort2(6, 7);
+        sort2(1, 2); sort2(4, 5); sort2(7, 8);
+        sort2(0, 3); sort2(5, 8); sort2(4, 7);
+        sort2(3, 6); sort2(1, 4); sort2(2, 5);
+        sort2(4, 7); sort2(4, 2); sort2(6, 4);
+        sort2(4, 2);
+        out[row + i] = p[4];
       }
     }
     return out;
