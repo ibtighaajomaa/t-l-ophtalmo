@@ -28,6 +28,12 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // the slider is a floor, and a noisy or heterogeneous lesion widens it on its
   // own instead of forcing the doctor to retune.
   const WAND_K_SIGMA = 2.5;
+  // Hysteresis, as in the Canny detector: a strict threshold defines a core we
+  // are confident about, then a loose one (this multiple of the strict one) is
+  // allowed, but only for pixels hanging on that core and no further than
+  // BAND pixels away from it.
+  const WAND_HYSTERESIS_RATIO = 1.8;
+  const WAND_HYSTERESIS_BAND = 3; // px
   const WAND_MAX_ERASE_COMPONENT = 250000; // px, guards Alt+click on a vessel tree
   const wandPanels = new Map(); // viewportId -> { panel, refresh }
   const wandPreviews = new Map(); // viewportId -> { canvas }
@@ -1638,6 +1644,9 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     const y0 = seedJ - radius;
     const mask = new Uint8Array(size * size);
     const visited = new Uint8Array(size * size);
+    // How far a pixel sits from the confident core, in pixels. Only read
+    // during the permissive pass, where every candidate has an explicit value.
+    const depth = new Uint8Array(size * size);
     // Adams & Bischof: instead of a first-in first-out queue, keep the candidate
     // pixels in a min-heap ordered by their distance to the region mean, and
     // always absorb the most similar one first. The boundary follows the actual
@@ -1705,9 +1714,11 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     };
     const maxArea = Math.PI * radius * radius;
     const halfMargin = margin / 2;
+    // The margin is now a parameter: the strict pass demands half the seed's
+    // contrast against the background, the permissive pass a quarter of it.
     const inside = polarity === 'dark'
-      ? v => v < background - halfMargin
-      : v => v > background + halfMargin;
+      ? (v, m) => v < background - m
+      : (v, m) => v > background + m;
 
     heapPush(0, seedJ * width + seedI);
     visited[(seedJ - y0) * size + (seedI - x0)] = 1;
@@ -1718,6 +1729,14 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     let touchedBorder = false;
     let stoppedOnEdge = 0;
     const useEdges = !!gradient && Number.isFinite(edgeThreshold);
+
+    // Pixels the strict pass refuses on intensity alone. They all touch the
+    // core, since a candidate only ever enters the heap as the neighbour of an
+    // accepted pixel, so they are exactly the entry points of the second pass.
+    const weakPixels = new Int32Array(size * size);
+    let weakPending = 0;
+
+    // ---- Pass 1: strict threshold, the confident core --------------------
     while (heapSize > 0 && count < maxArea) {
       const pixelIndex = heapPop();
       const i = pixelIndex % width;
@@ -1731,7 +1750,11 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         const variance = Math.max(0, sumSquares / count - mean * mean);
         limit = Math.max(tolerance, WAND_K_SIGMA * Math.sqrt(variance));
       }
-      if (Math.abs(v - mean) > limit || !inside(v)) continue;
+      if (Math.abs(v - mean) > limit || !inside(v, halfMargin)) {
+        // Too different for the core, perhaps not for the halo: keep it.
+        if (weakPending < weakPixels.length) weakPixels[weakPending++] = pixelIndex;
+        continue;
+      }
       // Edge barrier: never cross a strong contour, which is what let the
       // region escape along a vessel. The seed itself is exempt, since a tiny
       // lesion is nothing but edge.
@@ -1763,12 +1786,85 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         }
       }
     }
+
+    // ---- Pass 2: loose threshold, but only hanging on the core -----------
+    // A real lesion does not end on a step: its intensity fades over two or
+    // three pixels, and those transition pixels systematically fail the strict
+    // test, so the core is always slightly too tight.
+    //
+    // Canny's answer, transposed here: accept a much looser threshold, but
+    // only for pixels connected to the core, and only within a narrow band. A
+    // pale border is a thin band and is recovered; a leak along a vessel is a
+    // long corridor and dies as soon as it leaves the band.
+    const coreCount = count;
+    const coreMean = count ? sum / count : green[seedJ * width + seedI];
+    const coreSigma = count
+      ? Math.sqrt(Math.max(0, sumSquares / count - coreMean * coreMean))
+      : 0;
+    // The statistics are frozen from here on. Letting the mean drift with the
+    // loose pixels is exactly how a two-threshold scheme degenerates into a
+    // single loose one, which is the leak we are trying to avoid.
+    const weakLimit = Math.max(tolerance, WAND_K_SIGMA * coreSigma) * WAND_HYSTERESIS_RATIO;
+    const weakMargin = halfMargin / 2;
+
+    heapSize = 0;
+    for (let w = 0; w < weakPending; w++) {
+      const pixelIndex = weakPixels[w];
+      const i = pixelIndex % width;
+      const j = (pixelIndex - i) / width;
+      depth[(j - y0) * size + (i - x0)] = 1;
+      heapPush(Math.abs(green[pixelIndex] - coreMean), pixelIndex);
+    }
+
+    let halo = 0;
+    while (heapSize > 0 && count < maxArea) {
+      const pixelIndex = heapPop();
+      const i = pixelIndex % width;
+      const j = (pixelIndex - i) / width;
+      const bi = i - x0;
+      const bj = j - y0;
+      const here = depth[bj * size + bi];
+      const v = green[pixelIndex];
+      if (Math.abs(v - coreMean) > weakLimit || !inside(v, weakMargin)) continue;
+      // The contour barrier is not relaxed. Loosening the intensity test is
+      // the point; crossing a vessel is not.
+      if (useEdges && gradient[pixelIndex] > edgeThreshold) {
+        stoppedOnEdge++;
+        continue;
+      }
+      mask[bj * size + bi] = 1;
+      count++;
+      halo++;
+      if (bi === 0 || bj === 0 || bi === size - 1 || bj === size - 1) touchedBorder = true;
+      // Accepted, but at the edge of the band it propagates no further.
+      if (here >= WAND_HYSTERESIS_BAND) continue;
+      for (let dj = -1; dj <= 1; dj++) {
+        for (let di = -1; di <= 1; di++) {
+          if (!di && !dj) continue;
+          const ni = i + di;
+          const nj = j + dj;
+          if (ni < 0 || nj < 0 || ni >= width || nj >= height) continue;
+          const nbi = ni - x0;
+          const nbj = nj - y0;
+          if (nbi < 0 || nbj < 0 || nbi >= size || nbj >= size) continue;
+          const idx = nbj * size + nbi;
+          if (visited[idx]) continue;
+          visited[idx] = 1;
+          depth[idx] = here + 1;
+          const neighbourIndex = nj * width + ni;
+          heapPush(Math.abs(green[neighbourIndex] - coreMean), neighbourIndex);
+        }
+      }
+    }
+
     return {
       mask,
       size,
       x0,
       y0,
       count,
+      coreCount,
+      halo,
       stoppedOnEdge,
       leak: touchedBorder || count >= 0.9 * maxArea,
     };
