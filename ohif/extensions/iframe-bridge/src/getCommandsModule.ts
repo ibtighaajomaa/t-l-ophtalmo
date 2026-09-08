@@ -1613,19 +1613,78 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     const y0 = seedJ - radius;
     const mask = new Uint8Array(size * size);
     const visited = new Uint8Array(size * size);
-    const qi = new Int32Array(size * size);
-    const qj = new Int32Array(size * size);
+    // Adams & Bischof: instead of a first-in first-out queue, keep the candidate
+    // pixels in a min-heap ordered by their distance to the region mean, and
+    // always absorb the most similar one first. The boundary follows the actual
+    // contrast rather than the scan order, and the result no longer depends on
+    // the order in which neighbours happened to be enqueued.
+    const capacity = size * size + 1;
+    const heapDelta = new Float32Array(capacity);
+    const heapPixel = new Int32Array(capacity); // j * width + i
+    const heapSeq = new Int32Array(capacity); // deterministic tie-break
+    let heapSize = 0;
+    let sequence = 0;
+
+    // Ties are broken by insertion order, so two runs on the same image give
+    // exactly the same mask: reproducibility matters for a medical tool.
+    const heapBefore = (a, b) =>
+      heapDelta[a] < heapDelta[b] ||
+      (heapDelta[a] === heapDelta[b] && heapSeq[a] < heapSeq[b]);
+
+    const heapSwap = (a, b) => {
+      const d = heapDelta[a];
+      heapDelta[a] = heapDelta[b];
+      heapDelta[b] = d;
+      const p = heapPixel[a];
+      heapPixel[a] = heapPixel[b];
+      heapPixel[b] = p;
+      const s = heapSeq[a];
+      heapSeq[a] = heapSeq[b];
+      heapSeq[b] = s;
+    };
+
+    const heapPush = (delta, pixel) => {
+      if (heapSize >= capacity) return;
+      let node = heapSize++;
+      heapDelta[node] = delta;
+      heapPixel[node] = pixel;
+      heapSeq[node] = sequence++;
+      while (node > 0) {
+        const parent = (node - 1) >> 1;
+        if (!heapBefore(node, parent)) break;
+        heapSwap(node, parent);
+        node = parent;
+      }
+    };
+
+    const heapPop = () => {
+      const top = heapPixel[0];
+      heapSize--;
+      if (heapSize > 0) {
+        heapDelta[0] = heapDelta[heapSize];
+        heapPixel[0] = heapPixel[heapSize];
+        heapSeq[0] = heapSeq[heapSize];
+        let node = 0;
+        for (;;) {
+          const left = 2 * node + 1;
+          const right = left + 1;
+          let best = node;
+          if (left < heapSize && heapBefore(left, best)) best = left;
+          if (right < heapSize && heapBefore(right, best)) best = right;
+          if (best === node) break;
+          heapSwap(node, best);
+          node = best;
+        }
+      }
+      return top;
+    };
     const maxArea = Math.PI * radius * radius;
     const halfMargin = margin / 2;
     const inside = polarity === 'dark'
       ? v => v < background - halfMargin
       : v => v > background + halfMargin;
 
-    let head = 0;
-    let tail = 0;
-    qi[tail] = seedI;
-    qj[tail] = seedJ;
-    tail++;
+    heapPush(0, seedJ * width + seedI);
     visited[(seedJ - y0) * size + (seedI - x0)] = 1;
 
     let sum = 0;
@@ -1634,11 +1693,10 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     let touchedBorder = false;
     let stoppedOnEdge = 0;
     const useEdges = !!gradient && Number.isFinite(edgeThreshold);
-    while (head < tail && count < maxArea) {
-      const i = qi[head];
-      const j = qj[head];
-      head++;
-      const pixelIndex = j * width + i;
+    while (heapSize > 0 && count < maxArea) {
+      const pixelIndex = heapPop();
+      const i = pixelIndex % width;
+      const j = (pixelIndex - i) / width;
       const v = green[pixelIndex];
       const mean = count ? sum / count : v;
       // Adaptive threshold: the slider is a floor, the spread of the region
@@ -1675,9 +1733,8 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           const idx = nbj * size + nbi;
           if (visited[idx]) continue;
           visited[idx] = 1;
-          qi[tail] = ni;
-          qj[tail] = nj;
-          tail++;
+          const neighbourIndex = nj * width + ni;
+          heapPush(Math.abs(green[neighbourIndex] - sum / count), neighbourIndex);
         }
       }
     }
