@@ -22,8 +22,12 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // "Baguette" (magic wand): one click on a lesion, seeded region growing on the
   // fundus image fills the whole lesion. Two doctor-facing settings, persisted.
   const WAND_STORAGE_KEY = 'teleophtalmo.segmentation.wand';
-  const WAND_LIMITS = { tolerance: [1, 80], radius: [1, 150], edges: [0, 99], flatten: [0, 1] };
-  const WAND_DEFAULTS = { tolerance: 12, radius: 40, edges: 90, flatten: 1 };
+  const WAND_LIMITS = { tolerance: [1, 80], radius: [1, 150], edges: [0, 99], flatten: [0, 1], colour: [0, 100] };
+  const WAND_DEFAULTS = { tolerance: 12, radius: 40, edges: 90, flatten: 1, colour: 60 };
+  // A haemorrhage and a vessel can share the same green luminance and still
+  // differ in hue. This weight is how much the CIELAB chroma counts in the
+  // similarity distance; at 0 the wand behaves exactly as it did before.
+  const WAND_COLOUR = 1;
   // The acceptance threshold is max(tolerance, K_SIGMA * sigma of the region):
   // the slider is a floor, and a noisy or heterogeneous lesion widens it on its
   // own instead of forcing the doctor to retune.
@@ -35,6 +39,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   const WAND_HYSTERESIS_RATIO = 1.8;
   const WAND_HYSTERESIS_BAND = 3; // px
   const WAND_MAX_ERASE_COMPONENT = 250000; // px, guards Alt+click on a vessel tree
+  const WAND_MAX_BOX_HALF = 400; // px, caps the working box of a very long stroke
   const wandPanels = new Map(); // viewportId -> { panel, refresh }
   const wandPreviews = new Map(); // viewportId -> { canvas }
   const wandSettings = loadWandSettings();
@@ -55,6 +60,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         radius: clampWandSetting('radius', saved.radius ?? WAND_DEFAULTS.radius),
         edges: clampWandSetting('edges', saved.edges ?? WAND_DEFAULTS.edges),
         flatten: clampWandSetting('flatten', saved.flatten ?? WAND_DEFAULTS.flatten),
+        colour: clampWandSetting('colour', saved.colour ?? WAND_DEFAULTS.colour),
       };
     } catch (_) {
       return { ...WAND_DEFAULTS };
@@ -1369,6 +1375,49 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // Green channel of the displayed fundus image (best lesion contrast on colour
   // fundus photographs), smoothed with a 3x3 box blur. Computed once per tool
   // activation. Grayscale images are normalised to 0..255.
+  // sRGB companding, tabulated: the only per-pixel cost left in the Lab
+  // transform is its cube roots.
+  const SRGB_TO_LINEAR = (() => {
+    const table = new Float32Array(256);
+    for (let v = 0; v < 256; v++) {
+      const c = v / 255;
+      table[v] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    }
+    return table;
+  })();
+
+  // CIELAB chroma (a*, b*) under D65, stored as bytes centred on 128 so the
+  // same median filter and the same arithmetic apply as on the green channel.
+  //
+  // L* is deliberately dropped: the green channel already carries the
+  // luminance, illumination-corrected by the morphological flat field, and
+  // recomputing it from Lab would throw that correction away. What the green
+  // channel cannot express is hue, and hue is exactly what separates a red
+  // haemorrhage from a vessel of the same darkness.
+  function labChroma(pixels, total, stride, width, height) {
+    const rawA = new Uint8Array(total);
+    const rawB = new Uint8Array(total);
+    const f = t => (t > 0.008856451679 ? Math.cbrt(t) : 7.787037037 * t + 0.1379310345);
+    for (let p = 0; p < total; p++) {
+      const base = p * stride;
+      const r = SRGB_TO_LINEAR[pixels[base]];
+      const g = SRGB_TO_LINEAR[pixels[base + 1]];
+      const b = SRGB_TO_LINEAR[pixels[base + 2]];
+      // Divided by the D65 white point, so a neutral grey gives a* = b* = 0.
+      const fx = f((0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047);
+      const fy = f(0.2126729 * r + 0.7151522 * g + 0.0721750 * b);
+      const fz = f((0.0193339 * r + 0.1191920 * g + 0.9503041 * b) / 1.08883);
+      const a = 500 * (fx - fy);
+      const bb = 200 * (fy - fz);
+      rawA[p] = a <= -128 ? 0 : a >= 127 ? 255 : Math.round(a + 128);
+      rawB[p] = bb <= -128 ? 0 : bb >= 127 ? 255 : Math.round(bb + 128);
+    }
+    // Denoised like the green channel. Not flat-fielded: vignetting is a
+    // brightness effect, chroma drifts far less, and the adaptive threshold
+    // absorbs what is left for the cost of two more morphology passes.
+    return { a: median3x3(rawA, width, height), b: median3x3(rawB, width, height) };
+  }
+
   function getFundusGreenChannel(viewport) {
     const imageId = viewport?.getCurrentImageId?.();
     const image = imageId && csCore?.cache ? csCore.cache.getImage(imageId) : null;
@@ -1379,9 +1428,11 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     if (!pixels || !width || !height) return null;
     const total = width * height;
     const raw = new Uint8Array(total);
+    let chroma = null;
     if (image.color || pixels.length >= total * 3) {
       const stride = pixels.length >= total * 4 ? 4 : 3;
       for (let p = 0; p < total; p++) raw[p] = pixels[p * stride + 1];
+      chroma = labChroma(pixels, total, stride, width, height);
     } else {
       let min = Infinity;
       let max = -Infinity;
@@ -1400,7 +1451,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     // Computed once when the tool is activated, then reused by every click and
     // every hover preview: O(width * height) here instead of per stroke.
     const gradient = sobelMagnitude(data, width, height);
-    return { data, flat, gradient, width, height, imageId };
+    return { data, flat, gradient, chroma, width, height, imageId };
   }
 
   // Sobel gradient magnitude. A pixel sitting on a strong edge is a boundary,
@@ -1618,40 +1669,55 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
 
   // Median intensity on a ring of radius r around the seed = local background.
   // Samples darker than 8 are ignored (black mask outside the retina).
-  function medianOnRing(green, width, height, ci, cj, r) {
+  // Background level around the seed, or around the whole path when the
+  // doctor drew a stroke. Ring samples from several points are pooled and the
+  // median taken, so a ring that happens to cross the lesion itself only
+  // shifts the estimate if such samples become the majority.
+  function medianOnRings(green, width, height, seeds, r) {
     const samples = [];
+    const picks = Math.min(seeds.length, 8);
     const steps = 72;
-    for (let s = 0; s < steps; s++) {
-      const angle = (2 * Math.PI * s) / steps;
-      const i = Math.round(ci + r * Math.cos(angle));
-      const j = Math.round(cj + r * Math.sin(angle));
-      if (i < 0 || j < 0 || i >= width || j >= height) continue;
-      const v = green[j * width + i];
-      if (v >= 8) samples.push(v);
+    for (let k = 0; k < picks; k++) {
+      const offset = seeds[Math.floor((k * seeds.length) / picks)];
+      const ci = offset % width;
+      const cj = (offset - ci) / width;
+      for (let s = 0; s < steps; s++) {
+        const angle = (2 * Math.PI * s) / steps;
+        const i = Math.round(ci + r * Math.cos(angle));
+        const j = Math.round(cj + r * Math.sin(angle));
+        if (i < 0 || j < 0 || i >= width || j >= height) continue;
+        const v = green[j * width + i];
+        if (v >= 8) samples.push(v); // the black surround of the retina
+      }
     }
     if (samples.length < 8) return null;
     samples.sort((a, b) => a - b);
-    return samples[Math.floor(samples.length / 2)];
+    return samples[samples.length >> 1];
   }
 
-  // Seeded region growing (BFS, 8-connectivity) inside a (2r+1)^2 box.
-  // A pixel joins the region when it stays within `tolerance` of the running
-  // mean of the region AND on the seed's side of the background (dark lesion
-  // stays dark, bright lesion stays bright).
-  function growRegion(green, width, height, seedI, seedJ, tolerance, radius, polarity, background, margin, gradient, edgeThreshold) {
-    const size = 2 * radius + 1;
-    const x0 = seedI - radius;
-    const y0 = seedJ - radius;
+  // Seeded region growing, Adams & Bischof, 8-connectivity, inside a square
+  // box. `seeds` is a list of pixel indices: one for a click, the whole path
+  // for a stroke. Every seed is accepted up front, so the region starts from a
+  // mean measured on several real lesion pixels instead of a single one, which
+  // is what makes a stroke steadier than a click on a heterogeneous lesion.
+  //
+  // Similarity is a distance in (green, a*, b*): green carries the
+  // illumination-corrected luminance, the two chroma channels carry the hue,
+  // weighted by the doctor's Couleur setting.
+  function growRegion(field, width, height, seeds, tolerance, box, polarity, background, margin, gradient, edgeThreshold) {
+    const { green, chromaA, chromaB, weight } = field;
+    const { x0, y0, size, maxArea } = box;
+    const useColour = !!chromaA && !!chromaB && weight > 0;
+    const w2 = weight * weight;
     const mask = new Uint8Array(size * size);
     const visited = new Uint8Array(size * size);
     // How far a pixel sits from the confident core, in pixels. Only read
     // during the permissive pass, where every candidate has an explicit value.
     const depth = new Uint8Array(size * size);
-    // Adams & Bischof: instead of a first-in first-out queue, keep the candidate
-    // pixels in a min-heap ordered by their distance to the region mean, and
-    // always absorb the most similar one first. The boundary follows the actual
-    // contrast rather than the scan order, and the result no longer depends on
-    // the order in which neighbours happened to be enqueued.
+    // Candidate pixels wait in a min-heap ordered by their distance to the
+    // region mean, and the most similar one is always absorbed first. The
+    // boundary follows the actual contrast rather than the scan order, and the
+    // result no longer depends on the order in which neighbours were enqueued.
     const capacity = size * size + 1;
     const heapDelta = new Float32Array(capacity);
     const heapPixel = new Int32Array(capacity); // j * width + i
@@ -1712,19 +1778,20 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       }
       return top;
     };
-    const maxArea = Math.PI * radius * radius;
+
     const halfMargin = margin / 2;
-    // The margin is now a parameter: the strict pass demands half the seed's
+    // The margin is a parameter: the strict pass demands half the seed's
     // contrast against the background, the permissive pass a quarter of it.
     const inside = polarity === 'dark'
       ? (v, m) => v < background - m
       : (v, m) => v > background + m;
 
-    heapPush(0, seedJ * width + seedI);
-    visited[(seedJ - y0) * size + (seedI - x0)] = 1;
-
     let sum = 0;
     let sumSquares = 0;
+    let sumA = 0;
+    let sumSquaresA = 0;
+    let sumB = 0;
+    let sumSquaresB = 0;
     let count = 0;
     let touchedBorder = false;
     let stoppedOnEdge = 0;
@@ -1736,39 +1803,15 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     const weakPixels = new Int32Array(size * size);
     let weakPending = 0;
 
-    // ---- Pass 1: strict threshold, the confident core --------------------
-    while (heapSize > 0 && count < maxArea) {
-      const pixelIndex = heapPop();
-      const i = pixelIndex % width;
-      const j = (pixelIndex - i) / width;
-      const v = green[pixelIndex];
-      const mean = count ? sum / count : v;
-      // Adaptive threshold: the slider is a floor, the spread of the region
-      // widens it when the lesion is noisy or heterogeneous.
-      let limit = tolerance;
-      if (count > 4) {
-        const variance = Math.max(0, sumSquares / count - mean * mean);
-        limit = Math.max(tolerance, WAND_K_SIGMA * Math.sqrt(variance));
-      }
-      if (Math.abs(v - mean) > limit || !inside(v, halfMargin)) {
-        // Too different for the core, perhaps not for the halo: keep it.
-        if (weakPending < weakPixels.length) weakPixels[weakPending++] = pixelIndex;
-        continue;
-      }
-      // Edge barrier: never cross a strong contour, which is what let the
-      // region escape along a vessel. The seed itself is exempt, since a tiny
-      // lesion is nothing but edge.
-      if (useEdges && count > 0 && gradient[pixelIndex] > edgeThreshold) {
-        stoppedOnEdge++;
-        continue;
-      }
-      const bi = i - x0;
-      const bj = j - y0;
-      mask[bj * size + bi] = 1;
-      sum += v;
-      sumSquares += v * v;
-      count++;
-      if (bi === 0 || bj === 0 || bi === size - 1 || bj === size - 1) touchedBorder = true;
+    const distance = (pixelIndex, mg, ma, mb) => {
+      const dg = green[pixelIndex] - mg;
+      if (!useColour) return dg < 0 ? -dg : dg;
+      const da = chromaA[pixelIndex] - ma;
+      const db = chromaB[pixelIndex] - mb;
+      return Math.sqrt(dg * dg + w2 * (da * da + db * db));
+    };
+
+    const enqueue = (i, j, d, mg, ma, mb) => {
       for (let dj = -1; dj <= 1; dj++) {
         for (let di = -1; di <= 1; di++) {
           if (!di && !dj) continue;
@@ -1781,10 +1824,111 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           const idx = nbj * size + nbi;
           if (visited[idx]) continue;
           visited[idx] = 1;
+          depth[idx] = d;
           const neighbourIndex = nj * width + ni;
-          heapPush(Math.abs(green[neighbourIndex] - sum / count), neighbourIndex);
+          heapPush(distance(neighbourIndex, mg, ma, mb), neighbourIndex);
         }
       }
+    };
+
+    const absorb = (pixelIndex, bi, bj) => {
+      mask[bj * size + bi] = 1;
+      const v = green[pixelIndex];
+      sum += v;
+      sumSquares += v * v;
+      if (useColour) {
+        const a = chromaA[pixelIndex];
+        const b = chromaB[pixelIndex];
+        sumA += a;
+        sumSquaresA += a * a;
+        sumB += b;
+        sumSquaresB += b * b;
+      }
+      count++;
+      if (bi === 0 || bj === 0 || bi === size - 1 || bj === size - 1) touchedBorder = true;
+    };
+
+    // ---- The seeds join unconditionally: the doctor pointed at them --------
+    for (let s = 0; s < seeds.length; s++) {
+      const pixelIndex = seeds[s];
+      const i = pixelIndex % width;
+      const j = (pixelIndex - i) / width;
+      const bi = i - x0;
+      const bj = j - y0;
+      if (bi < 0 || bj < 0 || bi >= size || bj >= size) continue;
+      if (visited[bj * size + bi]) continue;
+      visited[bj * size + bi] = 1;
+      absorb(pixelIndex, bi, bj);
+    }
+    if (!count) {
+      return { mask, size, x0, y0, count: 0, coreCount: 0, halo: 0, stoppedOnEdge: 0, leak: false };
+    }
+    // How far the seeds themselves spread. A stroke across a lesion is the
+    // doctor stating the range its intensity covers, and that statement has to
+    // survive the growth: left to itself the running variance collapses onto
+    // whichever side the region started filling, the threshold closes, and the
+    // other side is abandoned. So the seed spread stays a floor throughout.
+    // A click has a single seed, spread zero, and behaves exactly as before.
+    let seedSpread = 0;
+    if (count > 1) {
+      const seedMean = sum / count;
+      let seedVariance = Math.max(0, sumSquares / count - seedMean * seedMean);
+      if (useColour) {
+        const seedMeanA = sumA / count;
+        const seedMeanB = sumB / count;
+        seedVariance += w2 * (
+          Math.max(0, sumSquaresA / count - seedMeanA * seedMeanA) +
+          Math.max(0, sumSquaresB / count - seedMeanB * seedMeanB)
+        );
+      }
+      seedSpread = WAND_K_SIGMA * Math.sqrt(seedVariance);
+    }
+
+    // Their neighbours are only enqueued once every seed has been counted, so
+    // the priorities are measured against the full stroke, not a partial one.
+    for (let s = 0; s < seeds.length; s++) {
+      const pixelIndex = seeds[s];
+      const i = pixelIndex % width;
+      const j = (pixelIndex - i) / width;
+      if (i - x0 < 0 || j - y0 < 0 || i - x0 >= size || j - y0 >= size) continue;
+      enqueue(i, j, 0, sum / count, sumA / count, sumB / count);
+    }
+
+    // ---- Pass 1: strict threshold, the confident core --------------------
+    while (heapSize > 0 && count < maxArea) {
+      const pixelIndex = heapPop();
+      const i = pixelIndex % width;
+      const j = (pixelIndex - i) / width;
+      const mg = sum / count;
+      const ma = useColour ? sumA / count : 0;
+      const mb = useColour ? sumB / count : 0;
+      // Adaptive threshold: the slider is a floor, the spread of the region
+      // widens it when the lesion is noisy or heterogeneous.
+      let limit = Math.max(tolerance, seedSpread);
+      if (count > 4) {
+        let variance = Math.max(0, sumSquares / count - mg * mg);
+        if (useColour) {
+          variance += w2 * (
+            Math.max(0, sumSquaresA / count - ma * ma) +
+            Math.max(0, sumSquaresB / count - mb * mb)
+          );
+        }
+        limit = Math.max(limit, WAND_K_SIGMA * Math.sqrt(variance));
+      }
+      if (distance(pixelIndex, mg, ma, mb) > limit || !inside(green[pixelIndex], halfMargin)) {
+        // Too different for the core, perhaps not for the halo: keep it.
+        if (weakPending < weakPixels.length) weakPixels[weakPending++] = pixelIndex;
+        continue;
+      }
+      // Edge barrier: never cross a strong contour, which is what let the
+      // region escape along a vessel. The seeds are exempt by construction,
+      // since they were absorbed before the loop: a tiny lesion is all edge.
+      if (useEdges && gradient[pixelIndex] > edgeThreshold) {
+        stoppedOnEdge++;
+        continue;
+      }
+      absorb(pixelIndex, i - x0, j - y0);
+      enqueue(i, j, 0, sum / count, useColour ? sumA / count : 0, useColour ? sumB / count : 0);
     }
 
     // ---- Pass 2: loose threshold, but only hanging on the core -----------
@@ -1797,14 +1941,22 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     // pale border is a thin band and is recovered; a leak along a vessel is a
     // long corridor and dies as soon as it leaves the band.
     const coreCount = count;
-    const coreMean = count ? sum / count : green[seedJ * width + seedI];
-    const coreSigma = count
-      ? Math.sqrt(Math.max(0, sumSquares / count - coreMean * coreMean))
-      : 0;
+    const coreMean = sum / count;
+    const coreMeanA = useColour ? sumA / count : 0;
+    const coreMeanB = useColour ? sumB / count : 0;
+    let coreVariance = Math.max(0, sumSquares / count - coreMean * coreMean);
+    if (useColour) {
+      coreVariance += w2 * (
+        Math.max(0, sumSquaresA / count - coreMeanA * coreMeanA) +
+        Math.max(0, sumSquaresB / count - coreMeanB * coreMeanB)
+      );
+    }
     // The statistics are frozen from here on. Letting the mean drift with the
     // loose pixels is exactly how a two-threshold scheme degenerates into a
     // single loose one, which is the leak we are trying to avoid.
-    const weakLimit = Math.max(tolerance, WAND_K_SIGMA * coreSigma) * WAND_HYSTERESIS_RATIO;
+    const weakLimit =
+      Math.max(tolerance, seedSpread, WAND_K_SIGMA * Math.sqrt(coreVariance)) *
+      WAND_HYSTERESIS_RATIO;
     const weakMargin = halfMargin / 2;
 
     heapSize = 0;
@@ -1813,7 +1965,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       const i = pixelIndex % width;
       const j = (pixelIndex - i) / width;
       depth[(j - y0) * size + (i - x0)] = 1;
-      heapPush(Math.abs(green[pixelIndex] - coreMean), pixelIndex);
+      heapPush(distance(pixelIndex, coreMean, coreMeanA, coreMeanB), pixelIndex);
     }
 
     let halo = 0;
@@ -1824,8 +1976,10 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       const bi = i - x0;
       const bj = j - y0;
       const here = depth[bj * size + bi];
-      const v = green[pixelIndex];
-      if (Math.abs(v - coreMean) > weakLimit || !inside(v, weakMargin)) continue;
+      if (distance(pixelIndex, coreMean, coreMeanA, coreMeanB) > weakLimit ||
+          !inside(green[pixelIndex], weakMargin)) {
+        continue;
+      }
       // The contour barrier is not relaxed. Loosening the intensity test is
       // the point; crossing a vessel is not.
       if (useEdges && gradient[pixelIndex] > edgeThreshold) {
@@ -1852,7 +2006,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           visited[idx] = 1;
           depth[idx] = here + 1;
           const neighbourIndex = nj * width + ni;
-          heapPush(Math.abs(green[neighbourIndex] - coreMean), neighbourIndex);
+          heapPush(distance(neighbourIndex, coreMean, coreMeanA, coreMeanB), neighbourIndex);
         }
       }
     }
@@ -1951,18 +2105,28 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   }
 
   // Keep only the connected component (8-connectivity) containing the seed.
-  function keepSeedComponent(mask, size, seedBi, seedBj) {
+  // Keep only the components the doctor pointed at. A stroke can legitimately
+  // straddle two blobs that the growth never joined; both are kept, and
+  // anything the growth reached without a seed in it is dropped.
+  function keepSeedComponents(mask, size, seeds, width, x0, y0) {
     const out = new Uint8Array(mask.length);
-    if (!mask[seedBj * size + seedBi]) return { mask: out, count: 0 };
     const qi = new Int32Array(mask.length);
     const qj = new Int32Array(mask.length);
     let head = 0;
     let tail = 0;
     let count = 0;
-    out[seedBj * size + seedBi] = 1;
-    qi[tail] = seedBi;
-    qj[tail] = seedBj;
-    tail++;
+    for (let s = 0; s < seeds.length; s++) {
+      const offset = seeds[s];
+      const i = (offset % width) - x0;
+      const j = ((offset - (offset % width)) / width) - y0;
+      if (i < 0 || j < 0 || i >= size || j >= size) continue;
+      const idx = j * size + i;
+      if (!mask[idx] || out[idx]) continue;
+      out[idx] = 1;
+      qi[tail] = i;
+      qj[tail] = j;
+      tail++;
+    }
     while (head < tail) {
       const i = qi[head];
       const j = qj[head];
@@ -1986,44 +2150,112 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     return { mask: out, count };
   }
 
-  // Full pipeline for one click / hover position. Returns either { error } or
-  // { region, polarity, seedI, seedJ, offset }.
-  function computeWandRegion(fundus, viewport, canvasX, canvasY) {
-    const offset = scalarOffsetFromCanvas(viewport, canvasX, canvasY);
-    if (offset == null) return { error: 'outside' };
+  // Canvas path -> distinct image pixels. Gaps between two pointer events are
+  // filled in, so a fast drag does not leave holes in the seed set.
+  function seedsFromPath(viewport, points, width, height) {
+    const seeds = [];
+    const seen = new Set();
+    const push = offset => {
+      if (offset == null || seen.has(offset)) return;
+      seen.add(offset);
+      seeds.push(offset);
+    };
+    for (let k = 0; k < points.length; k++) {
+      const [x, y] = points[k];
+      if (k > 0) {
+        const [px, py] = points[k - 1];
+        const steps = Math.min(512, Math.ceil(Math.hypot(x - px, y - py)));
+        for (let s = 1; s < steps; s++) {
+          const t = s / steps;
+          push(scalarOffsetFromCanvas(viewport, px + (x - px) * t, py + (y - py) * t));
+        }
+      }
+      push(scalarOffsetFromCanvas(viewport, x, y));
+    }
+    return seeds;
+  }
+
+  // Full pipeline for one gesture. `points` holds canvas coordinates: a single
+  // one for a click, the sampled path for a stroke. Returns { error } or
+  // { region, polarity, seeds, ... }.
+  function computeWandRegion(fundus, viewport, points) {
     const { gradient, width, height } = fundus;
     const green = getWandSetting('flatten') && fundus.flat ? fundus.flat : fundus.data;
-    const seedI = offset % width;
-    const seedJ = Math.floor(offset / width);
     const tolerance = getWandSetting('tolerance');
     const radius = getWandSetting('radius');
 
-    const seedValue = mean3x3(green, width, height, seedI, seedJ);
+    const seeds = seedsFromPath(viewport, points, width, height);
+    if (!seeds.length) return { error: 'outside' };
+
+    // The seed level is the median over the whole path, not the value under
+    // one pixel: that is what makes a stroke steadier than a click when the
+    // lesion is heterogeneous.
+    const values = [];
+    let minI = Infinity;
+    let maxI = -Infinity;
+    let minJ = Infinity;
+    let maxJ = -Infinity;
+    for (let s = 0; s < seeds.length; s++) {
+      const offset = seeds[s];
+      const i = offset % width;
+      const j = (offset - i) / width;
+      if (i < minI) minI = i;
+      if (i > maxI) maxI = i;
+      if (j < minJ) minJ = j;
+      if (j > maxJ) maxJ = j;
+      values.push(mean3x3(green, width, height, i, j));
+    }
+    values.sort((a, b) => a - b);
+    const seedValue = values[values.length >> 1];
     if (seedValue < 8) return { error: 'outside' }; // black mask around the retina
-    const background = medianOnRing(green, width, height, seedI, seedJ, radius);
+
+    const background = medianOnRings(green, width, height, seeds, radius);
     if (background == null) return { error: 'outside' };
     const margin = Math.abs(seedValue - background);
     if (margin < 4) return { error: 'no-lesion' };
     const polarity = seedValue < background ? 'dark' : 'bright';
 
-    const edgeThreshold = gradientThreshold(
-      gradient, width, height, seedI, seedJ, radius, getWandSetting('edges')
+    // A square box covering the whole path plus the growth radius on each
+    // side. Square, so every mask helper downstream keeps a single dimension.
+    const centreI = Math.round((minI + maxI) / 2);
+    const centreJ = Math.round((minJ + maxJ) / 2);
+    const half = Math.min(
+      WAND_MAX_BOX_HALF,
+      Math.ceil(Math.max(maxI - minI, maxJ - minJ) / 2) + radius
     );
+    // Plausible area: the disc of a click, widened by what a disc of the same
+    // radius sweeps along the path (a Minkowski sum).
+    const span = Math.hypot(maxI - minI, maxJ - minJ);
+    const box = {
+      x0: centreI - half,
+      y0: centreJ - half,
+      size: 2 * half + 1,
+      maxArea: Math.PI * radius * radius + span * 2 * radius,
+    };
+
+    const edgeThreshold = gradientThreshold(
+      gradient, width, height, centreI, centreJ, half, getWandSetting('edges')
+    );
+    const field = {
+      green,
+      chromaA: fundus.chroma ? fundus.chroma.a : null,
+      chromaB: fundus.chroma ? fundus.chroma.b : null,
+      weight: getWandSetting('colour') / 100,
+    };
     const grown = growRegion(
-      green, width, height, seedI, seedJ, tolerance, radius,
+      field, width, height, seeds, tolerance, box,
       polarity, background, margin, gradient, edgeThreshold
     );
     if (grown.count < 3) return { error: 'no-lesion' };
     const closed = closeMask3x3(grown.mask, grown.size);
     const filled = fillHoles(closed, grown.size);
-    const kept = keepSeedComponent(filled, grown.size, radius, radius);
+    const kept = keepSeedComponents(filled, grown.size, seeds, width, grown.x0, grown.y0);
     if (kept.count < 3) return { error: 'no-lesion' };
     return {
       region: { mask: kept.mask, size: grown.size, x0: grown.x0, y0: grown.y0, count: kept.count, leak: grown.leak },
       polarity,
-      seedI,
-      seedJ,
-      offset,
+      seeds,
+      offset: seeds[0],
     };
   }
 
@@ -2186,7 +2418,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     if (ctx) ctx.clearRect(0, 0, record.canvas.width, record.canvas.height);
   }
 
-  function drawWandPreview(record, viewport, viewportId, segmentationId, result, pointer) {
+  function drawWandPreview(record, viewport, viewportId, segmentationId, result, pointer, strokePath) {
     const canvas = record?.canvas;
     if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
@@ -2228,6 +2460,22 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           if (isEdge) ctx.fillRect(x0 + bi - 0.5, y0 + bj - 0.5, 1, 1);
         }
       }
+      ctx.restore();
+    }
+
+    // While the button is held, the path itself is the feedback: the region
+    // is only grown on release, since regrowing it on every move would cost a
+    // full box scan per pointer event.
+    if (strokePath && strokePath.length > 1) {
+      ctx.save();
+      ctx.strokeStyle = activeSegmentCss(viewportId, segmentationId, 0.95);
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(strokePath[0][0], strokePath[0][1]);
+      for (let k = 1; k < strokePath.length; k++) ctx.lineTo(strokePath[k][0], strokePath[k][1]);
+      ctx.stroke();
       ctx.restore();
     }
 
@@ -2345,9 +2593,10 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     const tolerance = buildSettingRow({ label: 'Tolérance', key: 'tolerance', unit: '', step: 1, accent });
     const radius = buildSettingRow({ label: 'Rayon max', key: 'radius', unit: ' px', step: 1, accent });
     const edges = buildSettingRow({ label: 'Contours', key: 'edges', unit: ' %', step: 1, accent });
+    const colour = buildSettingRow({ label: 'Couleur', key: 'colour', unit: ' %', step: 5, accent });
     const flatten = buildToggleRow({ label: "Corriger l'éclairement", key: 'flatten', accent });
     const hint = document.createElement('div');
-    hint.textContent = 'Clic : dessiner · Alt + clic : supprimer · Maj + clic : régler la tolérance';
+    hint.textContent = 'Clic ou glisser le long de la lésion · Alt + clic : supprimer · Maj + clic : régler la tolérance';
     Object.assign(hint.style, { color: '#94a3b8', fontSize: '11px' });
 
     [
@@ -2360,6 +2609,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     panel.appendChild(tolerance.row);
     panel.appendChild(radius.row);
     panel.appendChild(edges.row);
+    panel.appendChild(colour.row);
     panel.appendChild(flatten.row);
     panel.appendChild(hint);
     element.appendChild(panel);
@@ -2369,6 +2619,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         tolerance.refresh();
         radius.refresh();
         edges.refresh();
+        colour.refresh();
         flatten.refresh();
       },
     };
@@ -2476,7 +2727,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           return;
         }
         const [x, y] = lastPointer;
-        const result = computeWandRegion(fundus, viewport, x, y);
+        const result = computeWandRegion(fundus, viewport, [[x, y]]);
         drawWandPreview(preview, viewport, activeViewportId, segmentationId, result, lastPointer);
       };
       const schedulePreview = () => {
@@ -2497,13 +2748,94 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         return 'Propagation impossible à cet endroit.';
       };
 
+      // The gesture is a stroke: press, drag, release. A plain click is just a
+      // stroke of one point, so both go through the same code.
+      let stroke = null;
+      let strokePointerId = null;
+
+      const applyStroke = path => {
+        const result = computeWandRegion(fundus, viewport, path);
+        if (result.error) {
+          uiNotificationService.show({ title: modeLabel, message: messageForError(result.error), type: 'info', duration: 2500 });
+          return;
+        }
+        const writeValue = resolveActiveSegmentIndex(activeViewportId) ?? 1;
+        const changed = applyRegionToLabelmap(accessor, result.region, fundus.width, fundus.height, writeValue, viewport);
+        if (changed) usedModesThisSession.add('wand');
+        if (result.region.leak) {
+          uiNotificationService.show({
+            title: modeLabel,
+            message: 'Propagation trop large : baissez la tolérance ou le rayon (Annuler pour revenir en arrière).',
+            type: 'warning',
+            duration: 3500,
+          });
+          return;
+        }
+        if (!changed) {
+          uiNotificationService.show({ title: modeLabel, message: 'Cette lésion est déjà segmentée dans cette classe.', type: 'info', duration: 1400 });
+          return;
+        }
+        uiNotificationService.show({
+          title: modeLabel,
+          message: path.length > 1
+            ? `Lésion dessinée (${result.region.count} px) à partir d'un trait de ${result.seeds.length} points.`
+            : `Lésion dessinée (${result.region.count} px).`,
+          type: 'info',
+          duration: 1400,
+        });
+      };
+
+      const endStroke = (event, apply) => {
+        const path = stroke;
+        stroke = null;
+        if (strokePointerId != null) {
+          try { element.releasePointerCapture(strokePointerId); } catch (_) {}
+          strokePointerId = null;
+        }
+        if (!path) return;
+        if (apply) {
+          const point = pointFromEvent(event);
+          const [lx, ly] = path[path.length - 1];
+          if (Math.hypot(point[0] - lx, point[1] - ly) >= 2) path.push(point);
+          applyStroke(path);
+        }
+        schedulePreview();
+      };
+
       const pointerMove = event => {
-        lastPointer = pointFromEvent(event);
+        const point = pointFromEvent(event);
+        lastPointer = point;
+        if (stroke) {
+          const [lx, ly] = stroke[stroke.length - 1];
+          // Two pixels is enough to follow the hand without filling the path
+          // with near-duplicates; the gaps get interpolated anyway.
+          if (Math.hypot(point[0] - lx, point[1] - ly) >= 2) stroke.push(point);
+          drawWandPreview(preview, viewport, activeViewportId, segmentationId, null, point, stroke);
+          return;
+        }
         schedulePreview();
       };
       const pointerLeave = () => {
+        if (stroke) return; // the pointer is captured, the stroke continues
         lastPointer = null;
         clearWandPreview(preview);
+      };
+      const pointerUp = event => {
+        try {
+          endStroke(event, true);
+        } catch (err) {
+          stroke = null;
+          strokePointerId = null;
+          reportSegmentationError(modeLabel, 'stroke', err);
+        }
+      };
+      const pointerCancel = event => {
+        try {
+          endStroke(event, false);
+        } catch (_) {
+          stroke = null;
+          strokePointerId = null;
+        }
       };
       const pointerDown = event => {
         try {
@@ -2542,31 +2874,16 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
             return;
           }
 
-          const result = computeWandRegion(fundus, viewport, x, y);
-          if (result.error) {
-            uiNotificationService.show({ title: modeLabel, message: messageForError(result.error), type: 'info', duration: 2500 });
-            return;
-          }
-          const writeValue = resolveActiveSegmentIndex(activeViewportId) ?? 1;
-          const changed = applyRegionToLabelmap(accessor, result.region, fundus.width, fundus.height, writeValue, viewport);
-          if (changed) usedModesThisSession.add('wand');
-          if (result.region.leak) {
-            uiNotificationService.show({
-              title: modeLabel,
-              message: 'Propagation trop large : baissez la tolérance ou le rayon (Annuler pour revenir en arrière).',
-              type: 'warning',
-              duration: 3500,
-            });
-          } else {
-            uiNotificationService.show({
-              title: modeLabel,
-              message: changed ? `Lésion dessinée (${result.region.count} px).` : 'Cette lésion est déjà segmentée dans cette classe.',
-              type: 'info',
-              duration: 1400,
-            });
-          }
-          schedulePreview();
+          // Start a stroke. Dragging along the lesion feeds the growth several
+          // seeds instead of one, so the starting mean is measured on a sample
+          // of the lesion rather than on a single pixel, and the doctor points
+          // at the shape instead of hoping one spot is representative.
+          stroke = [[x, y]];
+          strokePointerId = event.pointerId;
+          try { element.setPointerCapture(event.pointerId); } catch (_) {}
+          drawWandPreview(preview, viewport, activeViewportId, segmentationId, null, [x, y], stroke);
         } catch (err) {
+          stroke = null;
           reportSegmentationError(modeLabel, 'click', err);
         }
       };
@@ -2582,6 +2899,8 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
 
       element.addEventListener('pointerdown', pointerDown);
       element.addEventListener('pointermove', pointerMove);
+      element.addEventListener('pointerup', pointerUp);
+      element.addEventListener('pointercancel', pointerCancel);
       element.addEventListener('pointerleave', pointerLeave);
       element.addEventListener('wheel', wheel, { passive: false });
 
@@ -2592,6 +2911,8 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           element.style.cursor = previousCursor;
           element.removeEventListener('pointerdown', pointerDown);
           element.removeEventListener('pointermove', pointerMove);
+          element.removeEventListener('pointerup', pointerUp);
+          element.removeEventListener('pointercancel', pointerCancel);
           element.removeEventListener('pointerleave', pointerLeave);
           element.removeEventListener('wheel', wheel);
         },
