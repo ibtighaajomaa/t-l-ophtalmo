@@ -1848,9 +1848,30 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       if (bi === 0 || bj === 0 || bi === size - 1 || bj === size - 1) touchedBorder = true;
     };
 
-    // ---- The seeds join unconditionally: the doctor pointed at them --------
+    // ---- The seeds join, once they have been sanity-checked ---------------
+    // A stroke traced ALONG the border instead of across the lesion drops part
+    // of its seeds on the background side. Absorbed unconditionally, those
+    // would hand the region a foothold in the background that bypasses every
+    // test, and would inflate the seed spread with the whole lesion-to-
+    // background range, opening the threshold on both counts.
+    //
+    // So the seeds of a stroke face the same polarity gate as everything else,
+    // measured against the background estimated from the surrounding rings,
+    // which is information the stroke itself cannot corrupt. If too few
+    // survive, the doctor is pointing at a genuinely faint lesion rather than
+    // tracing an edge, and the whole set is honoured instead.
+    let onLesionSide = 0;
+    if (seeds.length > 1) {
+      for (let s = 0; s < seeds.length; s++) {
+        if (inside(green[seeds[s]], halfMargin)) onLesionSide++;
+      }
+    }
+    const filterSeeds = seeds.length > 1 && onLesionSide >= Math.max(4, seeds.length * 0.25);
+    const keepSeed = pixelIndex => !filterSeeds || inside(green[pixelIndex], halfMargin);
+
     for (let s = 0; s < seeds.length; s++) {
       const pixelIndex = seeds[s];
+      if (!keepSeed(pixelIndex)) continue;
       const i = pixelIndex % width;
       const j = (pixelIndex - i) / width;
       const bi = i - x0;
@@ -1888,6 +1909,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     // the priorities are measured against the full stroke, not a partial one.
     for (let s = 0; s < seeds.length; s++) {
       const pixelIndex = seeds[s];
+      if (!keepSeed(pixelIndex)) continue;
       const i = pixelIndex % width;
       const j = (pixelIndex - i) / width;
       if (i - x0 < 0 || j - y0 < 0 || i - x0 >= size || j - y0 >= size) continue;
