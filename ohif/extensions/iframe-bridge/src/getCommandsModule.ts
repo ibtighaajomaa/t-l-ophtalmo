@@ -40,6 +40,12 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   const WAND_HYSTERESIS_BAND = 3; // px
   const WAND_MAX_ERASE_COMPONENT = 250000; // px, guards Alt+click on a vessel tree
   const WAND_MAX_BOX_HALF = 400; // px, caps the working box of a very long stroke
+  // A stroke that comes back to its starting point is read as an outline and
+  // filled, rather than used as seeds. Closing tolerance is generous, since a
+  // hand-drawn loop rarely lands exactly on its own start.
+  const LASSO_CLOSE_PX = 18;
+  const LASSO_MIN_POINTS = 6;
+  const LASSO_MAX_HALF = 1200; // px, guards the memory of an enormous outline
   const wandPanels = new Map(); // viewportId -> { panel, refresh }
   const wandPreviews = new Map(); // viewportId -> { canvas }
   const wandSettings = loadWandSettings();
@@ -2197,6 +2203,137 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     return seeds;
   }
 
+  // Does this path come back on itself? Three conditions, because two of them
+  // alone are not enough: an out-and-back scribble also ends where it started,
+  // and a tiny wiggle also encloses its own bounding box.
+  //
+  // The area is the discriminator. Computed by the shoelace formula on the
+  // implicitly closed polygon, it is near zero for a there-and-back line and
+  // about 0.79 of the bounding box for a circle.
+  function strokeCloses(points) {
+    if (!points || points.length < LASSO_MIN_POINTS) return false;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    let twiceArea = 0;
+    for (let k = 0; k < points.length; k++) {
+      const [x, y] = points[k];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      const [nx, ny] = points[(k + 1) % points.length];
+      twiceArea += x * ny - nx * y;
+    }
+    const boxArea = (maxX - minX) * (maxY - minY);
+    if (boxArea < 144) return false; // smaller than 12 x 12: not a deliberate loop
+    const area = Math.abs(twiceArea) / 2;
+    if (area < 0.2 * boxArea) return false;
+    const [sx, sy] = points[0];
+    const [ex, ey] = points[points.length - 1];
+    const diagonal = Math.hypot(maxX - minX, maxY - minY);
+    return Math.hypot(ex - sx, ey - sy) <= Math.max(LASSO_CLOSE_PX, 0.15 * diagonal);
+  }
+
+  // Bresenham, in image coordinates. The canvas-space interpolation used for
+  // seeding is not enough here: zoomed out, one canvas step spans several
+  // image pixels and would leave gaps the fill could escape through.
+  function rasteriseSegment(out, x0, y0, x1, y1) {
+    let x = x0;
+    let y = y0;
+    const dx = Math.abs(x1 - x0);
+    const dy = -Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1;
+    const sy = y0 < y1 ? 1 : -1;
+    let err = dx + dy;
+    for (;;) {
+      out.push(x, y);
+      if (x === x1 && y === y1) break;
+      const e2 = 2 * err;
+      if (e2 >= dy) {
+        err += dy;
+        x += sx;
+      }
+      if (e2 <= dx) {
+        err += dx;
+        y += sy;
+      }
+    }
+  }
+
+  // Fill the inside of a closed outline. The outline is rasterised
+  // 8-connected, then everything the outside cannot reach is the inside: the
+  // same flood-from-the-border argument as fillHoles, whose flood is
+  // 4-connected and is therefore blocked by an 8-connected curve.
+  //
+  // Nothing here looks at the pixels. That is the point of the gesture: where
+  // the propagation decides for you, the outline is yours alone.
+  function computeLassoRegion(fundus, viewport, points) {
+    const { width, height } = fundus;
+    const vertices = [];
+    for (let k = 0; k < points.length; k++) {
+      const offset = scalarOffsetFromCanvas(viewport, points[k][0], points[k][1]);
+      if (offset == null) continue;
+      const i = offset % width;
+      const j = (offset - i) / width;
+      const last = vertices.length;
+      if (last && vertices[last - 2] === i && vertices[last - 1] === j) continue;
+      vertices.push(i, j);
+    }
+    if (vertices.length < 6) return { error: 'outside' };
+
+    const pixels = [];
+    for (let v = 0; v + 1 < vertices.length; v += 2) {
+      const n = (v + 2) % vertices.length; // the last segment closes the loop
+      rasteriseSegment(pixels, vertices[v], vertices[v + 1], vertices[n], vertices[n + 1]);
+    }
+
+    let minI = Infinity;
+    let maxI = -Infinity;
+    let minJ = Infinity;
+    let maxJ = -Infinity;
+    for (let p = 0; p < pixels.length; p += 2) {
+      if (pixels[p] < minI) minI = pixels[p];
+      if (pixels[p] > maxI) maxI = pixels[p];
+      if (pixels[p + 1] < minJ) minJ = pixels[p + 1];
+      if (pixels[p + 1] > maxJ) maxJ = pixels[p + 1];
+    }
+    // Two pixels of slack all round, so the flood always has a way past the
+    // outline even when it touches the edge of the box.
+    const half = Math.ceil(Math.max(maxI - minI, maxJ - minJ) / 2) + 2;
+    if (half > LASSO_MAX_HALF) return { error: 'too-big' };
+    const size = 2 * half + 1;
+    const x0 = Math.round((minI + maxI) / 2) - half;
+    const y0 = Math.round((minJ + maxJ) / 2) - half;
+
+    const outline = new Uint8Array(size * size);
+    for (let p = 0; p < pixels.length; p += 2) {
+      const bi = pixels[p] - x0;
+      const bj = pixels[p + 1] - y0;
+      if (bi < 0 || bj < 0 || bi >= size || bj >= size) continue;
+      outline[bj * size + bi] = 1;
+    }
+
+    const filled = fillHoles(outline, size);
+    let count = 0;
+    for (let p = 0; p < filled.length; p++) {
+      if (!filled[p]) continue;
+      const bi = p % size;
+      const bj = (p - bi) / size;
+      const i = x0 + bi;
+      const j = y0 + bj;
+      // Clipped against the image, so the reported area matches what is written.
+      if (i < 0 || j < 0 || i >= width || j >= height) {
+        filled[p] = 0;
+        continue;
+      }
+      count++;
+    }
+    if (count < 3) return { error: 'no-lesion' };
+    return { region: { mask: filled, size, x0, y0, count, leak: false }, lasso: true };
+  }
+
   // Full pipeline for one gesture. `points` holds canvas coordinates: a single
   // one for a click, the sampled path for a stroke. Returns { error } or
   // { region, polarity, seeds, ... }.
@@ -2489,15 +2626,43 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     // is only grown on release, since regrowing it on every move would cost a
     // full box scan per pointer event.
     if (strokePath && strokePath.length > 1) {
+      const closes = strokeCloses(strokePath);
+      const colour = activeSegmentCss(viewportId, segmentationId, 0.95);
+      const trace = () => {
+        ctx.beginPath();
+        ctx.moveTo(strokePath[0][0], strokePath[0][1]);
+        for (let k = 1; k < strokePath.length; k++) ctx.lineTo(strokePath[k][0], strokePath[k][1]);
+      };
       ctx.save();
-      ctx.strokeStyle = activeSegmentCss(viewportId, segmentationId, 0.95);
+      // As soon as the loop would close, the preview switches to showing the
+      // filled outline: releasing now paints exactly that, and nothing else.
+      if (closes) {
+        ctx.fillStyle = activeSegmentCss(viewportId, segmentationId, 0.3);
+        trace();
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.strokeStyle = colour;
       ctx.lineWidth = 3;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      ctx.beginPath();
-      ctx.moveTo(strokePath[0][0], strokePath[0][1]);
-      for (let k = 1; k < strokePath.length; k++) ctx.lineTo(strokePath[k][0], strokePath[k][1]);
+      trace();
       ctx.stroke();
+      if (closes) {
+        // The chord the release will add, drawn dashed so the shut is visible.
+        ctx.setLineDash([5, 4]);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(strokePath[strokePath.length - 1][0], strokePath[strokePath.length - 1][1]);
+        ctx.lineTo(strokePath[0][0], strokePath[0][1]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // Where the loop has to come back to.
+      ctx.fillStyle = closes ? colour : 'rgba(255, 255, 255, 0.9)';
+      ctx.beginPath();
+      ctx.arc(strokePath[0][0], strokePath[0][1], 4, 0, Math.PI * 2);
+      ctx.fill();
       ctx.restore();
     }
 
@@ -2618,8 +2783,11 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     const colour = buildSettingRow({ label: 'Couleur', key: 'colour', unit: ' %', step: 5, accent });
     const flatten = buildToggleRow({ label: "Corriger l'éclairement", key: 'flatten', accent });
     const hint = document.createElement('div');
-    hint.textContent = 'Clic ou glisser le long de la lésion · Alt + clic : supprimer · Maj + clic : régler la tolérance';
+    hint.textContent = 'Clic ou glisser le long de la lésion · Boucle fermée : le contour est rempli';
     Object.assign(hint.style, { color: '#94a3b8', fontSize: '11px' });
+    const hint2 = document.createElement('div');
+    hint2.textContent = 'Alt + clic : supprimer · Maj + clic : régler la tolérance';
+    Object.assign(hint2.style, { color: '#94a3b8', fontSize: '11px' });
 
     [
       'pointerdown', 'pointermove', 'pointerup', 'pointerleave', 'pointercancel',
@@ -2634,6 +2802,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     panel.appendChild(colour.row);
     panel.appendChild(flatten.row);
     panel.appendChild(hint);
+    panel.appendChild(hint2);
     element.appendChild(panel);
     const record = {
       panel,
@@ -2769,6 +2938,11 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         if (code === 'outside') return "Cliquez à l'intérieur de la rétine.";
         return 'Propagation impossible à cet endroit.';
       };
+      const messageForLassoError = code => {
+        if (code === 'too-big') return 'Contour trop grand pour être rempli en une fois.';
+        if (code === 'outside') return "Tracez la boucle à l'intérieur de l'image.";
+        return 'Contour trop petit pour être rempli.';
+      };
 
       // The gesture is a stroke: press, drag, release. A plain click is just a
       // stroke of one point, so both go through the same code.
@@ -2776,9 +2950,20 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       let strokePointerId = null;
 
       const applyStroke = path => {
-        const result = computeWandRegion(fundus, viewport, path);
+        // A loop is an outline, and an outline is filled as drawn: no
+        // propagation, no threshold, no surprise. An open stroke still seeds
+        // the region growing.
+        const closed = strokeCloses(path);
+        const result = closed
+          ? computeLassoRegion(fundus, viewport, path)
+          : computeWandRegion(fundus, viewport, path);
         if (result.error) {
-          uiNotificationService.show({ title: modeLabel, message: messageForError(result.error), type: 'info', duration: 2500 });
+          uiNotificationService.show({
+            title: modeLabel,
+            message: closed ? messageForLassoError(result.error) : messageForError(result.error),
+            type: 'info',
+            duration: 2500,
+          });
           return;
         }
         const writeValue = resolveActiveSegmentIndex(activeViewportId) ?? 1;
@@ -2799,9 +2984,11 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         }
         uiNotificationService.show({
           title: modeLabel,
-          message: path.length > 1
-            ? `Lésion dessinée (${result.region.count} px) à partir d'un trait de ${result.seeds.length} points.`
-            : `Lésion dessinée (${result.region.count} px).`,
+          message: closed
+            ? `Contour rempli (${result.region.count} px).`
+            : path.length > 1
+              ? `Lésion dessinée (${result.region.count} px) à partir d'un trait de ${result.seeds.length} points.`
+              : `Lésion dessinée (${result.region.count} px).`,
           type: 'info',
           duration: 1400,
         });
