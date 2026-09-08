@@ -311,6 +311,18 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     targetContext.putImageData(output, 0, 0);
   }
 
+  // Our own overlays (CLAHE, wand preview) are canvases appended to the same
+  // element, so they must never be mistaken for the Cornerstone canvas.
+  function findViewportCanvas(element) {
+    if (!element) return null;
+    return Array.from(element.querySelectorAll('canvas')).find(
+      canvas =>
+        canvas.width > 0 &&
+        canvas.height > 0 &&
+        !canvas.hasAttribute('data-teleoph-overlay')
+    );
+  }
+
   function sendToParent(type, payload = {}) {
     try {
       if (window.parent && window.parent !== window) {
@@ -1872,6 +1884,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     hideWandPreview(viewportId);
     const canvas = document.createElement('canvas');
     canvas.setAttribute('aria-hidden', 'true');
+    canvas.setAttribute('data-teleoph-overlay', 'wand-preview');
     Object.assign(canvas.style, {
       position: 'absolute', inset: '0', width: '100%', height: '100%',
       pointerEvents: 'none', zIndex: '11',
@@ -2432,20 +2445,19 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
 
       const existing = claheOverlays.get(activeViewportId);
       if (existing) {
-        existing.remove();
+        existing.dispose();
         claheOverlays.delete(activeViewportId);
         return;
       }
 
-      const source = Array.from(element.querySelectorAll('canvas')).find(
-        canvas => canvas.width > 0 && canvas.height > 0
-      );
+      const source = findViewportCanvas(element);
       if (!source) return;
 
       const overlay = document.createElement('canvas');
       overlay.width = source.width;
       overlay.height = source.height;
       overlay.setAttribute('aria-label', 'Filtre CLAHE actif');
+      overlay.setAttribute('data-teleoph-overlay', 'clahe');
       Object.assign(overlay.style, {
         position: 'absolute',
         inset: '0',
@@ -2454,7 +2466,59 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         pointerEvents: 'none',
         zIndex: '4',
       });
-      applyClahe(source, overlay);
+
+      // The overlay used to be a one-shot snapshot pasted on top, so anything
+      // painted afterwards by Crayon, Gomme or Baguette stayed hidden beneath
+      // it. Recompute it from the live Cornerstone canvas on every render,
+      // throttled, so corrections remain visible while CLAHE is on.
+      let lastRun = 0;
+      let trailing = null;
+      const CLAHE_MIN_INTERVAL = 80;
+
+      const paint = () => {
+        const current = findViewportCanvas(element);
+        if (!current) return;
+        if (overlay.width !== current.width || overlay.height !== current.height) {
+          overlay.width = current.width;
+          overlay.height = current.height;
+        }
+        try {
+          applyClahe(current, overlay);
+        } catch (err) {
+          console.warn('[CLAHE] refresh failed', err);
+        }
+        lastRun = Date.now();
+      };
+
+      const render = () => {
+        const elapsed = Date.now() - lastRun;
+        if (elapsed >= CLAHE_MIN_INTERVAL) {
+          paint();
+          return;
+        }
+        if (trailing) return;
+        trailing = setTimeout(() => {
+          trailing = null;
+          paint();
+        }, CLAHE_MIN_INTERVAL - elapsed);
+      };
+
+      element.addEventListener('CORNERSTONE_IMAGE_RENDERED', render);
+      element.addEventListener('CORNERSTONE_NEW_IMAGE', render);
+      const resizeObserver = typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(render)
+        : null;
+      resizeObserver?.observe(element);
+
+      overlay.dispose = () => {
+        element.removeEventListener('CORNERSTONE_IMAGE_RENDERED', render);
+        element.removeEventListener('CORNERSTONE_NEW_IMAGE', render);
+        resizeObserver?.disconnect();
+        if (trailing) clearTimeout(trailing);
+        overlay.remove();
+      };
+
+      paint();
       element.appendChild(overlay);
       claheOverlays.set(activeViewportId, overlay);
     },
