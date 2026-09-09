@@ -476,6 +476,10 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     opticDisc: { label: 'Disque optique', color: [0, 180, 130, 255] },
     opticCup: { label: 'Excavation papillaire', color: [255, 80, 160, 255] },
     vessels: { label: 'Vaisseaux', color: [168, 85, 247, 255] },
+    // Neither of these is produced by a model, so they never appear in a
+    // `native` list and always land on the free indices at the end.
+    drusen: { label: 'Drusen', color: [249, 115, 22, 255] },
+    laserScars: { label: 'Cicatrices laser', color: [146, 64, 14, 255] },
   };
 
   // Every class, in every mask, without renaming anything the AI produced.

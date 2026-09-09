@@ -139,6 +139,22 @@ window.config = {
             contentF: () => '🟪 Vaisseaux',
           },
           {
+            id: 'RetinalLegendDrusen',
+            inheritsFrom: 'ohif.overlayItem',
+            label: '',
+            condition: ({ referenceInstance }) =>
+              referenceInstance?.Modality === 'OP',
+            contentF: () => '🟧 Drusen',
+          },
+          {
+            id: 'RetinalLegendLaserScars',
+            inheritsFrom: 'ohif.overlayItem',
+            label: '',
+            condition: ({ referenceInstance }) =>
+              referenceInstance?.Modality === 'OP',
+            contentF: () => '🟫 Cicatrices laser',
+          },
+          {
             id: 'RetinalLegendOpticDisc',
             inheritsFrom: 'ohif.overlayItem',
             label: '',
