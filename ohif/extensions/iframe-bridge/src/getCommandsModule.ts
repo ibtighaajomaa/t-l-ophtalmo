@@ -465,16 +465,42 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // Classes of the doctor-drawn segmentation: every type shown in the viewer
   // legend. Indices 1-4 match the AI lesion_seg model (microaneurysms,
   // hemorrhages, hard exudates, soft exudates); the others follow.
-  const DOCTOR_LESION_SEGMENTS = [
-    { index: 1, label: 'Microanévrismes', color: [255, 50, 50, 255] },
-    { index: 2, label: 'Hémorragies', color: [59, 130, 246, 255] },
-    { index: 3, label: 'Exsudats', color: [255, 255, 255, 255] },
-    { index: 4, label: 'Nodules cotonneux', color: [0, 255, 0, 255] },
-    { index: 5, label: 'Néovascularisation', color: [255, 200, 0, 255] },
-    { index: 6, label: 'Disque optique', color: [0, 180, 130, 255] },
-    { index: 7, label: 'Excavation papillaire', color: [255, 80, 160, 255] },
-    { index: 8, label: 'Vaisseaux', color: [168, 85, 247, 255] },
-  ];
+  // One canonical description per class, defined once, so the legend, the
+  // doctor's layer and every AI mask cannot drift apart again.
+  const LESION_CLASSES = {
+    microaneurysms: { label: 'Microanévrismes', color: [255, 50, 50, 255] },
+    hemorrhages: { label: 'Hémorragies', color: [59, 130, 246, 255] },
+    exudates: { label: 'Exsudats', color: [255, 255, 255, 255] },
+    cottonWool: { label: 'Nodules cotonneux', color: [0, 255, 0, 255] },
+    neovascularization: { label: 'Néovascularisation', color: [255, 200, 0, 255] },
+    opticDisc: { label: 'Disque optique', color: [0, 180, 130, 255] },
+    opticCup: { label: 'Excavation papillaire', color: [255, 80, 160, 255] },
+    vessels: { label: 'Vaisseaux', color: [168, 85, 247, 255] },
+  };
+
+  // Every class, in every mask, without renaming anything the AI produced.
+  //
+  // Segment indices mean different things from one file to the next: index 1
+  // is a vessel in seg_vaisseaux, a neovascularisation in
+  // neovascularization_seg, the optic disc in optic_disc_exca and a
+  // microaneurysm in seg_lésions. So each mask keeps its OWN classes at the
+  // indices the file already uses -- listed here as `native` -- and the
+  // remaining classes are appended to the free indices that follow.
+  //
+  // The doctor can therefore draw anything anywhere, while the segments the
+  // model wrote keep the meaning it gave them, which is what the report reads.
+  function buildClassSet(native) {
+    const rest = Object.keys(LESION_CLASSES).filter(key => !native.includes(key));
+    return native.concat(rest).map((key, position) => ({
+      index: position + 1,
+      label: LESION_CLASSES[key].label,
+      color: LESION_CLASSES[key].color,
+    }));
+  }
+
+  const DOCTOR_LESION_SEGMENTS = buildClassSet([
+    'microaneurysms', 'hemorrhages', 'exudates', 'cottonWool',
+  ]);
 
   // Create an empty labelmap on the image currently displayed so the doctor can
   // draw directly on it, without any AI SEG loaded. Uses the same OHIF service
@@ -822,30 +848,26 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // one. Declare the full class list of each model and add whatever is missing
   // to the loaded segmentation, so every class shows up in the Segmentations
   // panel and can be painted into.
+  // `native` lists the classes the model itself writes, in the order of its own
+  // segment indices. buildClassSet appends the rest, so the doctor sees all
+  // eight classes whichever mask is selected, and the model's segments keep
+  // both their index and their meaning.
   const SEGMENTATION_CLASS_SETS = [
     {
       match: /l[eé]sion/i,
-      segments: [
-        { index: 1, label: 'Microanévrismes', color: [255, 50, 50, 255] },
-        { index: 2, label: 'Hémorragies', color: [59, 130, 246, 255] },
-        { index: 3, label: 'Exsudats', color: [255, 255, 255, 255] },
-        { index: 4, label: 'Nodules cotonneux', color: [0, 255, 0, 255] },
-      ],
+      segments: buildClassSet(['microaneurysms', 'hemorrhages', 'exudates', 'cottonWool']),
     },
     {
       match: /neovasc|néovasc/i,
-      segments: [{ index: 1, label: 'Néovascularisation', color: [255, 200, 0, 255] }],
+      segments: buildClassSet(['neovascularization']),
     },
     {
       match: /vaiss|vessel/i,
-      segments: [{ index: 1, label: 'Vaisseaux', color: [168, 85, 247, 255] }],
+      segments: buildClassSet(['vessels']),
     },
     {
       match: /optic|disc|exca|cup/i,
-      segments: [
-        { index: 1, label: 'Disque optique', color: [0, 180, 130, 255] },
-        { index: 2, label: 'Excavation papillaire', color: [255, 80, 160, 255] },
-      ],
+      segments: buildClassSet(['opticDisc', 'opticCup']),
     },
   ];
 
