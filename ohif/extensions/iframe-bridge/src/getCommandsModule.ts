@@ -479,7 +479,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // Create an empty labelmap on the image currently displayed so the doctor can
   // draw directly on it, without any AI SEG loaded. Uses the same OHIF service
   // calls as the "+ Add segmentation" button of the Segmentation panel.
-  async function createEditableSegmentation(viewportId, modeLabel) {
+  async function createEditableSegmentation(viewportId, modeLabel, makeActive = true) {
     const { viewportGridService, displaySetService, segmentationService } = servicesManager.services;
     const state = viewportGridService?.getState?.();
     const viewportInfo = state?.viewports?.get?.(viewportId);
@@ -514,6 +514,9 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         console.warn('[SegmentationEdit] setSegmentColor failed', s.index, err);
       }
     });
+    // When the layer is created on its own, in the background, it must not
+    // take the selection away from the AI mask the doctor is looking at.
+    if (!makeActive) return segmentationId;
     try {
       segmentationService.setActiveSegmentation(viewportId, segmentationId);
     } catch (_) {
@@ -1011,6 +1014,9 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     completingClasses = true;
     try {
       const viewportId = viewportGridService?.getState?.()?.activeViewportId;
+      // Fire and forget: the layer appears next to the AI masks without
+      // taking the selection, and this pass runs again on every change.
+      ensureDoctorLayerExists(viewportId);
       const raw = segmentationService?.getSegmentations?.();
       const length = raw?.length ?? 0;
       for (let i = 0; i < length; i++) {
@@ -1044,6 +1050,73 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           console.warn('[SegmentationEdit] cannot subscribe to', name, err);
         }
       });
+  }
+
+  // Every class, in every study, without a click.
+  //
+  // The AI masks cannot carry the full list: their segment indices mean
+  // different things from one file to the next -- index 1 is a vessel in
+  // seg_vaisseaux, a neovascularisation in neovascularization_seg, the optic
+  // disc in optic_disc_exca and a microaneurysm in seg_lésions. Imposing one
+  // list on all of them would relabel real AI output, which is worse than a
+  // missing class.
+  //
+  // The doctor's own layer owns its index space, so it is the one place every
+  // class can coexist. It is now created on its own, in the background, rather
+  // than waiting for a tool to find nothing else to draw on.
+  const doctorLayerRequested = new Set();
+
+  function findDoctorLayerId() {
+    const { segmentationService } = servicesManager.services;
+    try {
+      const raw = segmentationService?.getSegmentations?.();
+      const length = raw?.length ?? 0;
+      for (let i = 0; i < length; i++) {
+        const id = raw[i]?.segmentationId || raw[i]?.id;
+        if (id && String(id).startsWith('doctor-')) return id;
+      }
+    } catch (err) {
+      console.warn('[SegmentationEdit] doctor layer lookup failed', err);
+    }
+    return null;
+  }
+
+  async function ensureDoctorLayerExists(viewportId) {
+    if (!viewportId || doctorLayerRequested.has(viewportId)) return;
+    if (findDoctorLayerId()) {
+      doctorLayerRequested.add(viewportId);
+      return;
+    }
+    const { viewportGridService, displaySetService } = servicesManager.services;
+    // Only on a fundus photograph, and only once its image is actually there.
+    const viewportInfo = viewportGridService?.getState?.()?.viewports?.get?.(viewportId);
+    const displaySetUid = viewportInfo?.displaySetInstanceUIDs?.[0];
+    const displaySet = displaySetUid
+      ? displaySetService?.getDisplaySetByUID?.(displaySetUid)
+      : null;
+    if (!displaySet || displaySet.Modality !== 'OP') return;
+
+    doctorLayerRequested.add(viewportId);
+    // Adding a representation can move the selection on its own, so whatever
+    // the doctor was looking at is captured and put back.
+    const previousActive = resolveActiveSegmentationId(viewportId);
+    try {
+      await createEditableSegmentation(viewportId, 'Calque médecin', false);
+      if (previousActive) {
+        try {
+          const { segmentationService } = servicesManager.services;
+          if (resolveActiveSegmentationId(viewportId) !== previousActive) {
+            segmentationService.setActiveSegmentation(viewportId, previousActive);
+          }
+        } catch (_) {
+          // the selection is cosmetic here; never fail the creation over it
+        }
+      }
+      console.log('[SegmentationEdit] doctor layer created for', viewportId);
+    } catch (err) {
+      doctorLayerRequested.delete(viewportId); // let a later event try again
+      console.warn('[SegmentationEdit] doctor layer creation failed', err);
+    }
   }
 
   try {
@@ -3007,22 +3080,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       }
       const { segmentationService } = servicesManager.services;
 
-      let existingId = null;
-      try {
-        // getSegmentations() is a reactive proxy whose iterator is unreliable;
-        // index it by hand, as everywhere else in this file.
-        const raw = segmentationService?.getSegmentations?.();
-        const length = raw?.length ?? 0;
-        for (let i = 0; i < length; i++) {
-          const id = raw[i]?.segmentationId || raw[i]?.id;
-          if (id && String(id).startsWith('doctor-')) {
-            existingId = id;
-            break;
-          }
-        }
-      } catch (err) {
-        console.warn('[SegmentationEdit] doctor layer lookup failed', err);
-      }
+      const existingId = findDoctorLayerId();
 
       if (existingId) {
         try {
