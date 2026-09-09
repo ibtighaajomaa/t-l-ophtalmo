@@ -72,6 +72,65 @@ def _generation_token_limit(max_new_tokens: int | None = None) -> int:
     return max(1, min(int(max_new_tokens), MAX_NEW_TOKENS))
 
 
+# Product names of every model in the chain, plus the usual architecture
+# names a language model is liable to volunteer on its own. A report is read by
+# a patient or a colleague: what analysed the image is a clinical detail, its
+# commercial name is not, and naming it invites false authority.
+_MODEL_NAME = (
+    r"(?:CLIP[\s-]?DR|CLIP|MedGemma|Gemma|DeepSeeNet\s?\+?|DeepSeeNet"
+    r"|DeepLab\s?V?3\s?\+?(?:Plus)?|EfficientNet(?:[\s-]?B\d)?"
+    r"|Vision\s+Transformer|ViT|ResNet\d*|DenseNet\d*|MobileNet\w*"
+    r"|Inception[\w-]*|Swin[\w-]*|U[\s-]?Net|MONAI(?:\s*Label)?"
+    r"|YOLO\w*|SAM\s?2|nnU[\s-]?Net)"
+)
+
+# After a descriptor noun the name is simply dropped: "le classifieur CLIP-DR"
+# becomes "le classifieur", which still reads correctly.
+# A trailing "+" is part of the product name (DeepSeeNet+, DeepLabV3+) but is
+# not a word character, so a closing \b refuses to consume it and leaves a
+# stray plus sign behind. A negative lookahead on word characters does not.
+_MODEL_TAIL = r"\s?\+?(?![\w])"
+_MODEL_AFTER_NOUN = re.compile(
+    r"(?i)\b(mod[eè]les?|classifieurs?|classificateurs?|algorithmes?|r[ée]seaux?"
+    r"|outils?|syst[eè]mes?|logiciels?|segmentations?|classifications?|analyses?"
+    r"|[ée]valuations?|architectures?|moteurs?)"
+    r"(?:\s+(?:de|du|d['\u2019]))?\s+" + _MODEL_NAME + _MODEL_TAIL
+)
+# Standing alone it becomes the neutral subject the sentence needs.
+_MODEL_STANDALONE = re.compile(r"(?i)\b" + _MODEL_NAME + _MODEL_TAIL)
+
+# The replacement carries its own article, so an article left in front of it
+# has to go, and a parenthesis holding nothing else no longer says anything.
+_ARTICLE_BEFORE = re.compile(
+    r"(?i)\b(?:un|une|le|la|les|des|ce|cet|cette|au|aux)\s+"
+    r"(l['\u2019]analyse automatis[ée]e)"
+)
+_DU_BEFORE = re.compile(r"(?i)\bdu\s+(l['\u2019]analyse automatis[ée]e)")
+_LONE_PARENTHESIS = re.compile(r"(?i)\s*\(\s*l['\u2019]analyse automatis[ée]e\s*\)")
+
+
+def _strip_model_names(text: str) -> str:
+    """Remove every model or architecture name from a generated report."""
+    if not text:
+        return text
+    text = _MODEL_AFTER_NOUN.sub(r"\1", text)
+    text = _MODEL_STANDALONE.sub("l'analyse automatisée", text)
+    # Tidy the seams left by the substitutions.
+    text = _LONE_PARENTHESIS.sub("", text)
+    text = _ARTICLE_BEFORE.sub(r"\1", text)
+    text = _DU_BEFORE.sub(r"de \1", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\s+([,.;:])", r"\1", text)
+    text = re.sub(r"\(\s*\)", "", text)
+    # A replacement landing at the start of a sentence must be capitalised.
+    text = re.sub(
+        r"(^|(?<=[.!?]\s))l'analyse automatisée",
+        "L'analyse automatisée",
+        text,
+    )
+    return text.strip()
+
+
 def _clean_generated_text(text: str) -> str:
     text = re.sub(r"<unused\d+>", "", text).strip()
 
@@ -104,7 +163,9 @@ def _clean_generated_text(text: str) -> str:
 
     text = re.sub(r"(?im)^\s*(?:thought|thinking process|raisonnement)\s*:?\s*$", "", text)
     text = re.sub(r"</?RAPPORT>", "", text, flags=re.IGNORECASE).strip()
-    return _dedupe_report_text(text)
+    # Last line of defence: the prompt no longer names any model, but a
+    # language model can still volunteer a name it recognises on its own.
+    return _strip_model_names(_dedupe_report_text(text))
 
 
 def _normalize_repeated_line(line: str) -> str:
@@ -208,9 +269,9 @@ def format_analysis_data(report_data: dict) -> str:
             "et ne présente pas les probabilités des classifieurs comme conclusion."
         )
     elif cls:
-        lines.append("## Classification RD principale (grade fourni par le classifieur CLIP-DR)")
+        lines.append("## Classification RD principale (grade fourni par le classifieur de reference)")
         lines.append(
-            "- Consigne: ce grade est celui du classifieur CLIP-DR; reprends-le tel quel, "
+            "- Consigne: ce grade est celui du classifieur de reference; reprends-le tel quel, "
             "ne propose pas un autre grade et ne le recalcule pas a partir de l'image."
         )
         lines.append(f"- Grade predit: {cls.get('predicted_grade') or cls.get('grade') or 'N/A'}")
@@ -224,7 +285,10 @@ def format_analysis_data(report_data: dict) -> str:
 
     if dr_models:
         lines.append("## Resultats individuels des classifieurs RD")
-        for model_key, model_name in (("vit", "ViT"), ("clip_dr", "CLIP-DR")):
+        for model_key, model_name in (
+            ("vit", "Premier classifieur"),
+            ("clip_dr", "Second classifieur"),
+        ):
             model = dr_models.get(model_key) or {}
             if model.get("status") == "ok":
                 lines.append(
@@ -293,7 +357,7 @@ def format_analysis_data(report_data: dict) -> str:
         lines.append(f"- Couverture / densite vasculaire: {_format_percent(vessels.get('coverage_pct'))}")
 
     if deepseenet:
-        lines.append("## Evaluation DMLA DeepSeeNet+")
+        lines.append("## Evaluation DMLA")
         for key, label in (
             ("drusen", "Drusen"),
             ("pigment", "Anomalies pigmentaires"),
@@ -374,7 +438,8 @@ Règles obligatoires :
 - Ta réponse complète doit être uniquement : <RAPPORT>{report_title} [paragraphe]</RAPPORT>
 - N'écris strictement rien avant <RAPPORT>, ni après </RAPPORT> : pas de plan, pas de brouillon, pas de vérification de longueur, pas de réflexion visible.
 - Utilise les sorties des modèles, sans modifier ni inventer les valeurs.
-- Le grade de rétinopathie diabétique est fourni par le classificateur CLIP-DR : reprends exactement ce grade, ne le remets pas en cause et n'en propose aucun autre à partir de l'image.
+- Le grade de rétinopathie diabétique est fourni par le classificateur de référence : reprends exactement ce grade, ne le remets pas en cause et n'en propose aucun autre à partir de l'image.
+- Ne cite jamais le nom d'un modèle, d'une architecture, d'un logiciel ou d'un jeu de données : écris « l'analyse automatisée » ou « le classifieur ».
 {doctor_rule}- Résume les résultats importants sans recopier toutes les données techniques.
 - N'utilise aucun mot anglais pour désigner les diagnostics ou les stades.
 - N'utilise ni liste, ni tableau, ni sous-rubrique.
@@ -549,12 +614,12 @@ def _clip_dr_adjudication(report_data: dict):
         "grade_index": DR_GRADES.index(grade),
         "confidence": confidence,
         "calibration_status": selected.get("calibration_status") or "not_locally_calibrated",
-        "evidence": ["Grade fourni par le classifieur CLIP-DR"],
+        "evidence": ["Grade fourni par le classifieur de reference"],
         "contradictions": [],
         "limitations": (
             []
             if from_clip
-            else ["Resultat CLIP-DR indisponible; grade repris de la selection conservatrice des classifieurs"]
+            else ["Resultat du classifieur de reference indisponible; grade repris de la selection conservatrice des classifieurs"]
         ),
         "requires_ophthalmologist_review": False,
         "model_id": MODEL_ID,
