@@ -917,7 +917,28 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   //
   // The class set is the single source of truth. Every segment it declares is
   // realigned on it, whether it came from the file or was just added.
-  function realignSegmentAppearance(segmentationId, viewportId, set) {
+  // setSegmentColor reaches into the viewport's representation of the
+  // segmentation, and throws on a null colour when there is none yet. On first
+  // load the representation lags behind the segmentation itself, so the colour
+  // pass has to wait for it rather than fail loudly.
+  function hasSegmentationRepresentation(segmentationService, viewportId, segmentationId) {
+    if (!viewportId) return false;
+    try {
+      const list = segmentationService.getSegmentationRepresentations?.(viewportId);
+      const length = list?.length ?? 0;
+      for (let i = 0; i < length; i++) {
+        if (list[i]?.segmentationId === segmentationId) return true;
+      }
+    } catch (_) {
+      return false;
+    }
+    return false;
+  }
+
+  const REALIGN_RETRY_DELAY = 300; // ms
+  const REALIGN_MAX_RETRIES = 6;
+
+  function realignSegmentAppearance(segmentationId, viewportId, set, attempt = 0) {
     const { segmentationService } = servicesManager.services;
     let segments = {};
     try {
@@ -925,7 +946,11 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     } catch (_) {
       return 0;
     }
+    const canColour = hasSegmentationRepresentation(
+      segmentationService, viewportId, segmentationId
+    );
     let changed = 0;
+    let colourDeferred = 0;
     set.segments.forEach(item => {
       const segment = segments[item.index];
       if (!segment) return;
@@ -944,20 +969,32 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         current[0] !== item.color[0] ||
         current[1] !== item.color[1] ||
         current[2] !== item.color[2];
-      if (differs && viewportId) {
-        try {
-          segmentationService.setSegmentColor?.(
-            viewportId, segmentationId, item.index, item.color
-          );
-          changed++;
-        } catch (err) {
-          console.warn('[SegmentationEdit] setSegmentColor failed for', item.label, err);
-        }
+      if (!differs) return;
+      if (!canColour) {
+        colourDeferred++;
+        return;
+      }
+      try {
+        segmentationService.setSegmentColor?.(
+          viewportId, segmentationId, item.index, item.color
+        );
+        changed++;
+      } catch (err) {
+        colourDeferred++;
+        console.warn('[SegmentationEdit] setSegmentColor failed for', item.label, err);
       }
     });
     if (changed) {
       console.log(
         '[SegmentationEdit] realigned', changed, 'segment appearance(s) on', segmentationId
+      );
+    }
+    // The representation was not ready. Come back for the colours a few times,
+    // then give up quietly rather than retry for the life of the page.
+    if (colourDeferred && attempt < REALIGN_MAX_RETRIES) {
+      setTimeout(
+        () => realignSegmentAppearance(segmentationId, viewportId, set, attempt + 1),
+        REALIGN_RETRY_DELAY
       );
     }
     return changed;
