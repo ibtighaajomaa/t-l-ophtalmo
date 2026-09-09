@@ -131,6 +131,14 @@ window.config = {
             contentF: () => '🟨 Néovascularisation',
           },
           {
+            id: 'RetinalLegendVessels',
+            inheritsFrom: 'ohif.overlayItem',
+            label: '',
+            condition: ({ referenceInstance }) =>
+              referenceInstance?.Modality === 'OP',
+            contentF: () => '🟪 Vaisseaux',
+          },
+          {
             id: 'RetinalLegendOpticDisc',
             inheritsFrom: 'ohif.overlayItem',
             label: '',

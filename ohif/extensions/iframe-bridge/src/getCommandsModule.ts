@@ -473,6 +473,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     { index: 5, label: 'Néovascularisation', color: [255, 200, 0, 255] },
     { index: 6, label: 'Disque optique', color: [0, 180, 130, 255] },
     { index: 7, label: 'Excavation papillaire', color: [255, 80, 160, 255] },
+    { index: 8, label: 'Vaisseaux', color: [168, 85, 247, 255] },
   ];
 
   // Create an empty labelmap on the image currently displayed so the doctor can
@@ -834,7 +835,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     },
     {
       match: /vaiss|vessel/i,
-      segments: [{ index: 1, label: 'Vaisseaux', color: [220, 38, 38, 255] }],
+      segments: [{ index: 1, label: 'Vaisseaux', color: [168, 85, 247, 255] }],
     },
     {
       match: /optic|disc|exca|cup/i,

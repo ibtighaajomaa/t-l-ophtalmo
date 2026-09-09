@@ -248,6 +248,75 @@ def _apply_doctor_optic_correction(report_json, correction):
     return _apply_doctor_optic_correction_to_eye(updated, correction)
 
 
+def _apply_doctor_vessel_correction_to_eye(eye_report, correction):
+    """Rescale the vessel figures by how much of the mask the doctor kept."""
+    if not isinstance(eye_report, dict) or not isinstance(correction, dict):
+        return eye_report
+
+    vessels = eye_report.get('vessels')
+    if not isinstance(vessels, dict):
+        return eye_report
+
+    counts = correction.get('pixel_counts_by_segment') or {}
+    baseline = correction.get('baseline_counts_by_segment') or {}
+    if not isinstance(counts, dict) or not isinstance(baseline, dict):
+        return eye_report
+
+    def _as_int(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    # The vessel model declares a single segment. Its reference count must come
+    # from the labelmap the doctor edited, never from the model's own figure:
+    # the two are measured on different grids.
+    original = _as_int(baseline.get('1'))
+    if original <= 0:
+        return eye_report
+    ratio = max(0.0, _as_int(counts.get('1')) / original)
+
+    # Always rescale the model's original figures, so saving twice on an
+    # unchanged mask does not make the coverage decay on its own.
+    pristine = eye_report.get('vessels_before_doctor_correction')
+    if not isinstance(pristine, dict):
+        pristine = json.loads(json.dumps(vessels))
+
+    updated = dict(vessels)
+    for key, rounder in (('coverage_pct', lambda v: round(v, 2)),
+                         ('pixel_count', lambda v: int(round(v)))):
+        if key not in pristine:
+            continue
+        try:
+            updated[key] = rounder(float(pristine[key]) * ratio)
+        except (TypeError, ValueError):
+            pass
+    updated['doctor_corrected'] = True
+    updated['doctor_correction_source'] = 'ohif_vessel_mask'
+
+    result = dict(eye_report)
+    result['vessels'] = updated
+    result['vessels_before_doctor_correction'] = pristine
+    result['doctor_corrected_segmentation'] = correction
+    return result
+
+
+def _apply_doctor_vessel_correction(report_json, correction):
+    if not isinstance(report_json, dict):
+        return report_json
+
+    updated = json.loads(json.dumps(report_json))
+    per_eye = updated.get('per_eye')
+    if isinstance(per_eye, dict):
+        updated['per_eye'] = {
+            side: _apply_doctor_vessel_correction_to_eye(eye_report, correction)
+            for side, eye_report in per_eye.items()
+        }
+        return updated
+
+    return _apply_doctor_vessel_correction_to_eye(updated, correction)
+
+
 def _apply_doctor_lesion_correction(report_json, correction):
     if not isinstance(report_json, dict):
         return report_json
@@ -1701,6 +1770,8 @@ def save_segmentation_corrections(request):
     # keeps the historical behaviour, which was to assume lesions.
     if segmentation_kind == 'optic_disc':
         report_json = _apply_doctor_optic_correction(report_json, correction)
+    elif segmentation_kind == 'vessels':
+        report_json = _apply_doctor_vessel_correction(report_json, correction)
     elif segmentation_kind in ('lesions', 'unknown', ''):
         report_json = _apply_doctor_lesion_correction(report_json, correction)
     corrections = report_json.setdefault('doctor_segmentation_corrections', corrections)
