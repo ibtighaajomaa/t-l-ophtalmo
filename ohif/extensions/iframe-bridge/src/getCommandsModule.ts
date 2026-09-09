@@ -874,7 +874,6 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
 
     const existing = segmentation.segments || {};
     const missing = set.segments.filter(item => !existing[item.index]);
-    if (!missing.length) return 0;
 
     // addSegment() makes the new segment active; restore the doctor's choice.
     const previousActive = viewportId ? resolveActiveSegmentIndex(viewportId) : undefined;
@@ -907,7 +906,60 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         // non fatal
       }
     }
-    return added;
+    return added + realignSegmentAppearance(segmentationId, viewportId, set);
+  }
+
+  // A DICOM SEG carries the labels and the colours chosen by whatever wrote it.
+  // Nothing forced those to agree with the legend drawn over the image, so the
+  // same haemorrhage read blue on the left and grey on the right, and a hard
+  // exudate came through as "Exsudats solides" in purple.
+  //
+  // The class set is the single source of truth. Every segment it declares is
+  // realigned on it, whether it came from the file or was just added.
+  function realignSegmentAppearance(segmentationId, viewportId, set) {
+    const { segmentationService } = servicesManager.services;
+    let segments = {};
+    try {
+      segments = segmentationService.getSegmentation(segmentationId)?.segments || {};
+    } catch (_) {
+      return 0;
+    }
+    let changed = 0;
+    set.segments.forEach(item => {
+      const segment = segments[item.index];
+      if (!segment) return;
+      if (segment.label !== item.label) {
+        try {
+          segmentationService.setSegmentLabel?.(segmentationId, item.index, item.label);
+          changed++;
+        } catch (err) {
+          console.warn('[SegmentationEdit] setSegmentLabel failed for', item.label, err);
+        }
+      }
+      // Alpha is left to the viewer's own opacity setting, so only the three
+      // colour components are compared.
+      const current = segment.color || [];
+      const differs =
+        current[0] !== item.color[0] ||
+        current[1] !== item.color[1] ||
+        current[2] !== item.color[2];
+      if (differs && viewportId) {
+        try {
+          segmentationService.setSegmentColor?.(
+            viewportId, segmentationId, item.index, item.color
+          );
+          changed++;
+        } catch (err) {
+          console.warn('[SegmentationEdit] setSegmentColor failed for', item.label, err);
+        }
+      }
+    });
+    if (changed) {
+      console.log(
+        '[SegmentationEdit] realigned', changed, 'segment appearance(s) on', segmentationId
+      );
+    }
+    return changed;
   }
 
   // Complete the classes as soon as a segmentation is loaded, so the doctor sees
