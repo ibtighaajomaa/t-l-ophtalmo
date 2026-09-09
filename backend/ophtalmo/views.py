@@ -60,9 +60,19 @@ LESION_SEGMENT_FIELDS = {
     '4': ('soft_exudates', 'cotton_wool_spots'),
 }
 
+# The model reports its pixel counts under class names, while the viewer sends
+# them under segment indices. Without this bridge the two never met, and the
+# correction silently did nothing at all.
+LESION_SEGMENT_PIXEL_KEY = {
+    '1': 'microaneurysms',
+    '2': 'hemorrhages',
+    '3': 'hard_exudates',
+    '4': 'soft_exudates',
+}
+
 
 def _apply_doctor_lesion_correction_to_eye(eye_report, correction):
-    """Apply OHIF eraser pixel counts to lesion metrics used for report generation."""
+    """Rescale the lesion metrics by how much of each class the doctor kept."""
     if not isinstance(eye_report, dict) or not isinstance(correction, dict):
         return eye_report
 
@@ -70,41 +80,68 @@ def _apply_doctor_lesion_correction_to_eye(eye_report, correction):
     if not isinstance(lesions, dict):
         return eye_report
 
-    original_counts = lesions.get('pixel_counts_by_class') or {}
     corrected_counts = correction.get('pixel_counts_by_segment') or {}
-    if not isinstance(original_counts, dict) or not isinstance(corrected_counts, dict):
+    if not isinstance(corrected_counts, dict):
         return eye_report
+
+    # Every save rescales the model's own figures, never the already-rescaled
+    # ones. Otherwise pressing Sauvegarder twice on an unchanged mask would
+    # apply the ratio twice and the counts would decay on their own.
+    baseline_lesions = eye_report.get('lesions_before_doctor_correction')
+    if not isinstance(baseline_lesions, dict):
+        baseline_lesions = json.loads(json.dumps(lesions))
+
+    # The reference pixel count has to live in the same frame of reference as
+    # the corrected one, that is, the labelmap the doctor actually edited. The
+    # viewer sends it as a snapshot taken before the first stroke. The model's
+    # own counts were measured on the inference tensor and are only a fallback:
+    # using them as the reference rescales the report on the very first save,
+    # before anything has been erased.
+    reference = correction.get('baseline_counts_by_segment')
+    if not isinstance(reference, dict) or not reference:
+        ai_pixels = baseline_lesions.get('pixel_counts') or {}
+        if not isinstance(ai_pixels, dict):
+            ai_pixels = {}
+        reference = {
+            index: ai_pixels.get(name, 0)
+            for index, name in LESION_SEGMENT_PIXEL_KEY.items()
+        }
+
+    def _as_int(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
 
     corrected_lesions = dict(lesions)
     for segment_index, fields in LESION_SEGMENT_FIELDS.items():
-        try:
-            original_pixels = int(original_counts.get(segment_index, 0))
-            corrected_pixels = int(corrected_counts.get(segment_index, 0))
-        except (TypeError, ValueError):
-            continue
+        original_pixels = _as_int(reference.get(segment_index, 0))
         if original_pixels <= 0:
             continue
-        # No upper clamp: the pencil tool can add pixels beyond the AI's
-        # original count (false-negative correction), which should scale
-        # the reported lesion metrics up, not silently cap at 1.0.
+        corrected_pixels = _as_int(corrected_counts.get(segment_index, 0))
+        # No upper clamp: the pencil and the wand can add pixels beyond the
+        # model's own count, correcting a false negative, and that should scale
+        # the reported metrics up rather than silently cap at 1.0.
         ratio = max(0.0, corrected_pixels / original_pixels)
         for field in fields:
-            if field not in corrected_lesions:
+            if field not in baseline_lesions:
                 continue
             try:
-                corrected_lesions[field] = int(round(float(corrected_lesions[field]) * ratio))
+                corrected_lesions[field] = int(round(float(baseline_lesions[field]) * ratio))
             except (TypeError, ValueError):
                 pass
 
-    total_original = sum(
-        int(value) for value in original_counts.values()
-        if isinstance(value, (int, float, str)) and str(value).isdigit()
-    )
+    total_original = sum(_as_int(value) for value in reference.values())
     total_corrected = correction.get('total_labeled_pixels')
-    if total_original > 0 and isinstance(total_corrected, int) and 'coverage_pct' in corrected_lesions:
+    if (
+        total_original > 0
+        and isinstance(total_corrected, int)
+        and 'coverage_pct' in baseline_lesions
+    ):
         try:
             corrected_lesions['coverage_pct'] = round(
-                float(corrected_lesions['coverage_pct']) * max(0.0, total_corrected / total_original),
+                float(baseline_lesions['coverage_pct'])
+                * max(0.0, total_corrected / total_original),
                 2,
             )
         except (TypeError, ValueError):
@@ -114,9 +151,9 @@ def _apply_doctor_lesion_correction_to_eye(eye_report, correction):
     corrected_lesions['doctor_correction_source'] = 'ohif_segmentation_eraser'
     updated = dict(eye_report)
     updated['lesions'] = corrected_lesions
+    updated['lesions_before_doctor_correction'] = baseline_lesions
     updated['doctor_corrected_segmentation'] = correction
     return updated
-
 
 def _apply_doctor_lesion_correction(report_json, correction):
     if not isinstance(report_json, dict):
@@ -1533,13 +1570,21 @@ def save_segmentation_corrections(request):
     if not report:
         return Response({'error': 'Analysis not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    cleaned_counts = {}
-    for key, value in pixel_counts.items():
-        try:
-            segment_index = str(int(key))
-            cleaned_counts[segment_index] = int(value)
-        except (TypeError, ValueError):
-            continue
+    def _clean_counts(raw):
+        cleaned = {}
+        if not isinstance(raw, dict):
+            return cleaned
+        for key, value in raw.items():
+            try:
+                cleaned[str(int(key))] = int(value)
+            except (TypeError, ValueError):
+                continue
+        return cleaned
+
+    cleaned_counts = _clean_counts(pixel_counts)
+    # What the labelmap held before the doctor touched it, as counted by the
+    # viewer on the very same array it then edited.
+    baseline_counts = _clean_counts(request.data.get('baseline_counts_by_segment'))
 
     report_json = report.report_json or {}
     corrections = report_json.setdefault('doctor_segmentation_corrections', [])
@@ -1547,6 +1592,7 @@ def save_segmentation_corrections(request):
         'type': request.data.get('correction_type') or 'eraser',
         'segmentation_id': request.data.get('segmentation_id') or '1',
         'pixel_counts_by_segment': cleaned_counts,
+        'baseline_counts_by_segment': baseline_counts,
         'total_labeled_pixels': sum(cleaned_counts.values()),
         'saved_at': datetime.utcnow().isoformat() + 'Z',
         'source': 'ohif_segmentation_eraser',

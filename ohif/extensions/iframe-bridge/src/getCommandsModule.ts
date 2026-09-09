@@ -1165,6 +1165,16 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     }
   }
 
+  function countLabelValues(scalarData) {
+    const counts = {};
+    for (let i = 0; i < scalarData.length; i++) {
+      const value = scalarData[i];
+      if (!value) continue;
+      counts[value] = (counts[value] || 0) + 1;
+    }
+    return counts;
+  }
+
   function summarizeActiveSegmentation() {
     const { activeViewportId, viewport } = getActiveViewport();
     const segmentationId = ensureActiveSegmentationId(activeViewportId);
@@ -1173,15 +1183,20 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     const scalarData = accessor?.getScalarData?.();
     if (!scalarData) return null;
 
-    const counts = {};
-    for (let i = 0; i < scalarData.length; i++) {
-      const value = scalarData[i];
-      if (!value) continue;
-      counts[value] = (counts[value] || 0) + 1;
-    }
+    const counts = countLabelValues(scalarData);
+    // The backend has to know what the mask held BEFORE the doctor touched it,
+    // and it has to be counted on this very array. The model's own pixel
+    // counts were measured on the inference tensor and do not share a frame of
+    // reference with the labelmap loaded here, so using them as the reference
+    // would rescale the report on the first save, before anything was erased.
+    //
+    // originalSnapshots holds exactly that: a copy taken when the first
+    // editing tool was activated, before any stroke.
+    const pristine = originalSnapshots.get(segmentationId);
     return {
       segmentation_id: segmentationId,
       pixel_counts_by_segment: counts,
+      baseline_counts_by_segment: pristine ? countLabelValues(pristine) : null,
       total_labeled_pixels: Object.values(counts).reduce((sum, value) => sum + value, 0),
     };
   }
