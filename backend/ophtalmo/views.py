@@ -155,6 +155,99 @@ def _apply_doctor_lesion_correction_to_eye(eye_report, correction):
     updated['doctor_corrected_segmentation'] = correction
     return updated
 
+# Segment indices of the optic disc model, as declared to the viewer in
+# SEGMENTATION_CLASS_SETS.
+OPTIC_SEGMENT_DISC = '1'
+OPTIC_SEGMENT_CUP = '2'
+
+
+def _apply_doctor_optic_correction_to_eye(eye_report, correction):
+    """Derive the glaucoma figures from the disc/cup mask the doctor corrected.
+
+    The two areas used to be typed in by hand, which asked the doctor for a
+    number he had no way of judging: nothing on screen tells anyone that a disc
+    "should" be 664 pixels. They are now read off the mask he draws, so the
+    figures follow the contour instead of contradicting it.
+    """
+    if not isinstance(eye_report, dict) or not isinstance(correction, dict):
+        return eye_report
+
+    glaucoma = eye_report.get('glaucoma')
+    if not isinstance(glaucoma, dict):
+        return eye_report
+
+    counts = correction.get('pixel_counts_by_segment') or {}
+    extents = correction.get('vertical_extents_by_segment') or {}
+    if not isinstance(counts, dict):
+        return eye_report
+    if not isinstance(extents, dict):
+        extents = {}
+
+    def _as_int(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    disc_area = _as_int(counts.get(OPTIC_SEGMENT_DISC))
+    cup_area = _as_int(counts.get(OPTIC_SEGMENT_CUP))
+    # An empty disc means the mask was cleared or never loaded. Wiping the
+    # assessment on that basis would be worse than leaving the model's own.
+    if disc_area <= 0:
+        return eye_report
+
+    updated = dict(glaucoma)
+
+    # Keep the model's own figures once, so "Rétablir les valeurs IA" still has
+    # something to go back to after the mask has been redrawn.
+    ai_values = updated.get('ai_values')
+    ai_values = dict(ai_values) if isinstance(ai_values, dict) else {}
+    for key in ('vcdr', 'disc_area_px', 'cup_area_px'):
+        if key not in ai_values and key in glaucoma:
+            ai_values[key] = glaucoma[key]
+    updated['ai_values'] = ai_values
+
+    updated['disc_area_px'] = disc_area
+    updated['cup_area_px'] = cup_area
+    # Dimensionless, and therefore the only area-derived number that means
+    # anything to a reader: a fundus photograph carries no scale.
+    updated['cup_disc_area_ratio'] = round(cup_area / disc_area, 4)
+
+    # The VCDR is a ratio of vertical DIAMETERS, not of areas, which is why the
+    # viewer sends the extents. The doctor can still overwrite it afterwards
+    # from the panel: his visual estimate is legitimate, and sometimes better
+    # than the segmentation.
+    disc_height = _as_int(extents.get(OPTIC_SEGMENT_DISC))
+    cup_height = _as_int(extents.get(OPTIC_SEGMENT_CUP))
+    if disc_height > 0:
+        updated['vcdr'] = round(min(1.0, max(0.0, cup_height / disc_height)), 4)
+
+    updated['doctor_corrected'] = True
+    updated['doctor_correction_source'] = 'ohif_optic_disc_mask'
+
+    result = dict(eye_report)
+    result['glaucoma'] = updated
+    result['doctor_corrected_segmentation'] = correction
+    _mirror_glaucoma_into_optic(result, updated)
+    return result
+
+
+def _apply_doctor_optic_correction(report_json, correction):
+    if not isinstance(report_json, dict):
+        return report_json
+
+    updated = json.loads(json.dumps(report_json))
+    per_eye = updated.get('per_eye')
+    if isinstance(per_eye, dict):
+        updated['per_eye'] = {
+            side: _apply_doctor_optic_correction_to_eye(eye_report, correction)
+            for side, eye_report in per_eye.items()
+        }
+        return updated
+
+    return _apply_doctor_optic_correction_to_eye(updated, correction)
+
+
 def _apply_doctor_lesion_correction(report_json, correction):
     if not isinstance(report_json, dict):
         return report_json
@@ -1585,20 +1678,31 @@ def save_segmentation_corrections(request):
     # What the labelmap held before the doctor touched it, as counted by the
     # viewer on the very same array it then edited.
     baseline_counts = _clean_counts(request.data.get('baseline_counts_by_segment'))
+    # Vertical extent of each segment, in rows: the cup/disc ratio is defined
+    # on diameters and cannot be recovered from the areas.
+    vertical_extents = _clean_counts(request.data.get('vertical_extents_by_segment'))
+    segmentation_kind = str(request.data.get('segmentation_kind') or 'lesions')
 
     report_json = report.report_json or {}
     corrections = report_json.setdefault('doctor_segmentation_corrections', [])
     correction = {
         'type': request.data.get('correction_type') or 'eraser',
         'segmentation_id': request.data.get('segmentation_id') or '1',
+        'segmentation_kind': segmentation_kind,
         'pixel_counts_by_segment': cleaned_counts,
         'baseline_counts_by_segment': baseline_counts,
+        'vertical_extents_by_segment': vertical_extents,
         'total_labeled_pixels': sum(cleaned_counts.values()),
         'saved_at': datetime.utcnow().isoformat() + 'Z',
         'source': 'ohif_segmentation_eraser',
     }
     corrections.append(correction)
-    report_json = _apply_doctor_lesion_correction(report_json, correction)
+    # The same endpoint now receives several kinds of mask. An unknown kind
+    # keeps the historical behaviour, which was to assume lesions.
+    if segmentation_kind == 'optic_disc':
+        report_json = _apply_doctor_optic_correction(report_json, correction)
+    elif segmentation_kind in ('lesions', 'unknown', ''):
+        report_json = _apply_doctor_lesion_correction(report_json, correction)
     corrections = report_json.setdefault('doctor_segmentation_corrections', corrections)
     report_json['doctor_corrected_segmentation'] = correction
     report_json['status'] = 'DOCTOR_CORRECTED'

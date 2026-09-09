@@ -254,13 +254,34 @@ def format_analysis_data(report_data: dict) -> str:
 
     if optic or glaucoma:
         lines.append("## Evaluation papille / glaucome")
-        vcdr = optic.get("cup_disc_ratio") or glaucoma.get("vcdr")
-        disc_area = optic.get("disc_area_px") or glaucoma.get("disc_area_px")
-        cup_area = optic.get("cup_area_px") or glaucoma.get("cup_area_px")
+        # The panel shows glaucoma.vcdr, the vertical cup/disc ratio. The
+        # optic_disc_cup mirror has historically held the AREA ratio under the
+        # same name, so preferring it made the report quote a different number
+        # from the one the doctor read and validated on screen.
+        vcdr = glaucoma.get("vcdr")
+        if vcdr in (None, ""):
+            vcdr = optic.get("cup_disc_ratio")
         lines.append(f"- Rapport cupule/disque: {vcdr if vcdr is not None else 'N/A'}")
         lines.append(f"- Risque glaucome: {glaucoma.get('risk', 'N/A')}")
-        lines.append(f"- Surface disque optique: {disc_area if disc_area is not None else 'N/A'} px")
-        lines.append(f"- Surface cupule: {cup_area if cup_area is not None else 'N/A'} px")
+        # Areas used to be quoted in pixels. A fundus photograph carries no
+        # scale -- no PixelSpacing, no field of view -- so "664 px" means
+        # nothing to a reader and invites the model to dress it up as a
+        # measurement. Their ratio is dimensionless and does mean something.
+        area_ratio = glaucoma.get("cup_disc_area_ratio")
+        if area_ratio is None:
+            disc_area = optic.get("disc_area_px") or glaucoma.get("disc_area_px")
+            cup_area = optic.get("cup_area_px") or glaucoma.get("cup_area_px")
+            try:
+                if disc_area and float(disc_area) > 0:
+                    area_ratio = round(float(cup_area or 0) / float(disc_area), 4)
+            except (TypeError, ValueError):
+                area_ratio = None
+        if area_ratio is not None:
+            lines.append(f"- Rapport surfacique cupule/disque: {area_ratio}")
+        lines.append(
+            "- Note: l'image ne porte aucune echelle metrique; n'exprime aucune "
+            "mesure en millimetres ni en pixels."
+        )
         if glaucoma.get("doctor_corrected"):
             lines.append(
                 "- Note: évaluation papille / glaucome corrigée et validée par le médecin; "

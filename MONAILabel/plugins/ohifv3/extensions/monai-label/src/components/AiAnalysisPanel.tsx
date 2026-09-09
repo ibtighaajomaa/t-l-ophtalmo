@@ -977,10 +977,15 @@ export default class AiAnalysisPanel extends Component {
         ? aiValues[key]
         : null;
     const draftRisk = draft.risk ?? current.risk;
+    // The two areas are read off the mask, not typed: nothing on screen tells
+    // anyone that a disc "should" be 664 pixels, so asking for the number was
+    // asking for a guess. Correct the contour and they follow. The VCDR stays
+    // editable: it is a ratio, the doctor estimates it visually every day, and
+    // his estimate is sometimes better than the segmentation.
     const numberFields = [
       { key: 'vcdr', label: 'VCDR', step: 0.01, max: 1, format: v => Number(v).toFixed(4) },
-      { key: 'disc_area_px', label: 'Surface du disque', unit: 'px' },
-      { key: 'cup_area_px', label: "Surface de l'excavation", unit: 'px' },
+      { key: 'disc_area_px', label: 'Surface du disque', unit: 'px', derived: true },
+      { key: 'cup_area_px', label: "Surface de l'excavation", unit: 'px', derived: true },
     ];
 
     return (
@@ -1033,7 +1038,7 @@ export default class AiAnalysisPanel extends Component {
                   {field.unit ? ` ${field.unit}` : ''}
                 </span>
               )}
-              {canEdit ? (
+              {canEdit && !field.derived ? (
                 this.renderMetricNumber(side, 'glaucoma', field, current, saving)
               ) : (
                 <span className="value">
@@ -1044,6 +1049,10 @@ export default class AiAnalysisPanel extends Component {
             </span>
           </div>
         ))}
+        <div className="metricAiNote" style={{ marginTop: 4 }}>
+          Les deux surfaces sont mesurées sur le masque : corrigez le contour du
+          disque et de l'excavation dans l'image, elles suivent.
+        </div>
         {this.metricsRevertLink(side, 'glaucoma', corrected, saving)}
       </div>
     );

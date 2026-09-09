@@ -1165,6 +1165,61 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     }
   }
 
+  // Which model's mask is this? The backend needs to know: the same endpoint
+  // now receives lesion masks and optic disc masks, and they feed different
+  // parts of the report.
+  const SEGMENTATION_KINDS = [
+    { kind: 'lesions', match: /l[eé]sion/i },
+    { kind: 'neovascularization', match: /neovasc|néovasc/i },
+    { kind: 'vessels', match: /vaiss|vessel/i },
+    { kind: 'optic_disc', match: /optic|disc|exca|cup/i },
+  ];
+
+  function segmentationKind(segmentationId, viewportId) {
+    const { segmentationService } = servicesManager.services;
+    let name = '';
+    try {
+      const segmentation = segmentationService?.getSegmentation?.(segmentationId);
+      name = segmentationDisplayName(segmentation);
+    } catch (err) {
+      console.warn('[SegmentationEdit] segmentationKind lookup failed', err);
+    }
+    // The lesion set must be tested first: "seg_lésions" also matches nothing
+    // else, but a description mentioning both would otherwise fall to whichever
+    // pattern came first by accident.
+    const entry = SEGMENTATION_KINDS.find(candidate => candidate.match.test(name));
+    return entry ? entry.kind : 'unknown';
+  }
+
+  function labelmapDimensions(viewport) {
+    const imageId = viewport?.getCurrentImageId?.();
+    const image = imageId && csCore?.cache ? csCore.cache.getImage(imageId) : null;
+    if (!image) return null;
+    const width = image.columns || image.width;
+    const height = image.rows || image.height;
+    return width && height ? { width, height } : null;
+  }
+
+  // Vertical extent of each segment, in rows. The cup/disc ratio is defined on
+  // vertical DIAMETERS, not on areas, so the pixel counts alone cannot express
+  // it and these have to travel with them.
+  function verticalExtents(scalarData, width) {
+    const first = {};
+    const last = {};
+    for (let i = 0; i < scalarData.length; i++) {
+      const value = scalarData[i];
+      if (!value) continue;
+      const row = Math.floor(i / width);
+      if (first[value] === undefined) first[value] = row;
+      last[value] = row; // the scan runs row by row, so this is the lowest one
+    }
+    const out = {};
+    Object.keys(first).forEach(value => {
+      out[value] = last[value] - first[value] + 1;
+    });
+    return out;
+  }
+
   function countLabelValues(scalarData) {
     const counts = {};
     for (let i = 0; i < scalarData.length; i++) {
@@ -1184,6 +1239,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     if (!scalarData) return null;
 
     const counts = countLabelValues(scalarData);
+    const size = labelmapDimensions(viewport);
     // The backend has to know what the mask held BEFORE the doctor touched it,
     // and it has to be counted on this very array. The model's own pixel
     // counts were measured on the inference tensor and do not share a frame of
@@ -1195,8 +1251,10 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     const pristine = originalSnapshots.get(segmentationId);
     return {
       segmentation_id: segmentationId,
+      segmentation_kind: segmentationKind(segmentationId, activeViewportId),
       pixel_counts_by_segment: counts,
       baseline_counts_by_segment: pristine ? countLabelValues(pristine) : null,
+      vertical_extents_by_segment: size ? verticalExtents(scalarData, size.width) : null,
       total_labeled_pixels: Object.values(counts).reduce((sum, value) => sum + value, 0),
     };
   }
