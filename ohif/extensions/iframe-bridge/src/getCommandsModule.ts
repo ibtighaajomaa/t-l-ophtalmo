@@ -2952,6 +2952,72 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     }
   }
 
+  // The doctor's own drawing layer was only ever created as a fallback, when
+  // the study carried no AI segmentation at all. With one loaded there was no
+  // way to reach it: the Segmentations dropdown lists what the viewport holds,
+  // and the layer had simply never been made.
+  //
+  // This puts it in that list on demand, and selects it if it is already there
+  // rather than stacking a second empty one.
+  async function openDoctorSegmentation() {
+    const modeLabel = 'Calque médecin';
+    try {
+      await loadCornerstone();
+      const { activeViewportId } = getActiveViewport();
+      if (!activeViewportId) {
+        reportSegmentationError(modeLabel, 'setup', new Error('Aucun viewport actif trouvé.'));
+        return;
+      }
+      const { segmentationService } = servicesManager.services;
+
+      let existingId = null;
+      try {
+        // getSegmentations() is a reactive proxy whose iterator is unreliable;
+        // index it by hand, as everywhere else in this file.
+        const raw = segmentationService?.getSegmentations?.();
+        const length = raw?.length ?? 0;
+        for (let i = 0; i < length; i++) {
+          const id = raw[i]?.segmentationId || raw[i]?.id;
+          if (id && String(id).startsWith('doctor-')) {
+            existingId = id;
+            break;
+          }
+        }
+      } catch (err) {
+        console.warn('[SegmentationEdit] doctor layer lookup failed', err);
+      }
+
+      if (existingId) {
+        try {
+          segmentationService.setActiveSegmentation(activeViewportId, existingId);
+        } catch (err) {
+          reportSegmentationError(modeLabel, 'select', err);
+          return;
+        }
+        uiNotificationService.show({
+          title: modeLabel,
+          message: 'Calque « Lésions (médecin) » sélectionné.',
+          type: 'info',
+          duration: 2000,
+        });
+        return;
+      }
+
+      const createdId = await createEditableSegmentation(activeViewportId, modeLabel);
+      if (!createdId) return;
+      uiNotificationService.show({
+        title: modeLabel,
+        message:
+          'Calque « Lésions (médecin) » ajouté à la liste des segmentations. '
+          + 'Dessinez avec le Crayon, la Gomme ou la Baguette.',
+        type: 'success',
+        duration: 4000,
+      });
+    } catch (err) {
+      reportSegmentationError(modeLabel, 'open', err);
+    }
+  }
+
   async function toggleSegmentationWand() {
     const modeLabel = 'Baguette';
     try {
@@ -3483,6 +3549,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     toggleSegmentationEraser,
     toggleSegmentationPencil,
     toggleSegmentationWand,
+    openDoctorSegmentation,
     cycleActivePencilSegment,
     undoSegmentationEdit,
     redoSegmentationEdit,
@@ -3520,6 +3587,9 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     },
     toggleSegmentationWand: {
       commandFn: actions.toggleSegmentationWand,
+    },
+    openDoctorSegmentation: {
+      commandFn: actions.openDoctorSegmentation,
     },
     cycleActivePencilSegment: {
       commandFn: actions.cycleActivePencilSegment,

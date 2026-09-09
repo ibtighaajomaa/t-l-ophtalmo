@@ -74,6 +74,7 @@ function modeFactory({ modeConfiguration }) {
         'SegmentationPencil',
         'SegmentationEraser',
         'SegmentationWand',
+        'SegmentationDoctorLayer',
         'SegmentationActiveSegment',
         'SegmentationUndo',
         'SegmentationRedo',

@@ -254,6 +254,17 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'SegmentationDoctorLayer',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-seg-shape',
+      label: 'Calque médecin',
+      tooltip: 'Ajouter ou sélectionner le calque « Lésions (médecin) » pour dessiner vos propres annotations',
+      commands: 'openDoctorSegmentation',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
     id: 'SegmentationActiveSegment',
     uiType: 'ohif.toolButton',
     props: {
