@@ -205,9 +205,20 @@ export default function MapView({
       <Polygon
         positions={[MASK_FRAME, TUNISIA_OUTLINE]}
         pathOptions={{
-          fillColor: "#f8fafc",
-          fillOpacity: 0.92,
+          fillColor: "#ffffff",
+          fillOpacity: 0.7,
           stroke: false,
+          interactive: false,
+        }}
+      />
+      {/* Halo : separe le territoire du voisinage reste visible. */}
+      <Polygon
+        positions={TUNISIA_OUTLINE}
+        pathOptions={{
+          color: "#ffffff",
+          weight: 7,
+          opacity: 0.85,
+          fill: false,
           interactive: false,
         }}
       />
