@@ -34,6 +34,23 @@ def _convert_color_space(arr, src, dst):
     return convert_color_space(arr, src, dst)
 
 
+def _ybr_to_rgb(arr):
+    """YBR_FULL (Y, Cb, Cr, pleine echelle JPEG) -> RGB.
+
+    OpenCV travaille en uint8 : une seule copie de la taille de l'image. Le
+    chemin pydicom passe par du float32 et alloue plusieurs centaines de Mo
+    sur un fond d'oeil de 12 Mpx, ce qui pese sur un conteneur qui porte deja
+    TensorFlow, PyTorch et CLIP. pydicom reste le repli si cv2 est absent.
+    """
+    try:
+        import cv2
+        # DICOM range (Y, Cb, Cr) ; OpenCV attend (Y, Cr, Cb).
+        ycrcb = np.ascontiguousarray(arr[..., [0, 2, 1]])
+        return cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
+    except Exception:
+        return _convert_color_space(arr, "YBR_FULL", "RGB")
+
+
 def dicom_pixels_rgb(ds):
     """pixel_array garanti en RGB, quels que soient le decodeur JPEG et pydicom.
 
@@ -58,7 +75,7 @@ def dicom_pixels_rgb(ds):
         if _looks_like_ycbcr(arr):
             # Apres decodage, le 4:2:2 est deja re-echantillonne en pleine
             # resolution : la conversion YBR_FULL -> RGB s'applique telle quelle.
-            arr = _convert_color_space(arr, "YBR_FULL", "RGB")
+            arr = _ybr_to_rgb(arr)
             logger.info("dicom_pixels_rgb: YCbCr detecte (tag=%s), converti en RGB", photometric)
         else:
             logger.info("dicom_pixels_rgb: pixels deja RGB (tag=%s), aucune conversion", photometric)
