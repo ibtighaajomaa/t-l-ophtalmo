@@ -42,7 +42,13 @@ export default function MapView({
   const createCustomIcon = (totalExams: number, interprete: number, name: string, isSelected: boolean) => {
     const siteAverage = totalExams / 3;
     const isAboveAverage = interprete > siteAverage;
-    const colorClass = isAboveAverage ? "bg-emerald-500" : "bg-red-500";
+    // Un site sans aucun examen est neutre, pas "sous moyenne" : sinon un site
+    // simplement silencieux est signale comme un site en difficulte.
+    const colorClass = totalExams === 0
+      ? "bg-slate-400"
+      : isAboveAverage
+        ? "bg-emerald-500"
+        : "bg-red-500";
     const borderClass = isSelected
       ? "ring-[3px] ring-blue-700 ring-offset-2 ring-offset-white scale-110"
       : "ring-2 ring-white";

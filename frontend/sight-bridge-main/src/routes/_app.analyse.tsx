@@ -206,8 +206,35 @@ function dateKey(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
+// Sites du reseau pilote, cles normalisees de SITE_LOCATIONS.
+// Ils sont toujours affiches, meme sans examen : sur un tableau de bord de
+// supervision nationale, un site silencieux est une information, pas une absence.
+const PILOT_SITE_IDS = [
+  "kelibia",
+  "menzel temim",
+  "mateur",
+  "kebili",
+  "deguech",
+  "siliana",
+] as const;
+
 function aggregateRegions(exams: Exam[]): RegionData[] {
   const bySite = new Map<string, RegionData>();
+
+  for (const id of PILOT_SITE_IDS) {
+    const location = SITE_LOCATIONS[id];
+    if (!location) continue;
+    bySite.set(id, {
+      id,
+      name: location.name,
+      governorate: location.governorate,
+      lat: location.lat,
+      lng: location.lng,
+      en_attente: 0,
+      en_cours: 0,
+      interprete: 0,
+    });
+  }
 
   for (const exam of exams) {
     const site = canonicalSite(exam);
@@ -747,6 +774,10 @@ function AnalysePage() {
                 <span className="inline-flex items-center gap-1.5">
                   <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
                   Sous moyenne
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2.5 w-2.5 rounded-full bg-slate-400" />
+                  Sans activité
                 </span>
               </div>
             </div>
