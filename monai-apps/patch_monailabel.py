@@ -1215,7 +1215,17 @@ async def analyze(request: dict):
                     continue
             if selected is None:
                 selected = dcmread(str(files[0]))
-            arr = selected.pixel_array
+            try:
+                import sys
+                if "/opt/monai/apps" not in sys.path:
+                    sys.path.insert(0, "/opt/monai/apps")
+                from xai_utils import dicom_pixels_rgb
+                # YBR_FULL_422 (JPEG des retinographes) -> RGB garanti ;
+                # sinon fond cyan et retine magenta dans CLAHE / Grad-CAM.
+                arr = dicom_pixels_rgb(selected)
+            except Exception as e:
+                logger.warning("YBR->RGB helper unavailable, raw pixel_array used: %s", e)
+                arr = selected.pixel_array
             arr = np.squeeze(arr)
             while arr.ndim > 3:
                 arr = arr[0]

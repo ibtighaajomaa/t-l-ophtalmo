@@ -12,6 +12,53 @@ def _dicom_dir(image, instance):
     logger.info("DICOM dir: %s (exists=%s)", dcm_dir, os.path.isdir(dcm_dir))
     return dcm_dir
 
+def _looks_like_ycbcr(arr):
+    """Un fond d'oeil a des bords noirs. En YCbCr un noir vaut environ
+    (0..16, 128, 128) ; en RGB il vaut (0, 0, 0). On tranche sur les coins,
+    ce qui rend la decision independante du decodeur et de pydicom."""
+    h, w = arr.shape[:2]
+    k = max(2, min(16, h // 20, w // 20))
+    corners = np.concatenate([
+        arr[:k, :k].reshape(-1, 3), arr[:k, -k:].reshape(-1, 3),
+        arr[-k:, :k].reshape(-1, 3), arr[-k:, -k:].reshape(-1, 3),
+    ]).astype(np.float32)
+    med = np.median(corners, axis=0)
+    return med[0] < 48 and abs(med[1] - 128) < 24 and abs(med[2] - 128) < 24
+
+
+def _convert_color_space(arr, src, dst):
+    try:
+        from pydicom.pixels.processing import convert_color_space  # pydicom >= 3
+    except Exception:
+        from pydicom.pixel_data_handlers.util import convert_color_space
+    return convert_color_space(arr, src, dst)
+
+
+def dicom_pixels_rgb(ds):
+    """pixel_array garanti en RGB, quels que soient le decodeur JPEG et pydicom.
+
+    Les retinographes stockent en YBR_FULL_422 (JPEG baseline). Selon le
+    decodeur, pixel_array rend soit du RGB deja converti, soit du YCbCr brut.
+    Traite comme RGB, le YCbCr donne un fond cyan et une retine magenta.
+    """
+    arr = None
+    try:
+        from pydicom.pixels import pixel_array as _pixel_array  # pydicom >= 3
+        arr = _pixel_array(ds, as_rgb=True)
+    except Exception:
+        arr = None
+    if arr is None:
+        arr = ds.pixel_array
+    arr = np.asarray(arr)
+    if arr.ndim == 3 and arr.shape[-1] == 3 and arr.dtype == np.uint8:
+        photometric = str(getattr(ds, "PhotometricInterpretation", "")).upper()
+        if photometric.startswith("YBR") and _looks_like_ycbcr(arr):
+            # Apres decodage, le 4:2:2 est deja re-echantillonne en pleine
+            # resolution : la conversion YBR_FULL -> RGB s'applique telle quelle.
+            arr = _convert_color_space(arr, "YBR_FULL", "RGB")
+    return arr
+
+
 def generate_clahe(image, instance):
     """Generate CLAHE-enhanced fundus image, return base64 PNG."""
     try:
@@ -27,7 +74,7 @@ def generate_clahe(image, instance):
         from skimage import color, exposure
 
         ds = dcmread(str(dcm_files[0]))
-        img_arr = ds.pixel_array
+        img_arr = dicom_pixels_rgb(ds)
 
         if img_arr.ndim == 2:
             img_rgb = np.stack([img_arr] * 3, axis=-1).astype(np.float32)
@@ -78,7 +125,7 @@ def generate_gradcam(image, instance, dr_task):
 
         from pydicom import dcmread
         ds = dcmread(str(dcm_files[0]))
-        img_arr = ds.pixel_array
+        img_arr = dicom_pixels_rgb(ds)
 
         if img_arr.ndim == 2:
             img_rgb = np.stack([img_arr] * 3, axis=-1)
