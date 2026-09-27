@@ -4,10 +4,12 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   const claheOverlays = new Map();
   const foveaOverlays = new Map();
   const editSessions = new Map(); // viewportId -> { mode: 'erase'|'pencil', cleanup }
-  const undoStacks = new Map(); // segmentationId -> Map<offset, oldValue>[]
+  const undoStacks = new Map(); // segmentationId -> { layers: [{ imageId, diff: Map<offset, oldValue> }] }[]
   const redoStacks = new Map();
-  const originalSnapshots = new Map(); // segmentationId -> pristine scalarData snapshot
+  // segmentationId (volume) ou segmentationId|imageId (pile) -> { segmentationId, imageId, data }
+  const originalSnapshots = new Map();
   const diagnosedLabelmaps = new Set(); // imageId -> une ligne de diagnostic par labelmap
+  const hiddenLabelmapWarnings = new Set(); // segmentationId|image affichee -> alerte deja montree
   let firstStrokeLogged = false;
   const brushCursors = new Map(); // viewportId -> { svg, circle }
   const usedModesThisSession = new Set(); // 'erase' | 'pencil', reset on save
@@ -380,7 +382,79 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // labelmaps are stack-based (representationData.Labelmap.imageIds) and
   // segmentationService.getLabelmapVolume() returns null for them. Wrap both
   // storage kinds behind one read/write accessor.
-  function getLabelmapAccessor(segmentationId, viewportId, viewport) {
+  //
+  // Labelmap de pile vise : celui de l'image AFFICHEE, resolu comme la brosse
+  // native de Cornerstone (getCurrentLabelmapImageIdsForViewport). Cette liste
+  // est exactement celle a partir de laquelle Cornerstone cree les acteurs du
+  // calque sur l'image courante, donc tout ce qui y figure est dessine. On y
+  // prend le labelmap derive de l'image affichee (referencedImageId), sinon le
+  // premier, comme la brosse native. Le repli par index de pile n'est dessine
+  // par aucun acteur : il est signale comme tel (listed = false).
+  function resolveStackLabelmapTarget(segmentationId, viewportId, viewport, imageIds) {
+    const state = csTools?.segmentation?.state;
+    const currentImageId = viewport?.getCurrentImageId?.() || null;
+    const derivedFromCurrent = id => {
+      if (!currentImageId || !csCore?.cache) return false;
+      try {
+        return csCore.cache.getImage(id)?.referencedImageId === currentImageId;
+      } catch (_) {
+        return false;
+      }
+    };
+    const listDisplayed = () => {
+      try {
+        const listed = state?.getCurrentLabelmapImageIdsForViewport?.(viewportId, segmentationId);
+        return Array.isArray(listed) ? listed.filter(id => typeof id === 'string' && id) : [];
+      } catch (_) {
+        return [];
+      }
+    };
+    let listed = listDisplayed();
+    let how = 'officielle getCurrentLabelmapImageIdsForViewport';
+    if (!listed.length && typeof state?.updateLabelmapSegmentationImageReferences === 'function') {
+      // Meme appel que Cornerstone a chaque changement d'image : les
+      // references image -> labelmap peuvent ne pas etre encore calculees.
+      try {
+        state.updateLabelmapSegmentationImageReferences(viewportId, segmentationId);
+      } catch (_) {
+        // viewport pas (encore) active : on tombe sur le repli ci-dessous
+      }
+      listed = listDisplayed();
+      how = 'officielle apres updateLabelmapSegmentationImageReferences';
+    }
+    if (listed.length) {
+      const own = listed.find(derivedFromCurrent);
+      return {
+        imageId: own || listed[0],
+        how: own
+          ? `${how} (derive de l'image affichee)`
+          : `${how} (premier de la liste, comme la brosse native)`,
+        layerImageIds: listed,
+        listed: true,
+      };
+    }
+    const byReference = Array.from(imageIds).find(derivedFromCurrent);
+    if (byReference) {
+      return {
+        imageId: byReference,
+        how: 'REPLI referencedImageId (aucun labelmap liste pour cette image)',
+        layerImageIds: [byReference],
+        listed: false,
+      };
+    }
+    const index = viewport?.getCurrentImageIdIndex?.() ?? 0;
+    const byIndex = imageIds[index] || imageIds[0];
+    return {
+      imageId: byIndex,
+      how: 'REPLI index de pile (aucun labelmap liste pour cette image)',
+      layerImageIds: [byIndex],
+      listed: false,
+    };
+  }
+
+  // `forcedImageId` (annuler, retablir, reinitialiser, calques secondaires de
+  // la gomme) vise un labelmap de pile precis, sans rien resoudre.
+  function getLabelmapAccessor(segmentationId, viewportId, viewport, forcedImageId = null) {
     if (typeof segmentationId !== 'string' || !segmentationId) return null;
     const { segmentationService } = servicesManager.services;
 
@@ -389,9 +463,15 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       return {
         kind: 'volume',
         segmentationId,
+        imageId: null,
+        resolvedHow: 'volume',
+        layerImageIds: [],
+        listed: true,
         getScalarData: () => volume.voxelManager.getCompleteScalarDataArray?.(),
         setScalarData: data => volume.voxelManager.setCompleteScalarDataArray?.(data),
+        readAt: offset => volume.voxelManager.getAtIndex?.(offset),
         writeAt: (offset, value) => volume.voxelManager.setAtIndex?.(offset, value),
+        getModifiedSlices: () => volume.voxelManager.getArrayOfModifiedSlices?.(),
       };
     }
 
@@ -399,27 +479,22 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     const imageIds = segmentation?.representationData?.Labelmap?.imageIds;
     if (!imageIds?.length || !csCore?.cache) return null;
 
-    let imageId = null;
-    try {
-      imageId = csTools?.segmentation?.state?.getCurrentLabelmapImageIdForViewport?.(
-        viewportId,
-        segmentationId
-      );
-    } catch (_) {
-      imageId = null;
-    }
-    if (!imageId) {
-      const index = viewport?.getCurrentImageIdIndex?.() ?? 0;
-      imageId = imageIds[index] || imageIds[0];
-    }
+    const target = forcedImageId
+      ? {
+        imageId: forcedImageId,
+        how: 'impose (historique ou calque secondaire)',
+        layerImageIds: [forcedImageId],
+        listed: true,
+      }
+      : resolveStackLabelmapTarget(segmentationId, viewportId, viewport, imageIds);
+    const imageId = target.imageId;
+    if (!imageId) return null;
     const image = csCore.cache.getImage(imageId);
     if (!image) return null;
     const vm = image.voxelManager;
-    // Sur une image 2D (fond d'oeil) le voxel manager n'expose PAS
-    // setScalarData : l'ancienne garde `if (vm?.setScalarData)` ne faisait donc
-    // jamais rien, et getScalarData() peut renvoyer une copie (gestionnaire
-    // RLE). Resultat : crayon, gomme, annuler, retablir, reinitialiser et
-    // baguette ecrivaient dans un tableau jetable. L'API officielle est
+    // Selon la version de Cornerstone, le voxel manager d'une image 2D n'a pas
+    // de setScalarData, ou n'y fait qu'une reaffectation, et getScalarData()
+    // peut renvoyer une copie (gestionnaire RLE). L'API officielle est
     // setAtIndex, qui fonctionne pour un tableau plein comme pour du RLE et
     // tient a jour les tranches modifiees dont le rendu a besoin.
     const readAt = offset => {
@@ -434,7 +509,8 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         '| setAtIndex=', typeof vm?.setAtIndex, '| getAtIndex=', typeof vm?.getAtIndex,
         '| rle=', !!vm?.map?.getRun, '| getPixelData=', typeof image.getPixelData,
         '| imageFrame.pixelData=', !!image.imageFrame?.pixelData,
-        '| dims=', image.columns || image.width, 'x', image.rows || image.height
+        '| dims=', image.columns || image.width, 'x', image.rows || image.height,
+        '| derive de=', image.referencedImageId || '?'
       );
     }
     // Trois voies, de la plus officielle a la plus brute. Quand une relecture
@@ -463,8 +539,21 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       kind: 'stack',
       segmentationId,
       imageId,
+      referencedImageId: image.referencedImageId || null,
+      resolvedHow: target.how,
+      layerImageIds: target.layerImageIds,
+      listed: target.listed,
+      width: image.columns || image.width || 0,
+      height: image.rows || image.height || 0,
       getScalarData: () => (vm?.getScalarData ? vm.getScalarData() : image.getPixelData?.()),
+      readAt: offset => {
+        const value = readAt(offset);
+        if (value !== undefined) return value;
+        const pixels = image.getPixelData?.();
+        return pixels ? pixels[offset] : undefined;
+      },
       writeAt,
+      getModifiedSlices: () => vm?.getArrayOfModifiedSlices?.(),
       setScalarData: data => {
         if (vm?.setScalarData) {
           vm.setScalarData(data);
@@ -741,14 +830,44 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     return i + j * width + k * width * height;
   }
 
-  function notifySegmentationModified(segmentationId = '1') {
+  // Meme declencheur que la brosse native de Cornerstone :
+  // triggerSegmentationDataModified(segmentationId, tranchesModifiees, segmentIndex).
+  // Il est appele de facon SYNCHRONE avec le module deja charge par
+  // loadCornerstone() : c'est le meme module, donc le meme eventTarget que
+  // celui qu'ecoutent cornerstoneTools et OHIF, et le listener recopie le
+  // labelmap dans l'acteur vtk AVANT le viewport.render() qui suit.
+  // Renvoie la voie utilisee, pour le diagnostic.
+  function notifySegmentationModified(segmentationId = '1', modifiedSlices = null, segmentIndex = null) {
+    const slices = modifiedSlices == null ? undefined : modifiedSlices;
+    const index = segmentIndex == null ? undefined : segmentIndex;
+    const official = csTools?.segmentation?.triggerSegmentationEvents?.triggerSegmentationDataModified;
+    if (typeof official === 'function') {
+      try {
+        official(segmentationId, slices, index);
+        return 'triggerSegmentationDataModified (synchrone)';
+      } catch (err) {
+        console.warn('[SegmentationEdit] triggerSegmentationDataModified failed', err);
+      }
+    }
+    const eventName = csTools?.Enums?.Events?.SEGMENTATION_DATA_MODIFIED;
+    if (eventName && csCore?.eventTarget && typeof csCore.triggerEvent === 'function') {
+      try {
+        csCore.triggerEvent(csCore.eventTarget, eventName, {
+          segmentationId,
+          modifiedSlicesToUse: slices,
+          segmentIndex: index,
+        });
+        return 'evenement SEGMENTATION_DATA_MODIFIED brut (synchrone)';
+      } catch (err) {
+        console.warn('[SegmentationEdit] SEGMENTATION_DATA_MODIFIED dispatch failed', err);
+      }
+    }
+    // Modules pas encore charges : ancienne voie, asynchrone.
     import('@cornerstonejs/tools').then(tools => {
-      // L'API officielle propage aussi les tranches modifiees enregistrees par
-      // setAtIndex ; l'evenement brut reste le repli si elle est absente.
-      const official = tools?.segmentation?.triggerSegmentationEvents?.triggerSegmentationDataModified;
-      if (typeof official === 'function') {
+      const lateOfficial = tools?.segmentation?.triggerSegmentationEvents?.triggerSegmentationDataModified;
+      if (typeof lateOfficial === 'function') {
         try {
-          official(segmentationId);
+          lateOfficial(segmentationId, slices, index);
           return;
         } catch (err) {
           console.warn('[SegmentationEdit] triggerSegmentationDataModified failed', err);
@@ -757,72 +876,328 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       import('@cornerstonejs/core').then(({ eventTarget, triggerEvent }) => {
         triggerEvent(eventTarget, tools.Enums.Events.SEGMENTATION_DATA_MODIFIED, {
           segmentationId,
+          modifiedSlicesToUse: slices,
+          segmentIndex: index,
         });
       });
     });
+    return 'import dynamique (asynchrone)';
   }
 
-  function paintAtCanvasPoint(viewport, accessor, canvasX, canvasY, brushSize, writeValue, strokeDiff) {
-    const scalarData = accessor?.getScalarData?.();
-    if (!scalarData) return 0;
+  // Acteurs vtk qui dessinent les labelmaps de cette segmentation dans la vue
+  // (meme filtre que getLabelmapActorEntries de cornerstoneTools).
+  function labelmapActorEntries(viewport, segmentationId) {
+    const type = csTools?.Enums?.SegmentationRepresentations?.Labelmap || 'Labelmap';
+    const prefix = `${segmentationId}-${type}`;
+    try {
+      return (viewport?.getActors?.() || []).filter(entry =>
+        typeof entry?.representationUID === 'string' && entry.representationUID.startsWith(prefix)
+      );
+    } catch (_) {
+      return [];
+    }
+  }
 
-    const radius = Math.max(0.5, brushSize / 2);
-    const radiusSquared = radius * radius;
-    const span = Math.max(0, Math.ceil(radius - 0.5));
-    let changed = 0;
+  function hasLabelmapActor(viewport, segmentationId, imageId) {
+    if (!imageId) return false;
+    return labelmapActorEntries(viewport, segmentationId).some(entry => entry.referencedId === imageId);
+  }
 
-    for (let dy = -span; dy <= span; dy++) {
-      for (let dx = -span; dx <= span; dx++) {
-        if (dx * dx + dy * dy > radiusSquared) continue;
-        const offset = scalarOffsetFromCanvas(viewport, canvasX + dx, canvasY + dy);
-        if (offset == null) continue;
-        const current = scalarData[offset];
-        if (current === writeValue) continue;
-        if (strokeDiff && !strokeDiff.has(offset)) {
-          strokeDiff.set(offset, current);
+  // Filet de securite apres le declencheur : pour chaque labelmap ecrit, on
+  // verifie que l'acteur qui l'affiche (apparie par referencedId) a bien
+  // recu le pixel sonde ; sinon on le recopie depuis le cache, exactement
+  // comme performStackLabelmapUpdate (updateVTKImageDataWithCornerstoneImage).
+  // `probe` null = recopie sans condition (annuler, retablir, reinitialiser).
+  function refreshLabelmapActors(viewport, segmentationId, targets) {
+    const outcome = { upToDate: 0, copied: 0, missing: 0 };
+    if (!targets?.length || !csCore?.cache) return outcome;
+    const entries = labelmapActorEntries(viewport, segmentationId);
+    const update = csCore.utilities?.updateVTKImageDataWithCornerstoneImage;
+    targets.forEach(({ imageId, probe }) => {
+      const matching = entries.filter(entry => entry.referencedId === imageId);
+      if (!matching.length) {
+        outcome.missing++;
+        return;
+      }
+      matching.forEach(entry => {
+        try {
+          const image = csCore.cache.getImage(imageId);
+          const imageData = entry.actor?.getMapper?.()?.getInputData?.();
+          const actorPixels = imageData?.getPointData?.()?.getScalars?.()?.getData?.();
+          const cachePixels = image?.voxelManager?.getScalarData?.();
+          if (!actorPixels || !cachePixels || actorPixels.length !== cachePixels.length) {
+            outcome.missing++;
+            return;
+          }
+          if (actorPixels === cachePixels || (probe != null && actorPixels[probe] === cachePixels[probe])) {
+            outcome.upToDate++;
+            return;
+          }
+          if (typeof update === 'function') {
+            update(imageData, image);
+          } else {
+            actorPixels.set(cachePixels);
+            imageData.modified?.();
+          }
+          outcome.copied++;
+        } catch (err) {
+          outcome.missing++;
+          console.warn('[SegmentationEdit] rafraichissement direct de l acteur impossible', imageId, err);
         }
-        scalarData[offset] = writeValue;
-        // Ecriture immediate via l'API par index : le tableau local peut
-        // etre une copie, seul writeAt atteint le labelmap rendu.
-        if (accessor.writeAt) accessor.writeAt(offset, writeValue);
-        changed++;
+      });
+    });
+    return outcome;
+  }
+
+  // Geometrie de la brosse pour la vue courante : transformee affine
+  // indice image -> canvas (celle de l'apercu de la baguette) et son
+  // determinant. null si la vue ne la fournit pas.
+  function brushGeometry(viewport) {
+    const result = viewport?.getImageData?.();
+    const imageData = result?.imageData || result;
+    const dimensions = imageData?.getDimensions?.();
+    if (!dimensions || dimensions.length < 2) return null;
+    if (dimensions.length > 2 && dimensions[2] > 1) return null; // pas un plan i-j unique
+    const t = indexToCanvasTransform(viewport);
+    if (!t) return null;
+    const det = t.a * t.d - t.b * t.c;
+    if (!Number.isFinite(det) || Math.abs(det) < 1e-9) return null;
+    return { t, det, width: dimensions[0], height: dimensions[1] };
+  }
+
+  // Centres des disques a poser entre deux positions du pointeur, espaces
+  // d'au plus un demi-rayon : un trait rapide ne laisse pas de trous.
+  function brushCentres(from, to, radius) {
+    if (!from) return [to];
+    const length = Math.hypot(to[0] - from[0], to[1] - from[1]);
+    const step = Math.max(0.5, radius / 2);
+    const steps = Math.min(256, Math.max(1, Math.ceil(length / step)));
+    const centres = [];
+    for (let s = 1; s <= steps; s++) {
+      const u = s / steps;
+      centres.push([from[0] + (to[0] - from[0]) * u, from[1] + (to[1] - from[1]) * u]);
+    }
+    return centres;
+  }
+
+  // Disque PLEIN en espace image : chaque pixel du labelmap dont le centre
+  // tombe sous le cercle du curseur (rayon en pixels canvas) est visite, quel
+  // que soit le zoom, la rotation ou le retournement de la vue.
+  function stampDisc(geometry, centreX, centreY, radius, visit) {
+    const { t, det, width, height } = geometry;
+    const ux = centreX - t.e;
+    const uy = centreY - t.f;
+    const ci = (t.d * ux - t.c * uy) / det;
+    const cj = (-t.b * ux + t.a * uy) / det;
+    const ri = (radius * Math.hypot(t.c, t.d)) / Math.abs(det);
+    const rj = (radius * Math.hypot(t.a, t.b)) / Math.abs(det);
+    const i0 = Math.max(0, Math.floor(ci - ri));
+    const i1 = Math.min(width - 1, Math.ceil(ci + ri));
+    const j0 = Math.max(0, Math.floor(cj - rj));
+    const j1 = Math.min(height - 1, Math.ceil(cj + rj));
+    const radiusSquared = radius * radius;
+    let hits = 0;
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const dx = t.a * i + t.c * j + t.e - centreX;
+        const dy = t.b * i + t.d * j + t.f - centreY;
+        if (dx * dx + dy * dy > radiusSquared) continue;
+        visit(i + j * width);
+        hits++;
+      }
+    }
+    if (!hits) {
+      // Brosse plus petite qu'un pixel image (fort zoom) : au moins le pixel
+      // sous le pointeur.
+      const i = Math.round(ci);
+      const j = Math.round(cj);
+      if (i >= 0 && j >= 0 && i < width && j < height) visit(i + j * width);
+    }
+    return { ri, rj };
+  }
+
+  function readLabel(accessor, scalarData, offset) {
+    const value = accessor?.readAt ? accessor.readAt(offset) : undefined;
+    if (value !== undefined) return value;
+    return scalarData && offset >= 0 && offset < scalarData.length ? scalarData[offset] : undefined;
+  }
+
+  // Une seule voie d'ecriture, celle du voxel manager (setAtIndex), comme la
+  // brosse native : les tranches modifiees sont ainsi bien enregistrees.
+  function writeLabel(layer, offset, value) {
+    const { accessor, scalarData } = layer;
+    const current = readLabel(accessor, scalarData, offset);
+    if (current === value) return false;
+    if (accessor.writeAt) {
+      if (accessor.writeAt(offset, value) === false) return false;
+    } else if (scalarData && offset >= 0 && offset < scalarData.length) {
+      scalarData[offset] = value;
+      layer.needsBulkWrite = true;
+    } else {
+      return false;
+    }
+    if (!layer.diff.has(offset)) layer.diff.set(offset, current === undefined ? 0 : current);
+    return true;
+  }
+
+  // Un pas de crayon ou de gomme : disques pleins en ESPACE IMAGE, de la
+  // position precedente du pointeur a la position courante.
+  //
+  // L'ancienne version ecrivait UN pixel image par pixel canvas. Quand l'image
+  // est reduite a l'ecran (2736 px de large dans ~1600 px CSS), cela donnait
+  // une grille clairsemee de pixels isoles, et l'affichage du labelmap (plus
+  // proche voisin, un pixel image lu par pixel ecran) ne tombait presque
+  // jamais dessus : 3209 pixels ecrits, rien de visible. La baguette, elle,
+  // remplit une region pleine en espace image : c'est pour cela qu'elle
+  // s'affichait.
+  function paintBrushDab(viewport, stroke, canvasX, canvasY, brushSize, writeValue) {
+    const radius = Math.max(0.5, brushSize / 2);
+    const from = stroke.lastPoint;
+    const to = [canvasX, canvasY];
+    stroke.lastPoint = to;
+    const layers = stroke.layers;
+    const primary = layers[0]?.accessor;
+    const result = { changed: 0, method: '', scale: null, trigger: null, refresh: null, writeValue };
+    if (!primary) return result;
+    layers.forEach(layer => {
+      layer.dabChanged = 0;
+    });
+
+    const visit = offset => {
+      for (let l = 0; l < layers.length; l++) {
+        const layer = layers[l];
+        if (writeLabel(layer, offset, writeValue)) {
+          layer.changed++;
+          layer.dabChanged++;
+          layer.lastOffset = offset;
+          result.changed++;
+        }
+      }
+    };
+
+    const geometry = primary.kind === 'stack' ? brushGeometry(viewport) : null;
+    const sameGrid = !!geometry && (!primary.width || !primary.height ||
+      (geometry.width === primary.width && geometry.height === primary.height));
+    if (geometry && sameGrid) {
+      result.method = 'disque plein en espace image';
+      brushCentres(from, to, radius).forEach(([x, y]) => {
+        result.scale = stampDisc(geometry, x, y, radius, visit);
+      });
+    } else {
+      // Labelmap volumique, ou vue sans transformee exploitable : ancien
+      // echantillonnage, un pixel image par pixel canvas.
+      result.method = geometry
+        ? 'echantillons canvas (grille image differente du labelmap)'
+        : 'echantillons canvas (repli)';
+      const span = Math.max(0, Math.ceil(radius - 0.5));
+      const radiusSquared = radius * radius;
+      for (let dy = -span; dy <= span; dy++) {
+        for (let dx = -span; dx <= span; dx++) {
+          if (dx * dx + dy * dy > radiusSquared) continue;
+          const offset = scalarOffsetFromCanvas(viewport, canvasX + dx, canvasY + dy);
+          if (offset != null) visit(offset);
+        }
       }
     }
 
+    stroke.dabs++;
+    stroke.changed += result.changed;
+
     if (!firstStrokeLogged) {
       firstStrokeLogged = true;
-      const probe = scalarOffsetFromCanvas(viewport, canvasX, canvasY);
       console.log(
-        '[SegmentationEdit] premier trait :', changed, 'pixel(s) modifie(s)',
-        '| valeur ecrite=', writeValue, '| offset central=', probe,
-        '| accessor=', accessor?.kind, '| writeAt=', typeof accessor?.writeAt,
-        '| taille labelmap=', scalarData.length,
-        changed === 0 ? '| RIEN A CHANGER : la valeur est deja presente sous le pinceau' : ''
+        '[SegmentationEdit] premier trait :', result.changed, 'pixel(s) modifie(s)',
+        '| valeur ecrite=', writeValue,
+        '| offset central=', scalarOffsetFromCanvas(viewport, canvasX, canvasY),
+        '| accessor=', primary.kind, '| writeAt=', typeof primary.writeAt,
+        '| taille labelmap=', primary.width && primary.height ? primary.width * primary.height : '?',
+        '| methode=', result.method,
+        result.changed === 0 ? '| RIEN A CHANGER : la valeur est deja presente sous le pinceau' : ''
       );
     }
-    if (changed) {
-      if (!accessor.writeAt) accessor.setScalarData(scalarData);
-      notifySegmentationModified(accessor.segmentationId);
-      viewport?.render?.();
-    }
-    return changed;
+    if (!result.changed) return result;
+
+    layers.forEach(layer => {
+      if (layer.needsBulkWrite && layer.scalarData) {
+        layer.accessor.setScalarData(layer.scalarData);
+        layer.needsBulkWrite = false;
+      }
+    });
+    result.trigger = notifySegmentationModified(
+      stroke.segmentationId,
+      primary.getModifiedSlices?.(),
+      writeValue
+    );
+    result.refresh = refreshLabelmapActors(
+      viewport,
+      stroke.segmentationId,
+      layers
+        .filter(layer => layer.imageId && layer.dabChanged > 0)
+        .map(layer => ({ imageId: layer.imageId, probe: layer.lastOffset }))
+    );
+    viewport?.render?.();
+    stroke.trigger = result.trigger;
+    stroke.copiedActors += result.refresh.copied;
+    return result;
+  }
+
+  // Couche d'historique : null pour un labelmap volumique (un seul tableau),
+  // sinon l'imageId du labelmap de pile reellement ecrit.
+  function layerImageId(accessor) {
+    return accessor?.kind === 'stack' ? accessor.imageId || null : null;
+  }
+
+  // Une image de pile = un labelmap = une copie d'origine.
+  function snapshotKey(accessor) {
+    const imageId = layerImageId(accessor);
+    return imageId ? `${accessor.segmentationId}|${imageId}` : accessor?.segmentationId;
   }
 
   function ensureOriginalSnapshot(accessor) {
     const segmentationId = accessor?.segmentationId;
-    if (!segmentationId || originalSnapshots.has(segmentationId)) return;
+    if (!segmentationId) return;
+    const key = snapshotKey(accessor);
+    if (originalSnapshots.has(key)) return;
     const scalarData = accessor.getScalarData?.();
     if (scalarData) {
-      originalSnapshots.set(segmentationId, scalarData.slice());
+      originalSnapshots.set(key, {
+        segmentationId,
+        imageId: layerImageId(accessor),
+        data: scalarData.slice(),
+      });
     }
   }
 
-  function pushUndoEntry(segmentationId, strokeDiff) {
-    if (!strokeDiff || strokeDiff.size === 0) return;
+  function snapshotsForSegmentation(segmentationId) {
+    const records = [];
+    originalSnapshots.forEach(record => {
+      if (record?.segmentationId === segmentationId) records.push(record);
+    });
+    return records;
+  }
+
+  // Une entree d'annulation regroupe une ou plusieurs couches
+  // { imageId, diff: Map<offset, ancienneValeur> } : un trait de gomme peut
+  // toucher plusieurs labelmaps dessines sur la meme image, et chaque couche
+  // doit etre rejouee dans le labelmap ou elle a ete ecrite, meme si l'image
+  // affichee a change depuis.
+  function entryLayers(entry) {
+    if (!entry) return [];
+    if (entry instanceof Map) return [{ imageId: null, diff: entry }];
+    return Array.isArray(entry.layers) ? entry.layers : [];
+  }
+
+  function pushUndoLayers(segmentationId, layers) {
+    const kept = (layers || []).filter(layer => layer?.diff && layer.diff.size > 0);
+    if (!segmentationId || !kept.length) return;
     const stack = undoStacks.get(segmentationId) || [];
-    stack.push(strokeDiff);
+    stack.push({ layers: kept });
     undoStacks.set(segmentationId, stack);
     redoStacks.set(segmentationId, []);
+  }
+
+  function pushUndoEntry(segmentationId, strokeDiff, imageId = null) {
+    pushUndoLayers(segmentationId, [{ imageId, diff: strokeDiff }]);
   }
 
   // Toolbar commands are invoked by OHIF's CommandsManager with an options
@@ -847,30 +1222,67 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     return { activeViewportId, viewport, segmentationId, accessor };
   }
 
+  // Rejoue une entree d'historique et renvoie l'entree inverse. Une couche
+  // marquee d'un imageId est reecrite dans CE labelmap (l'image affichee peut
+  // avoir change depuis) ; une couche sans imageId (volume, ancienne entree)
+  // vise le labelmap courant.
+  function applyHistoryEntry(segmentationId, entry, viewportId, viewport, currentAccessor) {
+    const inverseLayers = [];
+    const refreshTargets = [];
+    let missing = 0;
+    entryLayers(entry).forEach(layer => {
+      const accessor = layer.imageId
+        ? getLabelmapAccessor(segmentationId, viewportId, viewport, layer.imageId)
+        : currentAccessor;
+      const scalarData = accessor && !accessor.writeAt ? accessor.getScalarData?.() : null;
+      if (!accessor || (!accessor.writeAt && !scalarData)) {
+        missing++;
+        return;
+      }
+      const back = new Map();
+      layer.diff.forEach((value, offset) => {
+        const current = readLabel(accessor, scalarData, offset);
+        back.set(offset, current === undefined ? 0 : current);
+        if (accessor.writeAt) {
+          accessor.writeAt(offset, value);
+        } else {
+          scalarData[offset] = value;
+        }
+      });
+      if (!accessor.writeAt) accessor.setScalarData(scalarData);
+      inverseLayers.push({ imageId: layer.imageId, diff: back });
+      if (layer.imageId) refreshTargets.push({ imageId: layer.imageId, probe: null });
+    });
+    return {
+      inverse: inverseLayers.length ? { layers: inverseLayers } : null,
+      refreshTargets,
+      missing,
+    };
+  }
+
   async function undoSegmentationEdit(options) {
     try {
-      const { viewport, segmentationId, accessor } = await resolveEditTarget(options);
+      const { activeViewportId, viewport, segmentationId, accessor } = await resolveEditTarget(options);
       const stack = segmentationId && undoStacks.get(segmentationId);
       if (!stack || !stack.length) {
         uiNotificationService.show({ title: 'Annuler', message: 'Rien à annuler.', type: 'info', duration: 1500 });
         return;
       }
-      const scalarData = accessor?.getScalarData?.();
-      if (!scalarData) {
+      const entry = stack.pop();
+      const applied = applyHistoryEntry(segmentationId, entry, activeViewportId, viewport, accessor);
+      if (!applied.inverse) {
+        stack.push(entry);
         uiNotificationService.show({ title: 'Annuler', message: 'Pixels de la segmentation inaccessibles.', type: 'warning', duration: 2500 });
         return;
       }
-      const strokeDiff = stack.pop();
-      const redoDiff = new Map();
-      strokeDiff.forEach((oldValue, offset) => {
-        redoDiff.set(offset, scalarData[offset]);
-        scalarData[offset] = oldValue;
-      });
-      accessor.setScalarData(scalarData);
+      if (applied.missing) {
+        console.warn('[SegmentationEdit] annuler :', applied.missing, 'labelmap(s) introuvable(s)');
+      }
       notifySegmentationModified(segmentationId);
+      refreshLabelmapActors(viewport, segmentationId, applied.refreshTargets);
       viewport?.render?.();
       const redoStack = redoStacks.get(segmentationId) || [];
-      redoStack.push(redoDiff);
+      redoStack.push(applied.inverse);
       redoStacks.set(segmentationId, redoStack);
     } catch (err) {
       reportSegmentationError('Annuler', 'undo', err);
@@ -879,44 +1291,46 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
 
   async function redoSegmentationEdit(options) {
     try {
-      const { viewport, segmentationId, accessor } = await resolveEditTarget(options);
+      const { activeViewportId, viewport, segmentationId, accessor } = await resolveEditTarget(options);
       const stack = segmentationId && redoStacks.get(segmentationId);
       if (!stack || !stack.length) {
         uiNotificationService.show({ title: 'Rétablir', message: 'Rien à rétablir.', type: 'info', duration: 1500 });
         return;
       }
-      const scalarData = accessor?.getScalarData?.();
-      if (!scalarData) {
+      const entry = stack.pop();
+      const applied = applyHistoryEntry(segmentationId, entry, activeViewportId, viewport, accessor);
+      if (!applied.inverse) {
+        stack.push(entry);
         uiNotificationService.show({ title: 'Rétablir', message: 'Pixels de la segmentation inaccessibles.', type: 'warning', duration: 2500 });
         return;
       }
-      const redoDiff = stack.pop();
-      const undoDiff = new Map();
-      redoDiff.forEach((newValue, offset) => {
-        undoDiff.set(offset, scalarData[offset]);
-        scalarData[offset] = newValue;
-      });
-      accessor.setScalarData(scalarData);
+      if (applied.missing) {
+        console.warn('[SegmentationEdit] retablir :', applied.missing, 'labelmap(s) introuvable(s)');
+      }
       notifySegmentationModified(segmentationId);
+      refreshLabelmapActors(viewport, segmentationId, applied.refreshTargets);
       viewport?.render?.();
       const undoStack = undoStacks.get(segmentationId) || [];
-      undoStack.push(undoDiff);
+      undoStack.push(applied.inverse);
       undoStacks.set(segmentationId, undoStack);
     } catch (err) {
       reportSegmentationError('Rétablir', 'redo', err);
     }
   }
 
+  // Restaure TOUS les labelmaps de la segmentation memorises avant la
+  // premiere retouche (une copie par image de pile touchee), puis vide
+  // l'historique, qui peut couvrir plusieurs images.
   async function resetSegmentationToOriginal(options) {
     try {
-      const { viewport, segmentationId, accessor } = await resolveEditTarget(options);
-      const original = segmentationId && originalSnapshots.get(segmentationId);
-      const scalarData = accessor?.getScalarData?.();
+      const { activeViewportId, viewport, segmentationId, accessor } = await resolveEditTarget(options);
+      const records = segmentationId ? snapshotsForSegmentation(segmentationId) : [];
       console.log(
         '[SegmentationEdit] reset segmentationId=', segmentationId,
-        'hasSnapshot=', !!original, 'accessor.kind=', accessor?.kind
+        'hasSnapshot=', records.length > 0, 'accessor.kind=', accessor?.kind,
+        'labelmaps memorises=', records.length
       );
-      if (!original) {
+      if (!records.length) {
         uiNotificationService.show({
           title: 'Réinitialiser',
           message: 'Aucune modification à annuler pour cette segmentation.',
@@ -925,27 +1339,44 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         });
         return;
       }
-      if (!scalarData) {
+      let restored = 0;
+      let mismatched = 0;
+      const refreshTargets = [];
+      records.forEach(record => {
+        const target = record.imageId
+          ? getLabelmapAccessor(segmentationId, activeViewportId, viewport, record.imageId)
+          : accessor;
+        const scalarData = target?.getScalarData?.();
+        if (!target || !scalarData) return;
+        if (record.data.length !== scalarData.length) {
+          mismatched++;
+          return;
+        }
+        if (target.kind === 'stack' && target.writeAt) {
+          // Uniquement les pixels qui different, par la voie du voxel manager.
+          for (let i = 0; i < record.data.length; i++) {
+            if (scalarData[i] !== record.data[i]) target.writeAt(i, record.data[i]);
+          }
+        } else {
+          scalarData.set(record.data);
+          target.setScalarData(scalarData);
+        }
+        restored++;
+        if (record.imageId) refreshTargets.push({ imageId: record.imageId, probe: null });
+      });
+      if (!restored) {
         uiNotificationService.show({
           title: 'Réinitialiser',
-          message: 'Pixels de la segmentation inaccessibles.',
+          message: mismatched
+            ? 'La segmentation active ne correspond pas à la version IA mémorisée.'
+            : 'Pixels de la segmentation inaccessibles.',
           type: 'warning',
-          duration: 2500,
+          duration: mismatched ? 3000 : 2500,
         });
         return;
       }
-      if (original.length !== scalarData.length) {
-        uiNotificationService.show({
-          title: 'Réinitialiser',
-          message: 'La segmentation active ne correspond pas à la version IA mémorisée.',
-          type: 'warning',
-          duration: 3000,
-        });
-        return;
-      }
-      scalarData.set(original);
-      accessor.setScalarData(scalarData);
       notifySegmentationModified(segmentationId);
+      refreshLabelmapActors(viewport, segmentationId, refreshTargets);
       viewport?.render?.();
       undoStacks.set(segmentationId, []);
       redoStacks.set(segmentationId, []);
@@ -1467,6 +1898,16 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     }
   }
 
+  // Le clic vise-t-il le panneau de taille de la brosse (ou un de ses
+  // controles) ? Il est ajoute DANS l'element du viewport.
+  function isBrushPanelTarget(target) {
+    try {
+      return !!(target && typeof target.closest === 'function' && target.closest('[data-brush-panel]'));
+    } catch (_) {
+      return false;
+    }
+  }
+
   // Which model's mask is this? The backend needs to know: the same endpoint
   // now receives lesion masks and optic disc masks, and they feed different
   // parts of the report.
@@ -1597,7 +2038,8 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     //
     // originalSnapshots holds exactly that: a copy taken when the first
     // editing tool was activated, before any stroke.
-    const pristine = originalSnapshots.get(segmentationId);
+    // Une copie par labelmap de pile : celle du labelmap sauvegarde ici.
+    const pristine = originalSnapshots.get(snapshotKey(accessor))?.data || null;
     // Le masque lui-meme part avec les mesures : sans lui le rapport affirme
     // qu'une correction existe alors qu'elle n'est conservee nulle part.
     const sourceSop = currentSourceSopInstanceUid(viewport);
@@ -1668,7 +2110,9 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       console.log(
         '[SegmentationEdit] segmentationId=', segmentationId,
         'accessor.kind=', accessor?.kind,
-        'imageId=', accessor?.imageId
+        'imageId=', accessor?.imageId,
+        'resolution=', accessor?.resolvedHow,
+        'image affichee=', viewport?.getCurrentImageId?.()
       );
       let initialData = null;
       try {
@@ -1691,8 +2135,9 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       ensureAllSegmentClasses(segmentationId, activeViewportId);
       ensureOriginalSnapshot(accessor);
 
-      let drawing = false;
-      let strokeDiff = null;
+      let stroke = null;
+      let strokeCount = 0;
+      const preparedSegmentations = new Set([segmentationId]);
       const previousCursor = element.style.cursor;
       element.style.cursor = 'none';
       const cursor = showBrushCursor(element, activeViewportId);
@@ -1703,7 +2148,82 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         const rect = element.getBoundingClientRect();
         return [event.clientX - rect.left, event.clientY - rect.top];
       };
+      // La cible est re-resolue a CHAQUE trait, comme le fait la brosse
+      // native : l'image affichee (pile de plusieurs images) et la
+      // segmentation selectionnee peuvent avoir change depuis l'activation.
+      const beginStroke = () => {
+        const strokeSegmentationId = resolveActiveSegmentationId(activeViewportId) || segmentationId;
+        if (!preparedSegmentations.has(strokeSegmentationId)) {
+          preparedSegmentations.add(strokeSegmentationId);
+          ensureAllSegmentClasses(strokeSegmentationId, activeViewportId);
+        }
+        const target = getLabelmapAccessor(strokeSegmentationId, activeViewportId, viewport);
+        if (!target) return null;
+        const accessors = [target];
+        // La gomme efface aussi dans les autres calques de la MEME image
+        // (segments superposes ranges sur plusieurs labelmaps), sinon un pixel
+        // efface d'un calque resterait visible par un autre.
+        //
+        // Attention : la liste de Cornerstone contient aussi les labelmaps des
+        // AUTRES images de la serie. Les OP recoivent toutes la meme geometrie
+        // synthetique (position 0,0,0), donc tout labelmap de meme taille
+        // "correspond" a toute image. Sans ce filtre, gommer sur l'image A
+        // effacait les lesions de l'image B aux memes coordonnees, et le masque
+        // corrompu de B partait ensuite au PACS a la sauvegarde. On ne garde
+        // que les calques derives de l'image effectivement affichee ; si cette
+        // image n'est pas identifiable, on n'efface que la cible principale.
+        if (mode === 'erase' && target.kind === 'stack') {
+          const displayedRef = target.referencedImageId || viewport?.getCurrentImageId?.() || null;
+          (target.layerImageIds || []).forEach(id => {
+            if (!id || id === target.imageId || !displayedRef) return;
+            const extra = getLabelmapAccessor(strokeSegmentationId, activeViewportId, viewport, id);
+            if (extra && extra.referencedImageId && extra.referencedImageId === displayedRef) {
+              accessors.push(extra);
+            }
+          });
+        }
+        accessors.forEach(item => ensureOriginalSnapshot(item));
+        return {
+          number: 0,
+          segmentationId: strokeSegmentationId,
+          currentImageId: viewport?.getCurrentImageId?.() || null,
+          layers: accessors.map(item => ({
+            accessor: item,
+            imageId: layerImageId(item),
+            scalarData: item.writeAt ? null : item.getScalarData?.() || null,
+            diff: new Map(),
+            changed: 0,
+            dabChanged: 0,
+            lastOffset: null,
+            needsBulkWrite: false,
+          })),
+          lastPoint: null,
+          dabs: 0,
+          changed: 0,
+          trigger: null,
+          copiedActors: 0,
+          errorReported: false,
+        };
+      };
+      const endStroke = reason => {
+        const finished = stroke;
+        stroke = null;
+        if (!finished) return;
+        pushUndoLayers(
+          finished.segmentationId,
+          finished.layers.map(layer => ({ imageId: layer.imageId, diff: layer.diff }))
+        );
+        console.log(
+          '[SegmentationEdit]', modeLabel, `fin du trait #${finished.number}`,
+          '| raison=', reason,
+          '| pas de brosse=', finished.dabs,
+          '| pixels modifies=', finished.changed,
+          '| declencheur=', finished.trigger || 'aucun (rien a changer)',
+          '| acteurs recopies directement=', finished.copiedActors
+        );
+      };
       const paint = event => {
+        if (!stroke) return null;
         try {
           const [x, y] = pointFromEvent(event);
           // `??` laisse passer 0 : si OHIF annonce le segment 0 (fond) comme
@@ -1713,12 +2233,59 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           const writeValue = mode === 'pencil'
             ? (Number.isInteger(activeIndex) && activeIndex > 0 ? activeIndex : 1)
             : 0;
-          if (paintAtCanvasPoint(viewport, accessor, x, y, getBrushSize(mode), writeValue, strokeDiff)) {
-            usedModesThisSession.add(mode);
-          }
+          const result = paintBrushDab(viewport, stroke, x, y, getBrushSize(mode), writeValue);
+          if (result.changed) usedModesThisSession.add(mode);
+          return result;
         } catch (err) {
-          reportSegmentationError(modeLabel, 'paint', err);
+          // Une seule alerte par trait : pointermove en produirait des dizaines.
+          if (stroke && !stroke.errorReported) {
+            stroke.errorReported = true;
+            reportSegmentationError(modeLabel, 'paint', err);
+          }
+          return null;
         }
+      };
+      // Diagnostic de chaque trait (pointerdown) : ce qui est ecrit, ou, et
+      // comment l'affichage en est informe.
+      const logStrokeStart = result => {
+        if (!stroke) return;
+        const primary = stroke.layers[0]?.accessor;
+        const scale = result?.scale;
+        const refresh = result?.refresh;
+        let displayed = 'volume';
+        if (primary?.kind === 'stack') {
+          displayed = hasLabelmapActor(viewport, stroke.segmentationId, primary.imageId) ? 'oui' : 'NON';
+        }
+        console.log(
+          '[SegmentationEdit]', modeLabel, `trait #${stroke.number}`,
+          '| segmentation=', stroke.segmentationId,
+          '| labelmap ecrit=', primary?.imageId || primary?.kind,
+          '| image affichee=', stroke.currentImageId,
+          '| labelmap derive de=', primary?.referencedImageId || '?',
+          '| resolution=', primary?.resolvedHow,
+          '| calques ecrits=', stroke.layers.length,
+          '| acteur affiche=', displayed,
+          '| pixels modifies=', result ? result.changed : 'erreur',
+          '| valeur ecrite=', result?.writeValue,
+          '| methode=', result?.method,
+          '| rayon en pixels image=', scale ? `${scale.ri.toFixed(1)} x ${scale.rj.toFixed(1)}` : '-',
+          '| declencheur=', result?.trigger || 'aucun (rien a changer sous la brosse)',
+          '| acteurs a jour/recopies/absents=',
+          refresh ? `${refresh.upToDate}/${refresh.copied}/${refresh.missing}` : '-'
+        );
+      };
+      const warnIfHidden = () => {
+        const primary = stroke?.layers[0]?.accessor;
+        if (!primary || primary.kind !== 'stack' || primary.listed) return;
+        const key = `${stroke.segmentationId}|${stroke.currentImageId}`;
+        if (hiddenLabelmapWarnings.has(key)) return;
+        hiddenLabelmapWarnings.add(key);
+        uiNotificationService.show({
+          title: modeLabel,
+          message: "Cette segmentation n'a aucun calque affiché sur l'image courante : le trait est enregistré mais ne peut pas apparaître. Sélectionnez à gauche la série SEG de cette image.",
+          type: 'warning',
+          duration: 6000,
+        });
       };
       const applyRadius = () => {
         cursor.circle.setAttribute('r', String(Math.max(1, getBrushSize(mode) / 2)));
@@ -1735,16 +2302,37 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       };
       applyRadius();
       const pointerDown = event => {
+        // Le panneau de taille est DANS l'element du viewport : en phase de
+        // capture on voyait ses clics avant lui, le trait partait sous le
+        // panneau et la capture du pointeur lui volait le clic (boutons et
+        // curseur de taille inertes). On le laisse faire.
+        if (isBrushPanelTarget(event.target)) return;
+        // Bouton principal seulement : clic droit et molette restent a
+        // Cornerstone (zoom, deplacement de l'image).
+        if (typeof event.button === 'number' && event.button !== 0) return;
         try {
-          drawing = true;
-          strokeDiff = new Map();
+          if (stroke) endStroke('nouveau trait sans relachement');
+          stroke = beginStroke();
+          if (!stroke) {
+            uiNotificationService.show({
+              title: modeLabel,
+              message: "Labelmap de la segmentation introuvable pour l'image affichée (voir console).",
+              type: 'warning',
+              duration: 3500,
+            });
+            return;
+          }
+          strokeCount += 1;
+          stroke.number = strokeCount;
           // setPointerCapture leve NotFoundError si le pointeur n'est plus
           // actif. Non isole, il faisait echouer le reste du handler, donc le
-          // premier paint() n'avait jamais lieu. La baguette enveloppe deja cet
-          // appel : c'est la seule raison pour laquelle elle marchait.
+          // premier paint() n'avait jamais lieu. La baguette enveloppe aussi
+          // cet appel.
           try { element.setPointerCapture?.(event.pointerId); } catch (_) {}
           updateCursor(event);
-          paint(event);
+          const result = paint(event);
+          logStrokeStart(result);
+          warnIfHidden();
           event.preventDefault();
           event.stopPropagation();
         } catch (err) {
@@ -1754,7 +2342,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       const pointerMove = event => {
         try {
           updateCursor(event);
-          if (!drawing) return;
+          if (!stroke) return;
           paint(event);
           event.preventDefault();
           event.stopPropagation();
@@ -1764,16 +2352,27 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       };
       const pointerUp = event => {
         try {
-          if (drawing && strokeDiff) {
-            pushUndoEntry(segmentationId, strokeDiff);
-          }
-          drawing = false;
-          strokeDiff = null;
+          if (!stroke) return;
+          endStroke(event.type);
           try { element.releasePointerCapture?.(event.pointerId); } catch (_) {}
           event.preventDefault();
         } catch (err) {
           reportSegmentationError(modeLabel, 'pointerup', err);
         }
+      };
+      // pointerleave ne bouillonne pas, mais en phase de capture on recoit
+      // celui de chaque ENFANT (canvas, calques SVG). Chrome en emet un des que
+      // setPointerCapture redirige le pointeur vers l'element : le trait se
+      // terminait donc apres le tout premier disque. Seule la sortie de
+      // l'element lui-meme, pointeur non capture, termine le trait.
+      const pointerLeave = event => {
+        if (event.target !== element) return;
+        try {
+          if (element.hasPointerCapture?.(event.pointerId)) return;
+        } catch (_) {
+          // hasPointerCapture indisponible : on termine le trait
+        }
+        pointerUp(event);
       };
       const wheel = event => {
         if (!event.altKey) return;
@@ -1789,7 +2388,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       element.addEventListener('pointermove', pointerMove, listenOpts);
       element.addEventListener('pointerup', pointerUp, listenOpts);
       element.addEventListener('pointercancel', pointerUp, listenOpts);
-      element.addEventListener('pointerleave', pointerUp, listenOpts);
+      element.addEventListener('pointerleave', pointerLeave, listenOpts);
       element.addEventListener('wheel', wheel, { passive: false });
       console.log(
         '[SegmentationEdit]', modeLabel, 'actif : ecouteurs poses sur',
@@ -1800,12 +2399,13 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         mode,
         applyRadius,
         cleanup: () => {
+          if (stroke) endStroke('outil desactive');
           element.style.cursor = previousCursor;
           element.removeEventListener('pointerdown', pointerDown, listenOpts);
           element.removeEventListener('pointermove', pointerMove, listenOpts);
           element.removeEventListener('pointerup', pointerUp, listenOpts);
           element.removeEventListener('pointercancel', pointerUp, listenOpts);
-          element.removeEventListener('pointerleave', pointerUp, listenOpts);
+          element.removeEventListener('pointerleave', pointerLeave, listenOpts);
           element.removeEventListener('wheel', wheel);
         },
       });
@@ -2919,7 +3519,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     }
     if (changed) {
       accessor.setScalarData(data);
-      pushUndoEntry(accessor.segmentationId, strokeDiff);
+      pushUndoEntry(accessor.segmentationId, strokeDiff, layerImageId(accessor));
       notifySegmentationModified(accessor.segmentationId);
       viewport?.render?.();
     }
@@ -2962,7 +3562,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       data[off] = 0;
     });
     accessor.setScalarData(data);
-    pushUndoEntry(accessor.segmentationId, strokeDiff);
+    pushUndoEntry(accessor.segmentationId, strokeDiff, layerImageId(accessor));
     notifySegmentationModified(accessor.segmentationId);
     viewport?.render?.();
     return { changed: members.length, reason: 'ok', value };
@@ -3384,7 +3984,9 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         '[SegmentationEdit] wand segmentationId=', segmentationId,
         'accessor.kind=', accessor.kind,
         'fundus=', fundus?.width, 'x', fundus?.height,
-        'labelmap=', labelmap.length
+        'labelmap=', labelmap.length,
+        'imageId=', accessor.imageId,
+        'resolution=', accessor.resolvedHow
       );
       if (!fundus) {
         uiNotificationService.show({ title: modeLabel, message: "Pixels de l'image de fond d'œil inaccessibles.", type: 'warning', duration: 3500 });
