@@ -1711,6 +1711,18 @@ def save_analysis(request):
     return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
+def _doctor_display_name(request):
+    """Nom du medecin au format DICOM PN (NOM^Prenom), vide si anonyme."""
+    user = getattr(request, 'user', None)
+    if not user or not getattr(user, 'is_authenticated', False):
+        return ''
+    last = (getattr(user, 'last_name', '') or '').strip()
+    first = (getattr(user, 'first_name', '') or '').strip()
+    if last or first:
+        return '%s^%s' % (last, first)
+    return getattr(user, 'username', '') or getattr(user, 'email', '') or ''
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def save_segmentation_corrections(request):
@@ -1728,9 +1740,14 @@ def save_segmentation_corrections(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    # L'etude doit etre connue de la plateforme, mais pas forcement analysee :
+    # un medecin peut corriger une image sur laquelle l'IA n'a rien detecte,
+    # ou n'a jamais tourne. Exiger un AnalysisReport ici rendait la
+    # sauvegarde impossible precisement dans ces cas.
+    exam = Exam.objects.filter(study_instance_uid=study_uid).first()
     report = AnalysisReport.objects.filter(series_instance_uid=study_uid).first()
-    if not report:
-        return Response({'error': 'Analysis not found'}, status=status.HTTP_404_NOT_FOUND)
+    if exam is None and report is None:
+        return Response({'error': 'Exam not found'}, status=status.HTTP_404_NOT_FOUND)
 
     def _clean_counts(raw):
         cleaned = {}
@@ -1752,8 +1769,6 @@ def save_segmentation_corrections(request):
     vertical_extents = _clean_counts(request.data.get('vertical_extents_by_segment'))
     segmentation_kind = str(request.data.get('segmentation_kind') or 'lesions')
 
-    report_json = report.report_json or {}
-    corrections = report_json.setdefault('doctor_segmentation_corrections', [])
     correction = {
         'type': request.data.get('correction_type') or 'eraser',
         'segmentation_id': request.data.get('segmentation_id') or '1',
@@ -1764,13 +1779,12 @@ def save_segmentation_corrections(request):
         'total_labeled_pixels': sum(cleaned_counts.values()),
         'saved_at': datetime.utcnow().isoformat() + 'Z',
         'source': 'ohif_segmentation_eraser',
+        'author': _doctor_display_name(request),
     }
 
-    # Ecriture du masque corrige comme vraie serie DICOM-SEG dans Orthanc.
-    # Sans cela le rapport affirme qu'un medecin a corrige la segmentation
-    # alors que cette segmentation n'existe plus nulle part. Le masque est
-    # facultatif : un client qui n'en envoie pas garde l'ancien comportement,
-    # mais la correction est alors explicitement marquee non persistee.
+    # 1. Le masque corrige devient une vraie serie DICOM-SEG dans Orthanc.
+    #    Sans cela le dossier affirme qu'un medecin a corrige la segmentation
+    #    alors que cette segmentation n'existe plus nulle part.
     mask_payload = request.data.get('mask')
     if mask_payload:
         from .doctor_seg import persist_doctor_correction
@@ -1793,6 +1807,7 @@ def save_segmentation_corrections(request):
                 request.data.get('mask_width'),
                 request.data.get('mask_height'),
                 segment_labels,
+                creator_name=correction['author'] or None,
             )
             correction['seg_persisted'] = True
             correction['seg'] = seg_info
@@ -1806,28 +1821,41 @@ def save_segmentation_corrections(request):
         correction['seg_persisted'] = False
         correction['seg_error'] = 'Aucun masque transmis par le client.'
 
-    corrections.append(correction)
-    # The same endpoint now receives several kinds of mask. An unknown kind
-    # keeps the historical behaviour, which was to assume lesions.
-    if segmentation_kind == 'optic_disc':
-        report_json = _apply_doctor_optic_correction(report_json, correction)
-    elif segmentation_kind == 'vessels':
-        report_json = _apply_doctor_vessel_correction(report_json, correction)
-    elif segmentation_kind in ('lesions', 'unknown', ''):
-        report_json = _apply_doctor_lesion_correction(report_json, correction)
-    corrections = report_json.setdefault('doctor_segmentation_corrections', corrections)
-    report_json['doctor_corrected_segmentation'] = correction
-    report_json['status'] = 'DOCTOR_CORRECTED'
-    report.report_json = report_json
-    report.save(update_fields=['report_json'])
+    # 2. L'historique vit sur l'examen, qui existe meme sans analyse IA.
+    if exam is not None:
+        history = list(exam.doctor_segmentation_corrections or [])
+        history.append(correction)
+        exam.doctor_segmentation_corrections = history
+        exam.save(update_fields=['doctor_segmentation_corrections', 'updated_at'])
+
+    # 3. S'il y a un rapport IA, ses mesures sont ajustees comme avant.
+    report_json = None
+    if report is not None:
+        report_json = report.report_json or {}
+        corrections = report_json.setdefault('doctor_segmentation_corrections', [])
+        corrections.append(correction)
+        # The same endpoint receives several kinds of mask. An unknown kind
+        # keeps the historical behaviour, which was to assume lesions.
+        if segmentation_kind == 'optic_disc':
+            report_json = _apply_doctor_optic_correction(report_json, correction)
+        elif segmentation_kind == 'vessels':
+            report_json = _apply_doctor_vessel_correction(report_json, correction)
+        elif segmentation_kind in ('lesions', 'unknown', ''):
+            report_json = _apply_doctor_lesion_correction(report_json, correction)
+        report_json['doctor_corrected_segmentation'] = correction
+        report_json['status'] = 'DOCTOR_CORRECTED'
+        report.report_json = report_json
+        report.save(update_fields=['report_json'])
 
     return Response({
         'status': 'saved',
         'seg_persisted': correction.get('seg_persisted', False),
         'seg_error': correction.get('seg_error'),
+        'seg_series_instance_uid': (correction.get('seg') or {}).get('seg_series_instance_uid'),
         'study_instance_uid': study_uid,
+        'has_ai_report': report is not None,
         'doctor_corrected_segmentation': correction,
-        'analysis': report_json.get('per_eye') or report_json,
+        'analysis': (report_json.get('per_eye') or report_json) if report_json is not None else None,
     })
 
 

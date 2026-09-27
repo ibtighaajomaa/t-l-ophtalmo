@@ -34,7 +34,9 @@ SEGMENTATION_STORAGE = UID("1.2.840.10008.5.1.4.1.1.66.4")
 
 # Hors de AI_SEG_SERIES_DESCRIPTIONS : le nettoyage des SEG IA ne doit jamais
 # faire disparaitre une correction de medecin.
-DOCTOR_SERIES_DESCRIPTION = "doctor_correction"
+# ASCII volontaire : sans SpecificCharacterSet, un accent dans un LO est un
+# pari sur la visionneuse. Le sens reste clair dans la liste des series.
+DOCTOR_SERIES_DESCRIPTION = "Corrige par medecin"
 
 # Categorie/type minimaux exiges par le standard pour chaque segment.
 _CATEGORY_TISSUE = ("T-D0050", "SRT", "Tissue")
@@ -67,6 +69,7 @@ def build_doctor_seg(
     series_description=DOCTOR_SERIES_DESCRIPTION,
     series_number=9901,
     creator="Tele-Ophtalmo",
+    creator_name=None,
 ):
     """Construit le Dataset DICOM-SEG.
 
@@ -114,7 +117,8 @@ def build_doctor_seg(
     ds.InstanceNumber = 1
     ds.ContentLabel = "DOCTORCORR"
     ds.ContentDescription = "Correction manuelle de segmentation"
-    ds.ContentCreatorName = creator
+    # ContentCreatorName est la personne (le medecin), Manufacturer le logiciel.
+    ds.ContentCreatorName = creator_name or creator
     ds.Manufacturer = creator
     ds.DeviceSerialNumber = "0"
     ds.SoftwareVersions = "1.0"
@@ -348,6 +352,7 @@ def persist_doctor_correction(
     width,
     height,
     segments,
+    creator_name=None,
 ):
     """Chaine complete : decodage, construction du SEG, envoi a Orthanc.
 
@@ -356,13 +361,14 @@ def persist_doctor_correction(
     """
     mask = decode_mask(mask_payload, width, height)
     source = fetch_source_dataset(orthanc_url, sop_instance_uid)
-    ds = build_doctor_seg(source, mask, segments)
+    ds = build_doctor_seg(source, mask, segments, creator_name=creator_name)
     instance_id = push_to_orthanc(orthanc_url, ds)
     return {
         "orthanc_instance_id": instance_id,
         "seg_series_instance_uid": str(ds.SeriesInstanceUID),
         "seg_sop_instance_uid": str(ds.SOPInstanceUID),
         "series_description": str(ds.SeriesDescription),
+        "content_creator_name": str(ds.ContentCreatorName),
         "source_sop_instance_uid": str(sop_instance_uid),
         "segment_labels": {
             int(item.SegmentNumber): str(item.SegmentLabel) for item in ds.SegmentSequence

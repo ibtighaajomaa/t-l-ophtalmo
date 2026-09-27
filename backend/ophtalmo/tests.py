@@ -1180,3 +1180,87 @@ class DoctorSegmentationSegTest(TestCase):
         ):
             with self.assertRaises(ValueError):
                 decode_mask(payload, width, height)
+
+
+class DoctorSegmentationSaveViewTest(TestCase):
+    """La sauvegarde d'une correction ne doit pas dependre d'un rapport IA."""
+
+    STUDY = '1.2.826.0.1.3680043.9.7522.1.999.doctor.save'
+
+    def _post(self, payload):
+        from ophtalmo.views import save_segmentation_corrections
+
+        request = APIRequestFactory().post(
+            '/api/exams/segmentation-corrections/', payload, format='json'
+        )
+        return save_segmentation_corrections(request)
+
+    def _exam(self):
+        return Exam.objects.create(
+            study_instance_uid=self.STUDY,
+            patient_name='Correction Sans IA',
+            exam_type='Rétinographie',
+            date=date.today(),
+        )
+
+    def _payload(self, **extra):
+        payload = {
+            'study_instance_uid': self.STUDY,
+            'correction_type': 'pencil',
+            'segmentation_kind': 'autre',
+            'pixel_counts_by_segment': {'2': 40},
+            'mask': {'encoding': 'rle', 'data': [0, 10, 2, 40, 0, 14]},
+            'mask_width': 8,
+            'mask_height': 8,
+            'source_sop_instance_uid': '1.2.3.4.5',
+            'segment_labels': {'2': 'Lesion'},
+        }
+        payload.update(extra)
+        return payload
+
+    def test_unknown_study_is_refused(self):
+        response = self._post(self._payload())
+        self.assertEqual(response.status_code, 404)
+
+    def test_saves_on_image_without_ai_report(self):
+        """Le cas 'l'IA n'a rien detecte' : examen present, aucun rapport."""
+        exam = self._exam()
+        seg_info = {'seg_series_instance_uid': '9.9.9', 'orthanc_instance_id': 'abc'}
+        with patch('ophtalmo.doctor_seg.persist_doctor_correction', return_value=seg_info) as persist:
+            response = self._post(self._payload())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['seg_persisted'])
+        self.assertFalse(response.data['has_ai_report'])
+        self.assertEqual(response.data['seg_series_instance_uid'], '9.9.9')
+        persist.assert_called_once()
+        # Aucun rapport IA fabrique en douce : cela sortirait l'examen de la
+        # file de classification automatique.
+        self.assertEqual(AnalysisReport.objects.filter(series_instance_uid=self.STUDY).count(), 0)
+        exam.refresh_from_db()
+        self.assertEqual(len(exam.doctor_segmentation_corrections), 1)
+        self.assertTrue(exam.doctor_segmentation_corrections[0]['seg_persisted'])
+
+    def test_failed_seg_write_is_reported_not_hidden(self):
+        exam = self._exam()
+        with patch('ophtalmo.doctor_seg.persist_doctor_correction', side_effect=RuntimeError('orthanc down')):
+            response = self._post(self._payload())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data['seg_persisted'])
+        self.assertIn('orthanc down', response.data['seg_error'])
+        exam.refresh_from_db()
+        self.assertEqual(len(exam.doctor_segmentation_corrections), 1)
+        self.assertFalse(exam.doctor_segmentation_corrections[0]['seg_persisted'])
+
+    def test_ai_report_is_still_adjusted_when_present(self):
+        self._exam()
+        report = AnalysisReport.objects.create(series_instance_uid=self.STUDY, report_json={})
+        response = self._post(self._payload(mask=None))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['has_ai_report'])
+        self.assertFalse(response.data['seg_persisted'])
+        report.refresh_from_db()
+        self.assertEqual(report.report_json['status'], 'DOCTOR_CORRECTED')
+        self.assertEqual(len(report.report_json['doctor_segmentation_corrections']), 1)

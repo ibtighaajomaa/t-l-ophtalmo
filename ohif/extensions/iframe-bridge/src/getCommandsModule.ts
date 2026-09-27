@@ -389,6 +389,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         segmentationId,
         getScalarData: () => volume.voxelManager.getCompleteScalarDataArray?.(),
         setScalarData: data => volume.voxelManager.setCompleteScalarDataArray?.(data),
+        writeAt: (offset, value) => volume.voxelManager.setAtIndex?.(offset, value),
       };
     }
 
@@ -412,13 +413,40 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     const image = csCore.cache.getImage(imageId);
     if (!image) return null;
     const vm = image.voxelManager;
+    // Sur une image 2D (fond d'oeil) le voxel manager n'expose PAS
+    // setScalarData : l'ancienne garde `if (vm?.setScalarData)` ne faisait donc
+    // jamais rien, et getScalarData() peut renvoyer une copie (gestionnaire
+    // RLE). Resultat : crayon, gomme, annuler, retablir, reinitialiser et
+    // baguette ecrivaient dans un tableau jetable. L'API officielle est
+    // setAtIndex, qui fonctionne pour un tableau plein comme pour du RLE et
+    // tient a jour les tranches modifiees dont le rendu a besoin.
+    const writeAt = (offset, value) => {
+      if (vm?.setAtIndex) return vm.setAtIndex(offset, value);
+      const pixels = image.getPixelData?.();
+      if (pixels && offset >= 0 && offset < pixels.length) {
+        pixels[offset] = value;
+        return true;
+      }
+      return false;
+    };
     return {
       kind: 'stack',
       segmentationId,
       imageId,
       getScalarData: () => (vm?.getScalarData ? vm.getScalarData() : image.getPixelData?.()),
+      writeAt,
       setScalarData: data => {
-        if (vm?.setScalarData) vm.setScalarData(data);
+        if (vm?.setScalarData) {
+          vm.setScalarData(data);
+          return;
+        }
+        // Ecriture en bloc (annuler, retablir, reinitialiser, baguette) :
+        // on ne pousse que les pixels qui changent, via l'API par index.
+        const current = vm?.getScalarData ? vm.getScalarData() : null;
+        for (let i = 0; i < data.length; i++) {
+          const value = data[i];
+          if (!current || current[i] !== value) writeAt(i, value);
+        }
       },
     };
   }
@@ -684,9 +712,20 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   }
 
   function notifySegmentationModified(segmentationId = '1') {
-    import('@cornerstonejs/core').then(({ eventTarget, triggerEvent }) => {
-      import('@cornerstonejs/tools').then(({ Enums }) => {
-        triggerEvent(eventTarget, Enums.Events.SEGMENTATION_DATA_MODIFIED, {
+    import('@cornerstonejs/tools').then(tools => {
+      // L'API officielle propage aussi les tranches modifiees enregistrees par
+      // setAtIndex ; l'evenement brut reste le repli si elle est absente.
+      const official = tools?.segmentation?.triggerSegmentationEvents?.triggerSegmentationDataModified;
+      if (typeof official === 'function') {
+        try {
+          official(segmentationId);
+          return;
+        } catch (err) {
+          console.warn('[SegmentationEdit] triggerSegmentationDataModified failed', err);
+        }
+      }
+      import('@cornerstonejs/core').then(({ eventTarget, triggerEvent }) => {
+        triggerEvent(eventTarget, tools.Enums.Events.SEGMENTATION_DATA_MODIFIED, {
           segmentationId,
         });
       });
@@ -713,12 +752,15 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           strokeDiff.set(offset, current);
         }
         scalarData[offset] = writeValue;
+        // Ecriture immediate via l'API par index : le tableau local peut
+        // etre une copie, seul writeAt atteint le labelmap rendu.
+        if (accessor.writeAt) accessor.writeAt(offset, writeValue);
         changed++;
       }
     }
 
     if (changed) {
-      accessor.setScalarData(scalarData);
+      if (!accessor.writeAt) accessor.setScalarData(scalarData);
       notifySegmentationModified(accessor.segmentationId);
       viewport?.render?.();
     }

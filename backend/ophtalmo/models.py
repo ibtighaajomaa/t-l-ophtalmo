@@ -92,6 +92,12 @@ class Exam(models.Model):
     segmentation_heartbeat_at = models.DateTimeField(null=True, blank=True)
     segmentation_current_step = models.CharField(max_length=255, blank=True, default="")
 
+    # Corrections de segmentation faites par le medecin dans le viewer, avec
+    # la reference de la serie DICOM-SEG ecrite dans Orthanc. Porte par
+    # l'examen et non par AnalysisReport : une correction peut exister sur une
+    # image que l'IA n'a jamais analysee ou sur laquelle elle n'a rien detecte.
+    doctor_segmentation_corrections = models.JSONField(default=list, blank=True)
+
     quality_status = models.CharField(
         max_length=20,
         choices=QualityStatus.choices,
