@@ -1,4 +1,4 @@
-import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Polygon, useMapEvents } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
@@ -21,6 +21,23 @@ interface RegionData {
   en_cours: number;
   interprete: number;
 }
+
+// Contour simplifie de la Tunisie (lat, lng). Sert uniquement au masque de
+// focus : la precision au kilometre n'est pas necessaire, la silhouette si.
+const TUNISIA_OUTLINE: [number, number][] = [
+  [37.05, 8.6], [37.2, 9.2], [37.34, 9.8], [37.16, 10.3], [37.08, 11.05],
+  [36.75, 10.95], [36.45, 10.75], [35.85, 10.6], [35.5, 11.05], [35.05, 11.05],
+  [34.72, 10.78], [34.3, 10.1], [33.88, 10.12], [33.65, 11.0], [33.2, 11.25],
+  [33.15, 11.55], [32.4, 10.9], [32.1, 10.45], [31.7, 9.9], [30.95, 9.65],
+  [30.23, 9.52], [30.3, 9.1], [31.5, 8.35], [32.5, 8.1], [33.2, 8.15],
+  [33.85, 7.75], [34.2, 7.5], [34.65, 8.25], [35.25, 8.3], [35.75, 8.25],
+  [36.45, 8.2], [36.85, 8.35],
+];
+
+// Cadre large : tout ce qui est hors Tunisie est attenue.
+const MASK_FRAME: [number, number][] = [
+  [20, -5], [20, 25], [45, 25], [45, -5],
+];
 
 function MapEventHandler({ onMapClick }: { onMapClick: () => void }) {
   useMapEvents({
@@ -111,14 +128,37 @@ export default function MapView({
               margin: 12px 14px !important;
           }
           .leaflet-tile-pane {
-              filter: grayscale(0.85) brightness(1.06) contrast(0.94);
+              filter: saturate(0.55) brightness(1.03) contrast(0.96);
           }
         `}
       </style>
       <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-        url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://www.openstreetmap.fr/">OSM France</a>'
+        url="https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png"
+        subdomains={["a", "b", "c"]}
         maxZoom={19}
+      />
+
+      {/* Masque de focus : le cadre est perce d'un trou en forme de Tunisie. */}
+      <Polygon
+        positions={[MASK_FRAME, TUNISIA_OUTLINE]}
+        pathOptions={{
+          fillColor: "#e2e8f0",
+          fillOpacity: 0.78,
+          stroke: false,
+          interactive: false,
+        }}
+      />
+      {/* Lisere du territoire. */}
+      <Polygon
+        positions={TUNISIA_OUTLINE}
+        pathOptions={{
+          color: "#1e40af",
+          weight: 1.4,
+          opacity: 0.55,
+          fill: false,
+          interactive: false,
+        }}
       />
       <MarkerClusterGroup
         chunkedLoading
@@ -169,9 +209,19 @@ export default function MapView({
                       Total examens filtrés
                     </div>
                     <div className="mt-1 text-lg font-semibold tabular-nums text-slate-950">{totalExams}</div>
-                    <div className={`mt-1 text-xs font-medium ${isAboveAverage ? "text-emerald-600" : "text-red-600"}`}>
-                      {region.interprete} interprétés / moyenne du site : {siteAverage.toFixed(1)}
-                    </div>
+                    {totalExams === 0 ? (
+                      <div className="mt-1 text-xs font-medium text-slate-500">
+                        Aucun examen sur la période sélectionnée
+                      </div>
+                    ) : (
+                      <div
+                        className={`mt-1 text-xs font-medium ${
+                          isAboveAverage ? "text-emerald-600" : "text-red-600"
+                        }`}
+                      >
+                        {region.interprete} interprétés / moyenne du site : {siteAverage.toFixed(1)}
+                      </div>
+                    )}
                   </div>
                   <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                     <div>
