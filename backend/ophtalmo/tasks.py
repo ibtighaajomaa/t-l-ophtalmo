@@ -26,7 +26,12 @@ ORTHANC_URL = os.environ.get('ORTHANC_URL', 'http://orthanc-container:8042')
 
 # CPU inference can legitimately take many minutes. Keep connection setup
 # bounded, but never impose a response/read deadline on an active AI model.
-AI_INFERENCE_TIMEOUT = (10, None)
+# (connexion, lecture) en secondes. La lecture etait None : attente infinie.
+# Un MONAI redemarre ou plante au milieu d'une requete laissait le worker
+# suspendu sur un socket muet, verrou de lot en main, et toute la file
+# derriere lui. Une analyse complete prend une a deux minutes sur CPU ;
+# quinze minutes est une borne large mais finie.
+AI_INFERENCE_TIMEOUT = (10, 900)
 
 
 def _monai_label_ready(monai_label_url, timeout=5):
@@ -1743,6 +1748,9 @@ def tache_auto_segmentation(self, exam_id=None):
         # ÉTAPE 4 : Boucle principale sur chaque examen
         # ==========================================
         for exam in exams:
+            # Verrou renouvele par examen : sa duree couvre l'examen en cours,
+            # pas le lot entier, donc un lot long n'est jamais double.
+            cache.set(lock_key, lock_token, timeout=20 * 60)
             study_id = exam.study_instance_uid
 
             orthanc_study_id = _resolve_orthanc_id(study_id)
