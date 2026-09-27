@@ -1,3 +1,9 @@
+import {
+  installOwnImageLabelmapFilter,
+  isForeignLabelmap,
+  isOwnImageScope,
+} from './ownImageLabelmaps';
+
 export default function getCommandsModule({ servicesManager, commandsManager }) {
   const { uiNotificationService } = servicesManager.services;
 
@@ -142,6 +148,9 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   async function loadCornerstone() {
     if (!csCore) csCore = await import('@cornerstonejs/core');
     if (!csTools) csTools = await import('@cornerstonejs/tools');
+    // Seconde chance, idempotente, si preRegistration n'a pas pu poser le
+    // filtre : sur une photo OP, seuls ses propres labelmaps sont affiches.
+    await installOwnImageLabelmapFilter();
     return { csCore, csTools };
   }
 
@@ -368,6 +377,24 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     };
   }
 
+  // Changer de serie dans le meme viewport (Color/R -> Color/L) fait creer a
+  // Cornerstone un NOUVEL objet viewport sur le meme element ; l'ancien est
+  // desactive. Un outil actif garde une reference a l'ancien et ecrirait dans
+  // le labelmap de l'ancienne image. On detecte l'echange avant d'ecrire.
+  function viewportIsStale(viewportId, capturedViewport) {
+    if (!capturedViewport || capturedViewport.isDisabled) return true;
+    try {
+      const live = servicesManager.services.cornerstoneViewportService
+        .getCornerstoneViewport(viewportId);
+      return !!live && live !== capturedViewport;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  const STALE_VIEWPORT_MESSAGE =
+    "La série affichée a changé depuis l'activation de l'outil : désactivez-le puis réactivez-le sur cette image.";
+
   function getActiveLabelmapVolume(segmentationId) {
     if (typeof segmentationId !== 'string' || !segmentationId) return undefined;
     const { segmentationService } = servicesManager.services;
@@ -390,6 +417,13 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // prend le labelmap derive de l'image affichee (referencedImageId), sinon le
   // premier, comme la brosse native. Le repli par index de pile n'est dessine
   // par aucun acteur : il est signale comme tel (listed = false).
+  //
+  // Photos OP : chaque labelmap ne s'affiche que sur la photo dont il est
+  // derive (ownImageLabelmaps.ts), la liste officielle ne contient donc plus
+  // que ceux de l'image affichee. Aucun repli ne doit viser le labelmap d'une
+  // AUTRE photo : le trait y serait invisible, puis la sauvegarde l'enverrait
+  // au PACS sous l'UID de la photo affichee. Sans calque pour cette photo, la
+  // cible est nulle et l'outil l'explique.
   function resolveStackLabelmapTarget(segmentationId, viewportId, viewport, imageIds) {
     const state = csTools?.segmentation?.state;
     const currentImageId = viewport?.getCurrentImageId?.() || null;
@@ -422,16 +456,20 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       listed = listDisplayed();
       how = 'officielle apres updateLabelmapSegmentationImageReferences';
     }
+    const foreign = id => isForeignLabelmap(id, currentImageId);
     if (listed.length) {
       const own = listed.find(derivedFromCurrent);
-      return {
-        imageId: own || listed[0],
-        how: own
-          ? `${how} (derive de l'image affichee)`
-          : `${how} (premier de la liste, comme la brosse native)`,
-        layerImageIds: listed,
-        listed: true,
-      };
+      const first = own || listed.find(id => !foreign(id));
+      if (first) {
+        return {
+          imageId: first,
+          how: own
+            ? `${how} (derive de l'image affichee)`
+            : `${how} (premier de la liste, comme la brosse native)`,
+          layerImageIds: listed,
+          listed: true,
+        };
+      }
     }
     const byReference = Array.from(imageIds).find(derivedFromCurrent);
     if (byReference) {
@@ -443,13 +481,55 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       };
     }
     const index = viewport?.getCurrentImageIdIndex?.() ?? 0;
-    const byIndex = imageIds[index] || imageIds[0];
+    const byIndex = [imageIds[index], imageIds[0]].find(id => id && !foreign(id));
+    if (!byIndex) {
+      return {
+        imageId: null,
+        how: "AUCUN calque de cette segmentation n'est derive de l'image affichee",
+        layerImageIds: [],
+        listed: false,
+      };
+    }
     return {
       imageId: byIndex,
       how: 'REPLI index de pile (aucun labelmap liste pour cette image)',
       layerImageIds: [byIndex],
       listed: false,
     };
+  }
+
+  // Labelmaps de pile d'une segmentation ; [] si elle est volumique ou
+  // introuvable.
+  function stackLabelmapImageIds(segmentationId) {
+    const { segmentationService } = servicesManager.services;
+    try {
+      const ids = segmentationService?.getSegmentation?.(segmentationId)?.representationData?.Labelmap?.imageIds;
+      return ids?.length ? Array.from(ids) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // Photo OP affichee sur laquelle la segmentation n'a AUCUN calque : elle a
+  // ete calculee ou creee sur une autre photo. Ses labelmaps ne s'affichent
+  // pas ici et les outils refusent d'y ecrire (resolveStackLabelmapTarget).
+  function hasNoLayerOnDisplayedImage(segmentationId, viewport) {
+    const currentImageId = viewport?.getCurrentImageId?.() || null;
+    if (!segmentationId || !currentImageId || !isOwnImageScope(currentImageId)) return false;
+    const imageIds = stackLabelmapImageIds(segmentationId);
+    return imageIds.length > 0 && imageIds.every(id => isForeignLabelmap(id, currentImageId));
+  }
+
+  const NO_LAYER_ON_IMAGE_MESSAGE =
+    "Cette segmentation a été calculée sur une autre photo : elle n'a aucun calque sur l'image affichée. "
+    + 'Cliquez sur « Calque médecin » pour dessiner sur cette photo, ou sélectionnez à gauche la segmentation de cette photo.';
+
+  function logNoLayerOnDisplayedImage(modeLabel, segmentationId, viewport) {
+    console.log(
+      '[SegmentationEdit]', modeLabel, ': la segmentation', segmentationId,
+      "n'a aucun calque derive de l'image affichee", viewport?.getCurrentImageId?.() || '?',
+      '(ses labelmaps appartiennent a une autre photo, outil refuse)'
+    );
   }
 
   // `forcedImageId` (annuler, retablir, reinitialiser, calques secondaires de
@@ -1636,14 +1716,19 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   // than waiting for a tool to find nothing else to draw on.
   const doctorLayerRequested = new Set();
 
-  function findDoctorLayerId() {
+  // Avec `viewport` (photo OP affichee), seul un calque medecin ayant un
+  // labelmap derive de cette photo convient : celui d'une autre photo n'y est
+  // pas dessine et les outils refusent d'y ecrire.
+  function findDoctorLayerId(viewport = null) {
     const { segmentationService } = servicesManager.services;
     try {
       const raw = segmentationService?.getSegmentations?.();
       const length = raw?.length ?? 0;
       for (let i = 0; i < length; i++) {
         const id = raw[i]?.segmentationId || raw[i]?.id;
-        if (id && String(id).startsWith('doctor-')) return id;
+        if (!id || !String(id).startsWith('doctor-')) continue;
+        if (viewport && hasNoLayerOnDisplayedImage(id, viewport)) continue;
+        return id;
       }
     } catch (err) {
       console.warn('[SegmentationEdit] doctor layer lookup failed', err);
@@ -2121,13 +2206,17 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         console.warn('[SegmentationEdit] getScalarData failed', err);
       }
       if (!accessor || !initialData) {
+        const noLayer = hasNoLayerOnDisplayedImage(segmentationId, viewport);
+        if (noLayer) logNoLayerOnDisplayedImage(modeLabel, segmentationId, viewport);
         uiNotificationService.show({
           title: modeLabel,
-          message: segmentationId
-            ? 'Segmentation trouvée mais ses pixels ne sont pas accessibles (voir console).'
-            : "Aucune segmentation chargée. Cliquez sur CHARGER en haut à droite de l'image, puis réessayez.",
+          message: noLayer
+            ? NO_LAYER_ON_IMAGE_MESSAGE
+            : segmentationId
+              ? 'Segmentation trouvée mais ses pixels ne sont pas accessibles (voir console).'
+              : "Aucune segmentation chargée. Cliquez sur CHARGER en haut à droite de l'image, puis réessayez.",
           type: 'warning',
-          duration: 3500,
+          duration: noLayer ? 6000 : 3500,
         });
         return;
       }
@@ -2312,13 +2401,23 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         if (typeof event.button === 'number' && event.button !== 0) return;
         try {
           if (stroke) endStroke('nouveau trait sans relachement');
+          if (viewportIsStale(activeViewportId, viewport)) {
+            console.log('[SegmentationEdit]', modeLabel, ': viewport remplace (changement de serie) : trait refuse');
+            uiNotificationService.show({ title: modeLabel, message: STALE_VIEWPORT_MESSAGE, type: 'warning', duration: 4500 });
+            return;
+          }
           stroke = beginStroke();
           if (!stroke) {
+            const missingId = resolveActiveSegmentationId(activeViewportId) || segmentationId;
+            const noLayer = hasNoLayerOnDisplayedImage(missingId, viewport);
+            if (noLayer) logNoLayerOnDisplayedImage(modeLabel, missingId, viewport);
             uiNotificationService.show({
               title: modeLabel,
-              message: "Labelmap de la segmentation introuvable pour l'image affichée (voir console).",
+              message: noLayer
+                ? NO_LAYER_ON_IMAGE_MESSAGE
+                : "Labelmap de la segmentation introuvable pour l'image affichée (voir console).",
               type: 'warning',
-              duration: 3500,
+              duration: noLayer ? 6000 : 3500,
             });
             return;
           }
@@ -3887,14 +3986,22 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     const modeLabel = 'Calque médecin';
     try {
       await loadCornerstone();
-      const { activeViewportId } = getActiveViewport();
+      const { activeViewportId, viewport } = getActiveViewport();
       if (!activeViewportId) {
         reportSegmentationError(modeLabel, 'setup', new Error('Aucun viewport actif trouvé.'));
         return;
       }
       const { segmentationService } = servicesManager.services;
 
-      const existingId = findDoctorLayerId();
+      // Calque de CETTE photo ; un calque cree sur une autre photo ne
+      // s'affiche pas ici, on en cree alors un pour la serie affichee.
+      const existingId = findDoctorLayerId(viewport);
+      if (!existingId && findDoctorLayerId()) {
+        console.log(
+          '[SegmentationEdit] calque medecin existant derive d une autre photo : nouveau calque pour',
+          viewport?.getCurrentImageId?.() || '?'
+        );
+      }
 
       if (existingId) {
         try {
@@ -3968,13 +4075,17 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         console.warn('[SegmentationEdit] wand getScalarData failed', err);
       }
       if (!accessor || !labelmap) {
+        const noLayer = hasNoLayerOnDisplayedImage(segmentationId, viewport);
+        if (noLayer) logNoLayerOnDisplayedImage(modeLabel, segmentationId, viewport);
         uiNotificationService.show({
           title: modeLabel,
-          message: segmentationId
-            ? 'Segmentation trouvée mais ses pixels ne sont pas accessibles (voir console).'
-            : "Aucune segmentation chargée. Cliquez sur CHARGER en haut à droite de l'image, puis réessayez.",
+          message: noLayer
+            ? NO_LAYER_ON_IMAGE_MESSAGE
+            : segmentationId
+              ? 'Segmentation trouvée mais ses pixels ne sont pas accessibles (voir console).'
+              : "Aucune segmentation chargée. Cliquez sur CHARGER en haut à droite de l'image, puis réessayez.",
           type: 'warning',
-          duration: 3500,
+          duration: noLayer ? 6000 : 3500,
         });
         return;
       }
@@ -4004,6 +4115,11 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
 
       ensureAllSegmentClasses(segmentationId, activeViewportId);
       ensureOriginalSnapshot(accessor);
+      // Pixels du fond d'oeil et labelmap sont ceux de la photo affichee a
+      // l'activation. Apres un changement de photo dans la pile, ecrire ici
+      // toucherait le calque de l'autre photo, qui n'est plus dessine sur
+      // celle-ci : la baguette refuse et demande d'etre reactivee.
+      const wandImageId = accessor.kind === 'stack' ? viewport?.getCurrentImageId?.() || null : null;
       const previousCursor = element.style.cursor;
       element.style.cursor = 'none';
       const preview = showWandPreview(element, activeViewportId);
@@ -4053,6 +4169,24 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       let strokePointerId = null;
 
       const applyStroke = path => {
+        if (viewportIsStale(activeViewportId, viewport)) {
+          console.log('[SegmentationEdit] baguette : viewport remplace (changement de serie) : trait ignore');
+          uiNotificationService.show({ title: modeLabel, message: STALE_VIEWPORT_MESSAGE, type: 'warning', duration: 4500 });
+          return;
+        }
+        if (wandImageId && viewport?.getCurrentImageId?.() !== wandImageId) {
+          console.log(
+            '[SegmentationEdit] baguette : image changee depuis l activation (', wandImageId,
+            '->', viewport?.getCurrentImageId?.(), ') : trait ignore'
+          );
+          uiNotificationService.show({
+            title: modeLabel,
+            message: "L'image affichée a changé depuis l'activation de la Baguette : désactivez-la puis réactivez-la sur cette image.",
+            type: 'warning',
+            duration: 4500,
+          });
+          return;
+        }
         // A loop is an outline, and an outline is filled as drawn: no
         // propagation, no threshold, no surprise. An open stroke still seeds
         // the region growing.

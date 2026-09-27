@@ -1,7 +1,24 @@
+import {
+  installOwnImageLabelmapFilter,
+  disableOwnImageLabelmapFilterByConfig,
+} from './ownImageLabelmaps';
+
 export default function preRegistration({
   servicesManager,
   commandsManager,
+  appConfig,
 }) {
+  // Photos OP : chaque labelmap ne s'affiche que sur l'image dont il est
+  // derive (voir ownImageLabelmaps.ts). Pose ici, au demarrage, avant toute
+  // etude ou SEG : la table image -> labelmaps de Cornerstone ne fait que
+  // grossir. Non bloquant : l'installation se termine en arriere-plan.
+  // Coupe-circuit : ownImageLabelmaps: false dans window.config, puis recharger.
+  if (appConfig?.ownImageLabelmaps === false) {
+    disableOwnImageLabelmapFilterByConfig();
+  } else {
+    installOwnImageLabelmapFilter();
+  }
+
   const { uiNotificationService } = servicesManager.services;
 
   function sendToParent(type, payload = {}) {
