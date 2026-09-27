@@ -1264,3 +1264,157 @@ class DoctorSegmentationSaveViewTest(TestCase):
         report.refresh_from_db()
         self.assertEqual(report.report_json['status'], 'DOCTOR_CORRECTED')
         self.assertEqual(len(report.report_json['doctor_segmentation_corrections']), 1)
+
+
+class DoctorSegFinalVersionTest(TestCase):
+    """Couleurs, type et remplacement des corrections medecin."""
+
+    @staticmethod
+    def _dicomlab_to_rgb(lab):
+        """Inverse utilise par OHIF (dcmjs Colors.dicomlab2RGB), reecrit ici."""
+        L = lab[0] * 100.0 / 65535.0
+        a = lab[1] * 255.0 / 65535.0 - 128.0
+        b = lab[2] * 255.0 / 65535.0 - 128.0
+        fy = (L + 16.0) / 116.0
+        fx = fy + a / 500.0
+        fz = fy - b / 200.0
+
+        def finv(t):
+            return t ** 3 if t ** 3 > 0.008856 else (t - 16.0 / 116.0) / 7.787
+
+        x, y, z = finv(fx) * 0.95047, finv(fy) * 1.0, finv(fz) * 1.08883
+        r = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z
+        g = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z
+        bl = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z
+
+        def gamma(c):
+            c = max(0.0, min(1.0, c))
+            return 12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+
+        return [round(255 * gamma(v)) for v in (r, g, bl)]
+
+    def _source(self):
+        from pydicom import Dataset
+        from pydicom.uid import generate_uid
+
+        ds = Dataset()
+        ds.StudyInstanceUID = generate_uid()
+        ds.SeriesInstanceUID = generate_uid()
+        ds.SOPInstanceUID = generate_uid()
+        ds.SOPClassUID = '1.2.840.10008.5.1.4.1.1.77.1.5.1'
+        ds.Rows, ds.Columns = 16, 16
+        return ds
+
+    def test_palette_colours_survive_ohif_readback(self):
+        from .doctor_seg import _LABEL_RGB, rgb_to_dicom_lab
+
+        for label, rgb in _LABEL_RGB.items():
+            lab = rgb_to_dicom_lab(rgb)
+            self.assertTrue(all(0 <= v <= 65535 for v in lab), label)
+            back = self._dicomlab_to_rgb(lab)
+            for original, reread in zip(rgb, back):
+                self.assertLessEqual(abs(original - reread), 2, '%s: %s -> %s' % (label, rgb, back))
+
+    def test_every_segment_carries_its_colour(self):
+        import numpy as np
+
+        from .doctor_seg import build_doctor_seg, rgb_to_dicom_lab
+
+        mask = np.zeros((16, 16), dtype=np.uint8)
+        mask[2:5, 2:5] = 1
+        mask[8:12, 8:12] = 8
+        ds = build_doctor_seg(
+            self._source(), mask, {1: 'Microanévrismes', 8: 'Vaisseaux'},
+            segment_colors={'1': [10, 20, 30]}, kind='lesions',
+        )
+        colours = {item.SegmentLabel: list(item.RecommendedDisplayCIELabValue) for item in ds.SegmentSequence}
+        # Couleur envoyee par le viewer pour le segment 1.
+        self.assertEqual(colours['Microanévrismes'], rgb_to_dicom_lab((10, 20, 30)))
+        # Repli sur la palette pour le segment 8, sans couleur envoyee.
+        self.assertEqual(colours['Vaisseaux'], rgb_to_dicom_lab((168, 85, 247)))
+
+    def test_series_name_and_label_follow_the_kind(self):
+        import numpy as np
+
+        from .doctor_seg import DOCTOR_SERIES_DESCRIPTION, build_doctor_seg, doctor_series_description
+        from .tasks import AI_SEG_SERIES_DESCRIPTIONS
+
+        mask = np.zeros((16, 16), dtype=np.uint8)
+        mask[1:4, 1:4] = 8
+        ds = build_doctor_seg(self._source(), mask, {8: 'Vaisseaux'}, kind='vessels')
+        self.assertEqual(ds.SeriesDescription, 'Corrige par medecin - vaisseaux')
+        self.assertEqual(ds.ContentLabel, 'DRCORR_VESSELS')
+        self.assertLessEqual(len(ds.ContentLabel), 16)
+        for kind in ('lesions', 'neovascularization', 'vessels', 'optic_disc', 'unknown', None):
+            description = doctor_series_description(kind)
+            self.assertTrue(description.startswith(DOCTOR_SERIES_DESCRIPTION))
+            self.assertNotIn(description, AI_SEG_SERIES_DESCRIPTIONS)
+
+    def test_kind_of_existing_series(self):
+        from .doctor_seg import seg_kind_from_tags
+
+        self.assertEqual(seg_kind_from_tags({'ContentLabel': 'DRCORR_OPTICDISC'}), 'optic_disc')
+        legacy = {'ContentLabel': 'DOCTORCORR'}
+        self.assertEqual(seg_kind_from_tags(dict(legacy, SegmentSequence=[{'SegmentLabel': 'Vaisseaux'}])), 'vessels')
+        self.assertEqual(seg_kind_from_tags(dict(legacy, SegmentSequence=[
+            {'SegmentLabel': 'Disque optique'}, {'SegmentLabel': 'Excavation papillaire'}])), 'optic_disc')
+        self.assertEqual(seg_kind_from_tags(dict(legacy, SegmentSequence=[
+            {'SegmentLabel': 'Hémorragies'}, {'SegmentLabel': 'Exsudats'}])), 'lesions')
+        # Melange ambigu : jamais rapproche d'un type precis.
+        self.assertEqual(seg_kind_from_tags(dict(legacy, SegmentSequence=[
+            {'SegmentLabel': 'Vaisseaux'}, {'SegmentLabel': 'Exsudats'}])), 'unknown')
+
+    def test_only_same_photo_and_same_kind_is_replaced(self):
+        from unittest.mock import MagicMock
+
+        from . import doctor_seg
+
+        photo, other_photo = '1.2.3.photo', '1.2.3.other'
+
+        def seg_tags(label, sources, segments=()):
+            return {
+                'ContentLabel': label,
+                'ReferencedSeriesSequence': [{'ReferencedInstanceSequence': [
+                    {'ReferencedSOPInstanceUID': s} for s in sources]}],
+                'SegmentSequence': [{'SegmentLabel': n} for n in segments],
+            }
+
+        series = [
+            # (identifiant Orthanc, description, SeriesInstanceUID, tags)
+            ('ai', 'seg_vaisseaux', 'uid-ai', seg_tags('', [photo], ['Vaisseaux'])),
+            ('old-vessels', 'Corrige par medecin - vaisseaux', 'uid-old-v', seg_tags('DRCORR_VESSELS', [photo])),
+            ('legacy-vessels', 'Corrige par medecin', 'uid-legacy', seg_tags('DOCTORCORR', [photo], ['Vaisseaux'])),
+            ('old-lesions', 'Corrige par medecin - lesions', 'uid-old-l', seg_tags('DRCORR_LESIONS', [photo])),
+            ('other-photo', 'Corrige par medecin - vaisseaux', 'uid-other', seg_tags('DRCORR_VESSELS', [other_photo])),
+            ('new', 'Corrige par medecin - vaisseaux', 'uid-new', seg_tags('DRCORR_VESSELS', [photo])),
+        ]
+        by_instance = {'inst-%s' % oid: tags for oid, _, _, tags in series}
+
+        def response(payload):
+            r = MagicMock()
+            r.json.return_value = payload
+            r.raise_for_status.return_value = None
+            return r
+
+        fake = MagicMock()
+        fake.post.return_value = response([{'Type': 'Study', 'ID': 'study-1'}])
+
+        def get(url, timeout=None):
+            if url.endswith('/studies/study-1/series'):
+                return response([{
+                    'ID': oid, 'Instances': ['inst-%s' % oid], 'LastUpdate': '20260928T100000',
+                    'MainDicomTags': {'Modality': 'SEG', 'SeriesDescription': desc, 'SeriesInstanceUID': uid},
+                } for oid, desc, uid, _ in series])
+            return response(by_instance[url.split('/instances/')[1].split('/')[0]])
+
+        fake.get.side_effect = get
+        fake.delete.return_value = response({})
+
+        with patch.object(doctor_seg, 'requests', fake):
+            deleted = doctor_seg.delete_prior_doctor_segs(
+                'http://orthanc', 'study-uid', photo, 'vessels', keep_series_uid='uid-new')
+
+        # Jamais l'IA, jamais une autre photo, jamais un autre type, jamais la nouvelle.
+        self.assertEqual(sorted(deleted), ['uid-legacy', 'uid-old-v'])
+        deleted_ids = sorted(call.args[0].rsplit('/', 1)[1] for call in fake.delete.call_args_list)
+        self.assertEqual(deleted_ids, ['legacy-vessels', 'old-vessels'])

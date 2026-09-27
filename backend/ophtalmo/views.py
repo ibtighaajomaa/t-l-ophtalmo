@@ -1808,6 +1808,8 @@ def save_segmentation_corrections(request):
                 request.data.get('mask_height'),
                 segment_labels,
                 creator_name=correction['author'] or None,
+                segment_colors=request.data.get('segment_colors') or None,
+                kind=segmentation_kind,
             )
             correction['seg_persisted'] = True
             correction['seg'] = seg_info

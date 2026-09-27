@@ -2105,6 +2105,29 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     return labels;
   }
 
+  // Couleur affichee de chaque segment, envoyee avec la sauvegarde : le serveur
+  // l'ecrit en RecommendedDisplayCIELabValue dans le DICOM-SEG. Sans elle, OHIF
+  // signale "RecommendedDisplayCIELabValue not found" et peint la correction
+  // avec sa couleur par defaut, qui ne correspond plus a la legende.
+  function activeSegmentColors(segmentationId, viewportId) {
+    const { segmentationService } = servicesManager.services;
+    const colors = {};
+    try {
+      const segments = segmentationService?.getSegmentation?.(segmentationId)?.segments || {};
+      Object.keys(segments).forEach(index => {
+        const numeric = Number(index);
+        if (!Number.isFinite(numeric) || numeric <= 0) return;
+        const color = segmentationService?.getSegmentColor?.(viewportId, segmentationId, numeric);
+        if (Array.isArray(color) && color.length >= 3) {
+          colors[numeric] = [color[0], color[1], color[2]];
+        }
+      });
+    } catch (err) {
+      console.warn('[SegmentationEdit] segment colors unavailable', err);
+    }
+    return colors;
+  }
+
   function summarizeActiveSegmentation() {
     const { activeViewportId, viewport } = getActiveViewport();
     const segmentationId = ensureActiveSegmentationId(activeViewportId);
@@ -2134,6 +2157,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       mask_height: size?.height || null,
       source_sop_instance_uid: sourceSop,
       segment_labels: activeSegmentLabels(segmentationId),
+      segment_colors: activeSegmentColors(segmentationId, activeViewportId),
       segmentation_id: segmentationId,
       segmentation_kind: segmentationKind(segmentationId, activeViewportId),
       pixel_counts_by_segment: counts,
@@ -4480,7 +4504,18 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     if (data?.seg_persisted) {
       uiNotificationService.show({
         title: 'Corrections',
-        message: 'Correction enregistrée dans le PACS comme nouvelle série DICOM-SEG.',
+        // Une seule version finale par photo et par type : le serveur retire
+        // la precedente apres avoir enregistre celle-ci.
+        message: (() => {
+          const seg = data?.doctor_corrected_segmentation?.seg || {};
+          const replaced = (seg.replaced_series_uids || []).length;
+          if (seg.replace_error) {
+            return "Correction enregistrée dans le PACS, mais l'ancienne version n'a pas pu être retirée (voir console).";
+          }
+          return replaced
+            ? `Correction enregistrée dans le PACS ; ${replaced > 1 ? `${replaced} versions précédentes remplacées` : 'version précédente remplacée'}.`
+            : 'Correction enregistrée dans le PACS.';
+        })(),
         type: 'success',
         duration: 3500,
       });
