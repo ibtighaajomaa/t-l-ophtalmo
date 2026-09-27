@@ -51,11 +51,17 @@ def dicom_pixels_rgb(ds):
         arr = ds.pixel_array
     arr = np.asarray(arr)
     if arr.ndim == 3 and arr.shape[-1] == 3 and arr.dtype == np.uint8:
+        # Decision sur les pixels, jamais sur le tag : un fichier transcode
+        # peut porter "RGB" en en-tete tout en contenant du YCbCr, et dans ce
+        # cas ni pydicom ni un test sur le tag ne convertiraient.
         photometric = str(getattr(ds, "PhotometricInterpretation", "")).upper()
-        if photometric.startswith("YBR") and _looks_like_ycbcr(arr):
+        if _looks_like_ycbcr(arr):
             # Apres decodage, le 4:2:2 est deja re-echantillonne en pleine
             # resolution : la conversion YBR_FULL -> RGB s'applique telle quelle.
             arr = _convert_color_space(arr, "YBR_FULL", "RGB")
+            logger.info("dicom_pixels_rgb: YCbCr detecte (tag=%s), converti en RGB", photometric)
+        else:
+            logger.info("dicom_pixels_rgb: pixels deja RGB (tag=%s), aucune conversion", photometric)
     return arr
 
 
