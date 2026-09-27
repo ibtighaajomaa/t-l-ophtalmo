@@ -3451,7 +3451,10 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           });
           return;
         }
-        const writeValue = resolveActiveSegmentIndex(activeViewportId) ?? 1;
+        // Meme garde que le crayon : un index 0 ferait ecrire la valeur de la
+        // gomme a la baguette.
+        const wandIndex = resolveActiveSegmentIndex(activeViewportId);
+        const writeValue = Number.isInteger(wandIndex) && wandIndex > 0 ? wandIndex : 1;
         const changed = applyRegionToLabelmap(accessor, result.region, fundus.width, fundus.height, writeValue, viewport);
         if (changed) usedModesThisSession.add('wand');
         if (result.region.leak) {
