@@ -583,45 +583,75 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     }
   }
 
+  // getSegmentations() renvoie un tableau reactif (proxy). Sur les etudes OP
+  // on a observe `.length === 0` alors que le tableau contient reellement des
+  // entrees (console : "length= 0 tried= 0 raw= Array(2)"). Conséquence : les
+  // series SEG deja chargees etaient invisibles pour l'outil, qui creait un
+  // calque vide a chaque clic au lieu de laisser corriger le masque IA.
+  // Aucune strategie d'acces n'est donc fiable seule : on les cumule et on
+  // dedoublonne par identifiant.
+  function listSegmentationEntries() {
+    const { segmentationService } = servicesManager.services;
+    let raw = null;
+    try {
+      raw = segmentationService?.getSegmentations?.();
+    } catch (err) {
+      console.warn('[SegmentationEdit] getSegmentations threw', err);
+      return [];
+    }
+    if (!raw || typeof raw !== 'object') return [];
+
+    const found = new Map();
+    const absorb = entry => {
+      if (!entry || typeof entry !== 'object') return;
+      const id = entry.segmentationId || entry.id;
+      if (id && !found.has(id)) found.set(id, entry);
+    };
+
+    try { Object.values(raw).forEach(absorb); } catch (_) { /* proxy hostile */ }
+    try { Array.from(raw).forEach(absorb); } catch (_) { /* idem */ }
+    try { [...raw].forEach(absorb); } catch (_) { /* idem */ }
+    try {
+      const length = Number(raw.length) || 0;
+      for (let i = 0; i < length; i++) absorb(raw[i]);
+    } catch (_) { /* idem */ }
+    try {
+      Object.keys(raw).forEach(key => {
+        if (/^\d+$/.test(key)) absorb(raw[key]);
+      });
+    } catch (_) { /* idem */ }
+
+    return [...found.values()];
+  }
+
   function ensureActiveSegmentationId(viewportId, quiet = false) {
     const existing = resolveActiveSegmentationId(viewportId);
     if (existing) return existing;
 
     const { segmentationService } = servicesManager.services;
-    try {
-      const raw = segmentationService?.getSegmentations?.();
-      // getSegmentations() has been observed to be a reactive/proxied array
-      // whose Symbol.iterator is unreliable (Array.from/for...of silently
-      // yield 0 items even though .length is correct) -- index by hand.
-      const length = raw?.length ?? 0;
-      let tried = 0;
-      for (let i = 0; i < length; i++) {
-        const entry = raw[i];
-        const candidates = [entry?.segmentationId, entry?.id];
-        for (const candidateId of candidates) {
-          if (!candidateId) continue;
-          tried++;
-          try {
-            segmentationService.setActiveSegmentation(viewportId, candidateId);
-          } catch (setErr) {
-            console.warn('[SegmentationEdit] setActiveSegmentation failed for', candidateId, setErr);
-            continue;
-          }
-          const confirmed = resolveActiveSegmentationId(viewportId);
-          if (confirmed) return confirmed;
-          if (getActiveLabelmapVolume(candidateId)) return candidateId;
-        }
+    const entries = listSegmentationEntries();
+    let tried = 0;
+    for (const entry of entries) {
+      const candidateId = entry.segmentationId || entry.id;
+      if (!candidateId) continue;
+      tried++;
+      try {
+        segmentationService.setActiveSegmentation(viewportId, candidateId);
+      } catch (setErr) {
+        console.warn('[SegmentationEdit] setActiveSegmentation failed for', candidateId, setErr);
+        continue;
       }
-      if (!quiet) {
-        console.warn(
-          '[SegmentationEdit] No usable segmentation id found. length=', length, 'tried=', tried, 'raw=', raw
-        );
-      }
-      return null;
-    } catch (err) {
-      console.error('[SegmentationEdit] ensureActiveSegmentationId failed:', err);
-      return null;
+      const confirmed = resolveActiveSegmentationId(viewportId);
+      if (confirmed) return confirmed;
+      if (getActiveLabelmapVolume(candidateId)) return candidateId;
     }
+    if (!quiet) {
+      console.warn(
+        '[SegmentationEdit] No usable segmentation id found. entries=', entries.length,
+        'tried=', tried
+      );
+    }
+    return null;
   }
 
   function currentStudyInstanceUid() {
