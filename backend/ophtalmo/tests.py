@@ -1005,3 +1005,178 @@ class AutoSegmentationTaskTest(TestCase):
         self.assertEqual(exam.segmentation_status, 'failed')
         self.assertEqual(exam.segmentation_retries, 3)
         self.assertIn('Échec après 3 tentatives', exam.segmentation_error)
+
+
+class DoctorSegmentationSegTest(TestCase):
+    """Ecriture DICOM-SEG des corrections de segmentation du medecin."""
+
+    def _source_dataset(self, rows=64, cols=96):
+        from pydicom import Dataset
+        from pydicom.uid import generate_uid
+
+        ds = Dataset()
+        ds.PatientName = 'TEST^PATIENT'
+        ds.PatientID = '20037559'
+        ds.StudyInstanceUID = generate_uid()
+        ds.SeriesInstanceUID = generate_uid()
+        ds.SOPInstanceUID = generate_uid()
+        ds.SOPClassUID = '1.2.840.10008.5.1.4.1.1.77.1.5.1'
+        ds.Rows, ds.Columns = rows, cols
+        return ds
+
+    def _mask(self, rows=64, cols=96):
+        import numpy as np
+
+        mask = np.zeros((rows, cols), dtype=np.uint8)
+        yy, xx = np.mgrid[0:rows, 0:cols]
+        mask[(yy - 20) ** 2 + (xx - 30) ** 2 < 12 ** 2] = 1
+        mask[50:60, 70:90] = 2
+        mask[0, 0] = 3
+        mask[rows - 1, cols - 1] = 3
+        return mask
+
+    def test_doctor_seg_survives_ai_cleanup(self):
+        """Le nettoyage des SEG IA ne doit jamais supprimer une correction.
+
+        _delete_prior_ai_seg_series() ne supprime que les series dont la
+        SeriesDescription appartient a AI_SEG_SERIES_DESCRIPTIONS. Si la
+        description du medecin y entrait un jour, une simple re-analyse
+        effacerait son travail sans trace.
+        """
+        from .doctor_seg import DOCTOR_SERIES_DESCRIPTION
+        from .tasks import AI_SEG_SERIES_DESCRIPTIONS
+
+        self.assertNotIn(DOCTOR_SERIES_DESCRIPTION, AI_SEG_SERIES_DESCRIPTIONS)
+
+    def test_mask_survives_dicom_round_trip(self):
+        """Le masque relu depuis le SEG doit etre identique a l'original."""
+        import io
+
+        import numpy as np
+        from pydicom import dcmread
+
+        from .doctor_seg import build_doctor_seg
+
+        mask = self._mask()
+        ds = build_doctor_seg(
+            self._source_dataset(), mask, {1: 'Disque', 2: 'Lesion', 3: 'Vaisseaux'}
+        )
+
+        buffer = io.BytesIO()
+        ds.save_as(buffer, enforce_file_format=True)
+        buffer.seek(0)
+        back = dcmread(buffer)
+
+        self.assertEqual(back.Modality, 'SEG')
+        self.assertEqual(back.SegmentationType, 'BINARY')
+        self.assertEqual(back.NumberOfFrames, 3)
+
+        bits = np.unpackbits(
+            np.frombuffer(back.PixelData, dtype=np.uint8), bitorder='little'
+        )
+        needed = back.Rows * back.Columns * back.NumberOfFrames
+        frames = bits[:needed].reshape(back.NumberOfFrames, back.Rows, back.Columns)
+
+        rebuilt = np.zeros_like(mask)
+        for item in back.SegmentSequence:
+            rebuilt[frames[item.SegmentNumber - 1] == 1] = item.SegmentNumber
+
+        self.assertTrue(np.array_equal(rebuilt, mask))
+
+    def test_seg_references_source_image(self):
+        """Sans reference correcte, la visionneuse ne sait pas quoi superposer."""
+        from .doctor_seg import build_doctor_seg
+
+        source = self._source_dataset()
+        ds = build_doctor_seg(source, self._mask(), {1: 'Disque', 2: 'L', 3: 'V'})
+
+        referenced = ds.ReferencedSeriesSequence[0]
+        self.assertEqual(referenced.SeriesInstanceUID, source.SeriesInstanceUID)
+        self.assertEqual(
+            referenced.ReferencedInstanceSequence[0].ReferencedSOPInstanceUID,
+            source.SOPInstanceUID,
+        )
+        self.assertEqual(ds.StudyInstanceUID, source.StudyInstanceUID)
+
+    def test_empty_segments_are_not_written(self):
+        """Une frame vide ferait croire a une structure presente mais nulle."""
+        from .doctor_seg import build_doctor_seg
+
+        ds = build_doctor_seg(
+            self._source_dataset(),
+            self._mask(),
+            {1: 'Disque', 2: 'Lesion', 3: 'Vaisseaux', 7: 'Jamais dessine'},
+        )
+        self.assertEqual(ds.NumberOfFrames, 3)
+        self.assertNotIn('Jamais dessine', [i.SegmentLabel for i in ds.SegmentSequence])
+
+    def test_empty_mask_is_refused(self):
+        import numpy as np
+
+        from .doctor_seg import build_doctor_seg
+
+        with self.assertRaises(ValueError):
+            build_doctor_seg(
+                self._source_dataset(), np.zeros((64, 96), dtype=np.uint8), {1: 'A'}
+            )
+
+    def test_mask_dimensions_must_match_source(self):
+        """Un masque decale ecrirait une correction fausse sur l'image."""
+        import numpy as np
+
+        from .doctor_seg import build_doctor_seg
+
+        with self.assertRaises(ValueError):
+            build_doctor_seg(
+                self._source_dataset(rows=64, cols=96),
+                np.ones((32, 32), dtype=np.uint8),
+                {1: 'A'},
+            )
+
+    def test_rle_and_png_decode_identically(self):
+        import base64
+        import io
+
+        import numpy as np
+        from PIL import Image
+
+        from .doctor_seg import decode_mask
+
+        mask = self._mask()
+        flat = mask.ravel()
+        runs, value, length = [], int(flat[0]), 1
+        for pixel in flat[1:]:
+            pixel = int(pixel)
+            if pixel == value:
+                length += 1
+            else:
+                runs += [value, length]
+                value, length = pixel, 1
+        runs += [value, length]
+
+        from_rle = decode_mask({'encoding': 'rle', 'data': runs}, 96, 64)
+
+        buffer = io.BytesIO()
+        Image.fromarray(mask, mode='L').save(buffer, format='PNG')
+        from_png = decode_mask(
+            {'encoding': 'base64', 'data': base64.b64encode(buffer.getvalue()).decode()},
+            96,
+            64,
+        )
+
+        self.assertTrue(np.array_equal(from_rle, mask))
+        self.assertTrue(np.array_equal(from_png, mask))
+
+    def test_malformed_payloads_are_rejected(self):
+        """Mieux vaut refuser que d'ecrire un masque decale dans le PACS."""
+        from .doctor_seg import decode_mask
+
+        for payload, width, height in (
+            ({'encoding': 'rle', 'data': [1, 2, 3]}, 96, 64),
+            ({'encoding': 'rle', 'data': [0, 10]}, 96, 64),
+            ({'encoding': 'rle', 'data': [0, 96 * 64 + 5]}, 96, 64),
+            ({'encoding': 'inconnu', 'data': []}, 96, 64),
+            ({'encoding': 'rle', 'data': [0, 1]}, 0, 0),
+        ):
+            with self.assertRaises(ValueError):
+                decode_mask(payload, width, height)

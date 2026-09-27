@@ -1765,6 +1765,47 @@ def save_segmentation_corrections(request):
         'saved_at': datetime.utcnow().isoformat() + 'Z',
         'source': 'ohif_segmentation_eraser',
     }
+
+    # Ecriture du masque corrige comme vraie serie DICOM-SEG dans Orthanc.
+    # Sans cela le rapport affirme qu'un medecin a corrige la segmentation
+    # alors que cette segmentation n'existe plus nulle part. Le masque est
+    # facultatif : un client qui n'en envoie pas garde l'ancien comportement,
+    # mais la correction est alors explicitement marquee non persistee.
+    mask_payload = request.data.get('mask')
+    if mask_payload:
+        from .doctor_seg import persist_doctor_correction
+
+        try:
+            segment_labels = {
+                int(index): str(label)
+                for index, label in (request.data.get('segment_labels') or {}).items()
+            }
+            if not segment_labels:
+                segment_labels = {
+                    int(index): 'Segment %s' % index
+                    for index in cleaned_counts
+                    if int(index) != 0
+                }
+            seg_info = persist_doctor_correction(
+                ORTHANC_URL,
+                request.data.get('source_sop_instance_uid'),
+                mask_payload,
+                request.data.get('mask_width'),
+                request.data.get('mask_height'),
+                segment_labels,
+            )
+            correction['seg_persisted'] = True
+            correction['seg'] = seg_info
+        except Exception as exc:
+            # On n'echoue pas la sauvegarde des mesures, mais on refuse de
+            # laisser croire que le masque a ete conserve.
+            logger.exception('[DoctorSeg] Ecriture du SEG impossible')
+            correction['seg_persisted'] = False
+            correction['seg_error'] = str(exc)
+    else:
+        correction['seg_persisted'] = False
+        correction['seg_error'] = 'Aucun masque transmis par le client.'
+
     corrections.append(correction)
     # The same endpoint now receives several kinds of mask. An unknown kind
     # keeps the historical behaviour, which was to assume lesions.
@@ -1782,6 +1823,8 @@ def save_segmentation_corrections(request):
 
     return Response({
         'status': 'saved',
+        'seg_persisted': correction.get('seg_persisted', False),
+        'seg_error': correction.get('seg_error'),
         'study_instance_uid': study_uid,
         'doctor_corrected_segmentation': correction,
         'analysis': report_json.get('per_eye') or report_json,

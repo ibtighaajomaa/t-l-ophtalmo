@@ -17,3 +17,6 @@ whitenoise==6.6.0
 timm
 Pillow
 pydicom==3.0.1
+# Deja tire par timm, mais doctor_seg.py en depend directement :
+# une dependance transitive ne doit pas porter une ecriture DICOM.
+numpy

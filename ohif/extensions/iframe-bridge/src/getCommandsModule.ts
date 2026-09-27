@@ -1419,6 +1419,53 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     return counts;
   }
 
+  // Le SOPInstanceUID de l'image corrigee est porte par l'imageId wadors
+  // (.../instances/<uid>/frames/1). Le backend en a besoin pour rattacher le
+  // DICOM-SEG a la bonne image source.
+  function currentSourceSopInstanceUid(viewport) {
+    const imageId = decodeURIComponent(viewport?.getCurrentImageId?.() || '');
+    const match = imageId.match(/\/instances\/([0-9.]+)/);
+    return match ? match[1] : null;
+  }
+
+  // RLE sur le tableau aplati : [valeur, longueur, ...]. Un masque de fond
+  // d'oeil est tres creux, la compression est massive et l'encodage tient en
+  // quelques lignes, sans dependance ni canvas intermediaire.
+  function encodeMaskRle(scalarData) {
+    const runs = [];
+    if (!scalarData || !scalarData.length) return runs;
+    let value = scalarData[0];
+    let length = 1;
+    for (let i = 1; i < scalarData.length; i++) {
+      const current = scalarData[i];
+      if (current === value) {
+        length += 1;
+      } else {
+        runs.push(value, length);
+        value = current;
+        length = 1;
+      }
+    }
+    runs.push(value, length);
+    return runs;
+  }
+
+  function activeSegmentLabels(segmentationId) {
+    const { segmentationService } = servicesManager.services;
+    const labels = {};
+    try {
+      const segments = segmentationService?.getSegmentation?.(segmentationId)?.segments || {};
+      Object.keys(segments).forEach(index => {
+        const numeric = Number(index);
+        if (!Number.isFinite(numeric) || numeric <= 0) return;
+        labels[numeric] = segments[index]?.label || `Segment ${numeric}`;
+      });
+    } catch (err) {
+      console.warn('[SegmentationEdit] segment labels unavailable', err);
+    }
+    return labels;
+  }
+
   function summarizeActiveSegmentation() {
     const { activeViewportId, viewport } = getActiveViewport();
     const segmentationId = ensureActiveSegmentationId(activeViewportId);
@@ -1438,7 +1485,15 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     // originalSnapshots holds exactly that: a copy taken when the first
     // editing tool was activated, before any stroke.
     const pristine = originalSnapshots.get(segmentationId);
+    // Le masque lui-meme part avec les mesures : sans lui le rapport affirme
+    // qu'une correction existe alors qu'elle n'est conservee nulle part.
+    const sourceSop = currentSourceSopInstanceUid(viewport);
     return {
+      mask: size && sourceSop ? { encoding: 'rle', data: encodeMaskRle(scalarData) } : null,
+      mask_width: size?.width || null,
+      mask_height: size?.height || null,
+      source_sop_instance_uid: sourceSop,
+      segment_labels: activeSegmentLabels(segmentationId),
       segmentation_id: segmentationId,
       segmentation_kind: segmentationKind(segmentationId, activeViewportId),
       pixel_counts_by_segment: counts,
@@ -3550,12 +3605,25 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     }
     const data = await response.json().catch(() => ({}));
     usedModesThisSession.clear();
-    uiNotificationService.show({
-      title: 'Corrections',
-      message: 'Segmentation corrigée sauvegardée.',
-      type: 'success',
-      duration: 2500,
-    });
+    if (data?.seg_persisted) {
+      uiNotificationService.show({
+        title: 'Corrections',
+        message: 'Correction enregistrée dans le PACS comme nouvelle série DICOM-SEG.',
+        type: 'success',
+        duration: 3500,
+      });
+    } else {
+      // Ne jamais annoncer une sauvegarde complete quand le masque n'a pas
+      // ete conserve : les mesures seules laisseraient croire le contraire.
+      uiNotificationService.show({
+        title: 'Corrections',
+        message: `Mesures enregistrées, mais le masque n'a PAS été conservé${
+          data?.seg_error ? ` (${data.seg_error})` : ''
+        }.`,
+        type: 'warning',
+        duration: 8000,
+      });
+    }
     return data;
   }
 
