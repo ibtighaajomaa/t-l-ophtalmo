@@ -1706,8 +1706,12 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       const paint = event => {
         try {
           const [x, y] = pointFromEvent(event);
+          // `??` laisse passer 0 : si OHIF annonce le segment 0 (fond) comme
+          // actif, le crayon ecrirait la valeur de la gomme et ne dessinerait
+          // rien. Tout index non strictement positif retombe sur 1.
+          const activeIndex = resolveActiveSegmentIndex(activeViewportId);
           const writeValue = mode === 'pencil'
-            ? (resolveActiveSegmentIndex(activeViewportId) ?? 1)
+            ? (Number.isInteger(activeIndex) && activeIndex > 0 ? activeIndex : 1)
             : 0;
           if (paintAtCanvasPoint(viewport, accessor, x, y, getBrushSize(mode), writeValue, strokeDiff)) {
             usedModesThisSession.add(mode);
