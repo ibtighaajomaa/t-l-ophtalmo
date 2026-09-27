@@ -1738,10 +1738,15 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         try {
           drawing = true;
           strokeDiff = new Map();
-          element.setPointerCapture?.(event.pointerId);
+          // setPointerCapture leve NotFoundError si le pointeur n'est plus
+          // actif. Non isole, il faisait echouer le reste du handler, donc le
+          // premier paint() n'avait jamais lieu. La baguette enveloppe deja cet
+          // appel : c'est la seule raison pour laquelle elle marchait.
+          try { element.setPointerCapture?.(event.pointerId); } catch (_) {}
           updateCursor(event);
           paint(event);
           event.preventDefault();
+          event.stopPropagation();
         } catch (err) {
           reportSegmentationError(modeLabel, 'pointerdown', err);
         }
@@ -1752,6 +1757,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           if (!drawing) return;
           paint(event);
           event.preventDefault();
+          event.stopPropagation();
         } catch (err) {
           reportSegmentationError(modeLabel, 'pointermove', err);
         }
@@ -1763,7 +1769,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           }
           drawing = false;
           strokeDiff = null;
-          element.releasePointerCapture?.(event.pointerId);
+          try { element.releasePointerCapture?.(event.pointerId); } catch (_) {}
           event.preventDefault();
         } catch (err) {
           reportSegmentationError(modeLabel, 'pointerup', err);
@@ -1775,21 +1781,31 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
         event.preventDefault();
       };
 
-      element.addEventListener('pointerdown', pointerDown);
-      element.addEventListener('pointermove', pointerMove);
-      element.addEventListener('pointerup', pointerUp);
-      element.addEventListener('pointerleave', pointerUp);
+      // Phase de capture : les outils natifs d'OHIF sont abonnes en phase de
+      // bouillonnement sur le meme element ; sans capture, un trait pouvait
+      // etre consomme avant d'atteindre le pinceau.
+      const listenOpts = { capture: true };
+      element.addEventListener('pointerdown', pointerDown, listenOpts);
+      element.addEventListener('pointermove', pointerMove, listenOpts);
+      element.addEventListener('pointerup', pointerUp, listenOpts);
+      element.addEventListener('pointercancel', pointerUp, listenOpts);
+      element.addEventListener('pointerleave', pointerUp, listenOpts);
       element.addEventListener('wheel', wheel, { passive: false });
+      console.log(
+        '[SegmentationEdit]', modeLabel, 'actif : ecouteurs poses sur',
+        activeViewportId, '| segmentation=', segmentationId
+      );
 
       editSessions.set(activeViewportId, {
         mode,
         applyRadius,
         cleanup: () => {
           element.style.cursor = previousCursor;
-          element.removeEventListener('pointerdown', pointerDown);
-          element.removeEventListener('pointermove', pointerMove);
-          element.removeEventListener('pointerup', pointerUp);
-          element.removeEventListener('pointerleave', pointerUp);
+          element.removeEventListener('pointerdown', pointerDown, listenOpts);
+          element.removeEventListener('pointermove', pointerMove, listenOpts);
+          element.removeEventListener('pointerup', pointerUp, listenOpts);
+          element.removeEventListener('pointercancel', pointerUp, listenOpts);
+          element.removeEventListener('pointerleave', pointerUp, listenOpts);
           element.removeEventListener('wheel', wheel);
         },
       });
