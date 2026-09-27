@@ -7,6 +7,8 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
   const undoStacks = new Map(); // segmentationId -> Map<offset, oldValue>[]
   const redoStacks = new Map();
   const originalSnapshots = new Map(); // segmentationId -> pristine scalarData snapshot
+  const diagnosedLabelmaps = new Set(); // imageId -> une ligne de diagnostic par labelmap
+  let firstStrokeLogged = false;
   const brushCursors = new Map(); // viewportId -> { svg, circle }
   const usedModesThisSession = new Set(); // 'erase' | 'pencil', reset on save
   let foveaMarkers = [];
@@ -420,11 +422,39 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     // baguette ecrivaient dans un tableau jetable. L'API officielle est
     // setAtIndex, qui fonctionne pour un tableau plein comme pour du RLE et
     // tient a jour les tranches modifiees dont le rendu a besoin.
+    const readAt = offset => {
+      if (vm?.getAtIndex) return vm.getAtIndex(offset);
+      return undefined; // pas de relecture bon marche : on ne verifie pas
+    };
+    if (!diagnosedLabelmaps.has(imageId)) {
+      diagnosedLabelmaps.add(imageId);
+      console.log(
+        '[SegmentationEdit] labelmap stack', imageId,
+        '| voxelManager=', vm ? (vm.constructor?.name || 'oui') : 'ABSENT',
+        '| setAtIndex=', typeof vm?.setAtIndex, '| getAtIndex=', typeof vm?.getAtIndex,
+        '| rle=', !!vm?.map?.getRun, '| getPixelData=', typeof image.getPixelData,
+        '| imageFrame.pixelData=', !!image.imageFrame?.pixelData,
+        '| dims=', image.columns || image.width, 'x', image.rows || image.height
+      );
+    }
+    // Trois voies, de la plus officielle a la plus brute. Quand une relecture
+    // est possible, on s'en sert pour passer a la voie suivante si l'ecriture
+    // n'a pas atteint le labelmap.
     const writeAt = (offset, value) => {
-      if (vm?.setAtIndex) return vm.setAtIndex(offset, value);
+      if (vm?.setAtIndex) {
+        vm.setAtIndex(offset, value);
+        const back = readAt(offset);
+        if (back === undefined || back === value) return true;
+      }
       const pixels = image.getPixelData?.();
       if (pixels && offset >= 0 && offset < pixels.length) {
         pixels[offset] = value;
+        const back = readAt(offset);
+        if (back === undefined || back === value) return true;
+      }
+      const frame = image.imageFrame?.pixelData;
+      if (frame && offset >= 0 && offset < frame.length) {
+        frame[offset] = value;
         return true;
       }
       return false;
@@ -759,6 +789,17 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
       }
     }
 
+    if (!firstStrokeLogged) {
+      firstStrokeLogged = true;
+      const probe = scalarOffsetFromCanvas(viewport, canvasX, canvasY);
+      console.log(
+        '[SegmentationEdit] premier trait :', changed, 'pixel(s) modifie(s)',
+        '| valeur ecrite=', writeValue, '| offset central=', probe,
+        '| accessor=', accessor?.kind, '| writeAt=', typeof accessor?.writeAt,
+        '| taille labelmap=', scalarData.length,
+        changed === 0 ? '| RIEN A CHANGER : la valeur est deja presente sous le pinceau' : ''
+      );
+    }
     if (changed) {
       if (!accessor.writeAt) accessor.setScalarData(scalarData);
       notifySegmentationModified(accessor.segmentationId);
