@@ -1,0 +1,17 @@
+# Only send the viewer configuration and the two locally customized plugins.
+**
+!ohif/
+!ohif/**
+!MONAILabel/
+!MONAILabel/plugins/
+!MONAILabel/plugins/ohifv3/
+!MONAILabel/plugins/ohifv3/extensions/
+!MONAILabel/plugins/ohifv3/extensions/monai-label/
+!MONAILabel/plugins/ohifv3/extensions/monai-label/**
+!MONAILabel/plugins/ohifv3/modes/
+!MONAILabel/plugins/ohifv3/modes/monai-label/
+!MONAILabel/plugins/ohifv3/modes/monai-label/**
+**/node_modules/
+**/.git/
+**/.env
+**/.env.*

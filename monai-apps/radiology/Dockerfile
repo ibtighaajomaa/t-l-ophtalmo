@@ -27,3 +27,8 @@ RUN pip3 install --no-cache-dir \
     "huggingface-hub>=0.32,<2" && \
     pip3 install --no-cache-dir --no-deps "retinalysis-inference==0.7.1" && \
     python3 -c "from rtnls_inference.ensembles import HeatmapRegressionEnsemble; from rtnls_fundusprep.preprocessor import FundusPreprocessor"
+
+# Package the application and local MONAI patches in the image. Model weights
+# and caches are mounted separately by Compose.
+COPY . /opt/monai/apps
+RUN mkdir -p /opt/monai/apps/radiology/model
