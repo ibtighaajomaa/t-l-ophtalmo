@@ -17,7 +17,7 @@ interface KeycloakTokenPayload {
   };
 }
 
-export type Role = "Admin" | "Chef" | "Medecin" | "Resident";
+export type Role = "Admin" | "Chef" | "Medecin" | "Resident" | "Technicien" | "MedecinReferant";
 
 export interface AppUser {
   id: string;
@@ -261,6 +261,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (roles.includes("ADMIN_SYSTEME") || roles.includes("ADMIN")) userRole = "Admin";
         else if (roles.includes("CHEF_SERVICE")) userRole = "Chef";
         else if (roles.includes("RESIDENT")) userRole = "Resident";
+        else if (roles.includes("TECHNICIEN")) userRole = "Technicien";
+        else if (roles.includes("MEDECIN_REFERANT")) userRole = "MedecinReferant";
 
         const email = decoded.email || "user@example.com";
         const loggedUser: AppUser = {
@@ -327,6 +329,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (roles.includes("ADMIN_SYSTEME") || roles.includes("ADMIN")) userRole = "Admin";
             else if (roles.includes("CHEF_SERVICE")) userRole = "Chef";
             else if (roles.includes("RESIDENT")) userRole = "Resident";
+            else if (roles.includes("TECHNICIEN")) userRole = "Technicien";
+            else if (roles.includes("MEDECIN_REFERANT")) userRole = "MedecinReferant";
 
             const loggedUser: AppUser = {
               id: email,
@@ -420,7 +424,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   ? "CHEF_SERVICE"
                   : data.role === "Resident"
                     ? "RESIDENT"
-                    : "OPHTALMOLOGUE",
+                    : data.role === "Technicien"
+                      ? "TECHNICIEN"
+                      : data.role === "MedecinReferant"
+                        ? "MEDECIN_REFERANT"
+                        : "OPHTALMOLOGUE",
             password_provisoire: data.password,
             telephone: data.phone,
             createdBy: user ? `${user.firstName} ${user.lastName}` : "",
@@ -498,7 +506,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   ? "CHEF_SERVICE"
                   : data.role === "Resident"
                     ? "RESIDENT"
-                    : "OPHTALMOLOGUE"
+                    : data.role === "Technicien"
+                      ? "TECHNICIEN"
+                      : data.role === "MedecinReferant"
+                        ? "MEDECIN_REFERANT"
+                        : "OPHTALMOLOGUE"
               : undefined,
           };
 

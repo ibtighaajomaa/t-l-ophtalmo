@@ -56,7 +56,7 @@ except Exception as e:
     print(f"Failed to ensure client {client_id}: {e}")
     sys.exit(1)
 
-roles = ["ADMIN_SYSTEME", "CHEF_SERVICE", "RESIDENT", "OPHTALMOLOGUE"]
+roles = ["ADMIN_SYSTEME", "CHEF_SERVICE", "RESIDENT", "OPHTALMOLOGUE", "TECHNICIEN", "MEDECIN_REFERANT"]
 for role in roles:
     try:
         keycloak_admin.get_realm_role(role)

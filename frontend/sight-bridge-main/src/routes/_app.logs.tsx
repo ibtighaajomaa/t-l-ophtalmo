@@ -19,6 +19,8 @@ const ROLE_LABEL: Record<Role, string> = {
   Chef: "Chef de Service",
   Medecin: "Ophtalmologue",
   Resident: "Résident",
+  Technicien: "Technicien",
+  MedecinReferant: "Médecin Référant",
 };
 
 function LogsPage() {

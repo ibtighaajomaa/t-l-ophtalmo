@@ -76,7 +76,9 @@ class CreerUtilisateurView(APIView):
                 'ADMIN_SYSTEME': 'Admin',
                 'CHEF_SERVICE': 'Chef',
                 'OPHTALMOLOGUE': 'Medecin',
-                'RESIDENT': 'Resident'
+                'RESIDENT': 'Resident',
+                'TECHNICIEN': 'Technicien',
+                'MEDECIN_REFERANT': 'MedecinReferant'
             }
             mapped_role = role_map.get(data['role'], data['role'])
 
@@ -602,7 +604,7 @@ def update_keycloak_user(request):
                 # Get current user roles in Keycloak
                 user_roles = keycloak_admin.get_realm_roles_of_user(user_id)
                 # Remove existing app roles to avoid duplicate/conflicting roles
-                app_roles_to_remove = [r for r in user_roles if r['name'] in ['ADMIN_SYSTEME', 'CHEF_SERVICE', 'OPHTALMOLOGUE', 'RESIDENT']]
+                app_roles_to_remove = [r for r in user_roles if r['name'] in ['ADMIN_SYSTEME', 'CHEF_SERVICE', 'OPHTALMOLOGUE', 'RESIDENT', 'TECHNICIEN', 'MEDECIN_REFERANT']]
                 if app_roles_to_remove:
                     keycloak_admin.delete_realm_roles_of_user(user_id, app_roles_to_remove)
                     
@@ -618,7 +620,9 @@ def update_keycloak_user(request):
             'ADMIN_SYSTEME': 'Admin',
             'CHEF_SERVICE': 'Chef',
             'OPHTALMOLOGUE': 'Medecin',
-            'RESIDENT': 'Resident'
+            'RESIDENT': 'Resident',
+            'TECHNICIEN': 'Technicien',
+            'MEDECIN_REFERANT': 'MedecinReferant'
         }
         mapped_role = role_map.get(new_role_code) if new_role_code else None
 
@@ -698,6 +702,8 @@ def get_paginated_users(request):
         elif role_filter == "Chef": kc_role = "CHEF_SERVICE"
         elif role_filter == "Medecin": kc_role = "OPHTALMOLOGUE"
         elif role_filter == "Resident": kc_role = "RESIDENT"
+        elif role_filter == "Technicien": kc_role = "TECHNICIEN"
+        elif role_filter == "MedecinReferant": kc_role = "MEDECIN_REFERANT"
 
         # Enrichir avec la base de données locale (Profil)
         profiles = {
@@ -755,7 +761,9 @@ def get_paginated_users(request):
                 'ADMIN_SYSTEME': 'Admin',
                 'CHEF_SERVICE': 'Chef',
                 'OPHTALMOLOGUE': 'Medecin',
-                'RESIDENT': 'Resident'
+                'RESIDENT': 'Resident',
+                'TECHNICIEN': 'Technicien',
+                'MEDECIN_REFERANT': 'MedecinReferant'
             }
             local_role = role_map_reverse.get(local_role, local_role)
 
@@ -881,12 +889,16 @@ def get_user_stats(request):
             chefs = count_role("CHEF_SERVICE")
             medecins = count_role("OPHTALMOLOGUE")
             residents = count_role("RESIDENT")
+            techniciens = count_role("TECHNICIEN")
+            medecin_referants = count_role("MEDECIN_REFERANT")
             
             return JsonResponse({
                 "total": total,
                 "chefs": chefs,
                 "medecins": medecins,
-                "residents": residents
+                "residents": residents,
+                "techniciens": techniciens,
+                "medecinReferants": medecin_referants
             })
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)

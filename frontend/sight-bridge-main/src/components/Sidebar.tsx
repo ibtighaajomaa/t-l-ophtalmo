@@ -34,13 +34,13 @@ const NAV: NavItem[] = [
     to: "/worklist",
     label: "Worklist",
     icon: ClipboardList,
-    roles: ["Admin", "Chef", "Medecin", "Resident"],
+    roles: ["Admin", "Chef", "Medecin", "Resident", "Technicien", "MedecinReferant"],
   },
   {
     to: "/analyse",
     label: "Analyse",
     icon: BarChart3,
-    roles: ["Admin", "Chef", "Medecin", "Resident"],
+    roles: ["Admin", "Chef", "Medecin", "Resident", "Technicien", "MedecinReferant"],
   },
   {
     to: "/historique/examens",
@@ -52,7 +52,7 @@ const NAV: NavItem[] = [
     to: "/calendrier",
     label: "Calendrier",
     icon: Calendar,
-    roles: ["Admin", "Chef", "Medecin", "Resident"],
+    roles: ["Admin", "Chef", "Medecin", "Resident", "Technicien", "MedecinReferant"],
   },
   {
     to: "/logs",
@@ -62,7 +62,7 @@ const NAV: NavItem[] = [
   },
 ];
 
-const HISTORY_ROLES: Role[] = ["Admin", "Chef", "Medecin", "Resident"];
+const HISTORY_ROLES: Role[] = ["Admin", "Chef", "Medecin", "Resident", "Technicien", "MedecinReferant"];
 
 export function Sidebar() {
   const { user, logout } = useAuth();

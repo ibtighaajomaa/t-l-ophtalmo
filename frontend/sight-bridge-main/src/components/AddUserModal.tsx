@@ -1,4 +1,4 @@
-/** Modal — Admin crée Chef de Service, Médecin (ophtalmologue) ou Résident. */
+/** Modal — Admin crée Chef de Service, Médecin (ophtalmologue), Résident, Technicien ou Médecin Référant. */
 import { useState } from "react";
 import {
   X,
@@ -8,17 +8,21 @@ import {
   Briefcase,
   CheckCircle2,
   ShieldCheck,
+  Wrench,
+  HeartPulse,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAuth, type Role } from "@/lib/auth-context";
 
-type CreatableRole = Extract<Role, "Admin" | "Chef" | "Medecin" | "Resident">;
+type CreatableRole = Extract<Role, "Admin" | "Chef" | "Medecin" | "Resident" | "Technicien" | "MedecinReferant">;
 
 const ROLE_OPTIONS: { value: CreatableRole; label: string; icon: LucideIcon }[] = [
   { value: "Admin", label: "Administrateur", icon: ShieldCheck },
   { value: "Chef", label: "Chef de Service", icon: Briefcase },
   { value: "Medecin", label: "Ophtalmologue", icon: Stethoscope },
   { value: "Resident", label: "Résident", icon: GraduationCap },
+  { value: "Technicien", label: "Technicien", icon: Wrench },
+  { value: "MedecinReferant", label: "Médecin Référant", icon: HeartPulse },
 ];
 
 export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -78,7 +82,7 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
         <form onSubmit={submit} className="space-y-4 p-6">
           <div>
             <label className="mb-2 block text-xs font-medium text-slate-600">Rôle</label>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {(user?.role === "Admin"
                 ? ROLE_OPTIONS
                 : ROLE_OPTIONS.filter((r) => r.value === "Medecin" || r.value === "Resident")

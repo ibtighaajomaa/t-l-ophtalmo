@@ -11,6 +11,8 @@ import {
   X,
   UserCheck,
   UserX,
+  Wrench,
+  HeartPulse,
 } from "lucide-react";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { Navbar } from "@/components/Navbar";
@@ -30,6 +32,8 @@ const ROLE_FILTERS: { value: "all" | Role; label: string }[] = [
   { value: "Chef", label: "Chefs de Service" },
   { value: "Medecin", label: "Ophtalmologues" },
   { value: "Resident", label: "Résidents" },
+  { value: "Technicien", label: "Techniciens" },
+  { value: "MedecinReferant", label: "Médecins Référants" },
 ];
 
 function AdminDashboard() {
@@ -222,7 +226,7 @@ function AdminDashboard() {
       <Navbar title="Dashboard" subtitle="Supervision globale & gestion des utilisateurs" />
       <div className="flex-1 p-6 space-y-6">
         {/* Stats */}
-        <div className="grid sm:grid-cols-4 gap-4">
+        <div className="grid sm:grid-cols-3 lg:grid-cols-6 gap-4">
           <StatCard label="Chefs de Service" value={stats.chefs} accent="blue" icon={Briefcase} />
           <StatCard
             label="Ophtalmologues"
@@ -236,7 +240,9 @@ function AdminDashboard() {
             accent="orange"
             icon={GraduationCap}
           />
-          <StatCard label="Utilisateurs totaux" value={stats.total} accent="slate" icon={Users} />
+          <StatCard label="Techniciens" value={stats.techniciens ?? 0} accent="purple" icon={Wrench} />
+          <StatCard label="Méd. Référants" value={stats.medecinReferants ?? 0} accent="rose" icon={HeartPulse} />
+          <StatCard label="Total" value={stats.total} accent="slate" icon={Users} />
         </div>
 
         {/* Liste utilisateurs */}
@@ -549,11 +555,15 @@ function AdminDashboard() {
                       <option value="Chef">Chef de Service</option>
                       <option value="Medecin">Ophtalmologue</option>
                       <option value="Resident">Résident</option>
+                      <option value="Technicien">Technicien</option>
+                      <option value="MedecinReferant">Médecin Référant</option>
                     </>
                   ) : (
                     <>
                       <option value="Medecin">Ophtalmologue</option>
                       <option value="Resident">Résident</option>
+                      <option value="Technicien">Technicien</option>
+                      <option value="MedecinReferant">Médecin Référant</option>
                     </>
                   )}
                 </select>
@@ -590,6 +600,8 @@ function RoleBadge({ role }: { role: Role }) {
     Chef: { label: "Chef de Service", cls: "bg-blue-50 text-blue-700" },
     Medecin: { label: "Ophtalmologue", cls: "bg-emerald-50 text-emerald-700" },
     Resident: { label: "Résident", cls: "bg-orange-50 text-orange-700" },
+    Technicien: { label: "Technicien", cls: "bg-purple-50 text-purple-700" },
+    MedecinReferant: { label: "Médecin Référant", cls: "bg-rose-50 text-rose-700" },
   };
   const { label, cls } = map[role] || {
     label: role || "Inconnu",
@@ -606,7 +618,7 @@ function StatCard({
 }: {
   label: string;
   value: number;
-  accent: "blue" | "green" | "orange" | "slate";
+  accent: "blue" | "green" | "orange" | "slate" | "purple" | "rose";
   icon: typeof Users;
 }) {
   const map = {
@@ -614,6 +626,8 @@ function StatCard({
     green: "from-emerald-500 to-emerald-600",
     orange: "from-orange-500 to-orange-600",
     slate: "from-slate-500 to-slate-700",
+    purple: "from-purple-500 to-purple-600",
+    rose: "from-rose-500 to-rose-600",
   } as const;
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
