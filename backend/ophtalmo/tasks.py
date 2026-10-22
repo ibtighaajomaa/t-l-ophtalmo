@@ -1496,7 +1496,7 @@ def tache_sync_orthanc_incremental():
             skipped += 1
             continue
 
-        Exam.objects.create(
+        new_exam = Exam.objects.create(
             study_instance_uid=dicom_study_uid,
             **patient,
             exam_type='Rétinographie',
@@ -1507,6 +1507,8 @@ def tache_sync_orthanc_incremental():
             modality_ip=origin['modality_ip'],
             notes='',
         )
+        from .patient_referrals import link_exam_to_pending_referral
+        link_exam_to_pending_referral(new_exam)
         created += 1
 
     cache.set('orthanc_changes_seq', new_seq, timeout=None)

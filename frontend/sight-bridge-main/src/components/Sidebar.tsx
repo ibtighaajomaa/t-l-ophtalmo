@@ -34,13 +34,19 @@ const NAV: NavItem[] = [
     to: "/worklist",
     label: "Worklist",
     icon: ClipboardList,
-    roles: ["Admin", "Chef", "Medecin", "Resident", "Technicien", "MedecinReferant"],
+    roles: ["Admin", "Chef", "Medecin", "Resident", "Technicien"],
+  },
+  {
+    to: "/patients",
+    label: "Patients adressés",
+    icon: Users,
+    roles: ["MedecinReferant"],
   },
   {
     to: "/analyse",
     label: "Analyse",
     icon: BarChart3,
-    roles: ["Admin", "Chef", "Medecin", "Resident", "MedecinReferant"],
+    roles: ["Admin", "Chef", "Medecin", "Resident"],
   },
   {
     to: "/historique/examens",
@@ -52,7 +58,7 @@ const NAV: NavItem[] = [
     to: "/calendrier",
     label: "Calendrier",
     icon: Calendar,
-    roles: ["Admin", "Chef", "Medecin", "Resident", "MedecinReferant"],
+    roles: ["Admin", "Chef", "Medecin", "Resident"],
   },
   {
     to: "/logs",

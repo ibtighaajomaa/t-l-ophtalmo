@@ -1473,3 +1473,90 @@ class TechnicienEtablissementFilterTest(TestCase):
         res = self._get(self.exam_stats, self.tech, "/api/exams/stats/", {"region": "Kélibia"})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["En attente"], 2)
+
+
+class PatientReferralTest(TestCase):
+    """Le médecin référant adresse un patient ; l'examen du même ID en hérite."""
+
+    def setUp(self):
+        from ophtalmo.views import patient_referrals
+        from users.models import Profil
+
+        self.view = patient_referrals
+        self.factory = APIRequestFactory()
+        User = get_user_model()
+        self.referant = User.objects.create_user(username="ref", email="ref@x.tn", password="x")
+        Profil.objects.create(user=self.referant, role="MedecinReferant", region_affectation="Kélibia")
+        self.autre_referant = User.objects.create_user(username="ref2", email="ref2@x.tn", password="x")
+        Profil.objects.create(user=self.autre_referant, role="MedecinReferant")
+        self.ophtalmo = User.objects.create_user(username="oph", email="oph@x.tn", password="x")
+        Profil.objects.create(user=self.ophtalmo, role="Medecin")
+
+    def _post(self, user, data):
+        request = self.factory.post("/api/patients-adresses/", data, format="json")
+        force_authenticate(request, user=user)
+        return self.view(request)
+
+    def _get(self, user):
+        request = self.factory.get("/api/patients-adresses/")
+        force_authenticate(request, user=user)
+        return self.view(request)
+
+    def _valid(self, **over):
+        data = {
+            "patient_id": "P-100",
+            "patient_age": 58,
+            "priority": "Urgent",
+            "clinical_info": {"diabete_type": "Type 2", "hta": "oui", "motif_notes": "Baisse d'acuité"},
+        }
+        data.update(over)
+        return data
+
+    def test_saisie_rattachee_a_l_examen_existant(self):
+        exam = Exam.objects.create(patient_name="X", patient_id="p-100", date=TODAY)
+        res = self._post(self.referant, self._valid())
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data["exam_id"], exam.id)
+        self.assertEqual(res.data["etablissement"], "Kélibia")
+        exam.refresh_from_db()
+        self.assertEqual(exam.priority, "Urgent")
+        self.assertEqual(exam.patient_age, 58)
+        self.assertIn("Type de diabète: Type 2", exam.patient_history)
+        self.assertIn("HTA: Oui", exam.patient_history)
+
+    def test_examen_interprete_non_modifie(self):
+        exam = Exam.objects.create(patient_name="X", patient_id="P-100", date=TODAY, status="Interprété")
+        res = self._post(self.referant, self._valid())
+        self.assertIsNone(res.data["exam_id"])
+        exam.refresh_from_db()
+        self.assertEqual(exam.priority, "Normal")
+
+    def test_examen_arrive_apres_la_saisie(self):
+        from ophtalmo.patient_referrals import link_exam_to_pending_referral
+
+        self._post(self.referant, self._valid())
+        exam = Exam.objects.create(patient_name="X", patient_id="P-100", date=TODAY, patient_age=60)
+        referral = link_exam_to_pending_referral(exam)
+        self.assertIsNotNone(referral)
+        exam.refresh_from_db()
+        self.assertEqual(exam.priority, "Urgent")
+        self.assertEqual(exam.patient_age, 60)  # l'âge DICOM est conservé
+        self.assertEqual(exam.clinical_info["diabete_type"], "Type 2")
+        # Une seconde acquisition ne réutilise pas une saisie déjà rattachée.
+        other = Exam.objects.create(patient_name="X", patient_id="P-100", date=TODAY)
+        self.assertIsNone(link_exam_to_pending_referral(other))
+
+    def test_validation(self):
+        res = self._post(self.referant, self._valid(patient_id=" ", patient_age="abc", priority="Haute"))
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(set(res.data["fields"]), {"patient_id", "patient_age", "priority"})
+
+    def test_reserve_au_medecin_referant(self):
+        self.assertEqual(self._post(self.ophtalmo, self._valid()).status_code, 403)
+        self.assertEqual(self._get(self.ophtalmo).status_code, 403)
+
+    def test_chaque_referant_ne_voit_que_ses_patients(self):
+        self._post(self.referant, self._valid())
+        self._post(self.autre_referant, self._valid(patient_id="P-200"))
+        res = self._get(self.referant)
+        self.assertEqual([r["patient_id"] for r in res.data], ["P-100"])

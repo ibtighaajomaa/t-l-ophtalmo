@@ -238,7 +238,7 @@ function clinicalBoolean(info: Record<string, unknown> | null | undefined, keys:
 
 function ClinicalHistoryModal({ exam, onClose }: { exam: Exam; onClose: () => void }) {
   const info = exam.clinicalInfo;
-  const diabetesType = clinicalValue(info, ["diabetes_type", "type_diabete", "typeDiabete"]);
+  const diabetesType = clinicalValue(info, ["diabetes_type", "diabete_type", "type_diabete", "typeDiabete"]);
   const hta = clinicalBoolean(info, ["hta", "hypertension", "hypertension_arterielle"]);
   const otherPathology = clinicalValue(info, ["other_pathology", "autre_pathologie", "autrePathologie"]);
   const notes = clinicalValue(info, ["notes", "motif", "motif_notes", "motifNotes", "clinical_notes"]);
@@ -350,12 +350,12 @@ function ClinicalHistoryModal({ exam, onClose }: { exam: Exam; onClose: () => vo
 
                 <div className="grid gap-3 sm:grid-cols-[1fr_180px]">
                   <Field label="Dernière glycémie" value={clinicalValue(info, ["last_glycemia", "derniere_glycemie", "glycemie"])} />
-                  <Field label="Date" value={clinicalValue(info, ["last_glycemia_date", "date_glycemie"])} />
+                  <Field label="Date" value={clinicalValue(info, ["last_glycemia_date", "date_derniere_glycemie", "date_glycemie"])} />
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-[1fr_180px]">
                   <Field label="Dernière HbA1c" value={clinicalValue(info, ["last_hba1c", "derniere_hba1c", "hba1c"])} />
-                  <Field label="Date" value={clinicalValue(info, ["last_hba1c_date", "date_hba1c"])} />
+                  <Field label="Date" value={clinicalValue(info, ["last_hba1c_date", "date_derniere_hba1c", "date_hba1c"])} />
                 </div>
               </div>
             </section>

@@ -371,3 +371,41 @@ class ExamStatusHistory(models.Model):
 
     def __str__(self):
         return f"Examen {self.exam_id} : {self.status} ({self.changed_at:%Y-%m-%d %H:%M})"
+
+
+class PatientReferral(models.Model):
+    """Patient adressé par un médecin référant avant l'acquisition.
+
+    Les renseignements saisis (âge, antécédents, priorité) sont reportés sur
+    l'examen du même identifiant patient dès qu'il arrive d'Orthanc.
+    """
+
+    patient_id = models.CharField(max_length=255, db_index=True)
+    patient_age = models.PositiveIntegerField()
+    clinical_info = models.JSONField(null=True, blank=True)
+    patient_history = models.TextField(blank=True, default="")
+    priority = models.CharField(
+        max_length=20, choices=Exam.Priority.choices, default=Exam.Priority.NORMAL
+    )
+    etablissement = models.CharField(max_length=255, blank=True, default="")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="patient_referrals",
+    )
+    exam = models.OneToOneField(
+        Exam,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="referral",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return f"Patient {self.patient_id} adressé ({self.priority})"

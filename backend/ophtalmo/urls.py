@@ -3,6 +3,7 @@ from . import views
 
 urlpatterns = [
     path('api/exams/', views.exam_list, name='exam-list'),
+    path('api/patients-adresses/', views.patient_referrals, name='patient-referrals'),
     path('api/exams/stats/', views.exam_stats, name='exam-stats'),
     path('api/dmi/exams/', views.dmi_exam_upsert, name='dmi-exam-upsert'),
     path('api/dmi/exams/<str:numero_examen>/acquisition-dicom/', views.dmi_exam_acquisition_dicom, name='dmi-exam-acquisition-dicom'),

@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { Eye, EyeOff, Lock, Mail, ShieldCheck } from "lucide-react";
-import { useAuth } from "@/lib/auth-context";
+import { useAuth, homePathFor } from "@/lib/auth-context";
 import ForgotPassword from "../components/ForgotPassword";
 
 export const Route = createFileRoute("/login")({
@@ -23,7 +23,7 @@ function LoginPage() {
 
   if (user) {
     navigate({
-      to: user.role === "Admin" ? "/admin" : "/worklist",
+      to: homePathFor(user.role),
     });
   }
 

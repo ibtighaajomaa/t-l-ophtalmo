@@ -16,6 +16,7 @@ from .models import (
     ImageQualityAssessment,
     MedicalReport,
     MedicalReportVersion,
+    PatientReferral,
 )
 from .serializers import (
     ExamSerializer,
@@ -26,6 +27,11 @@ from .serializers import (
 )
 from users.authentication import KeycloakAuthentication
 from .dicom_patient import patient_metadata
+from .patient_referrals import (
+    build_history,
+    link_exam_to_pending_referral,
+    link_referral_to_existing_exam,
+)
 from .orthanc_origin import resolve_study_origin
 from .etablissements import filter_exams_by_etablissement
 from .analysis_utils import (
@@ -931,7 +937,13 @@ def sync_orthanc(request):
                 if existing.patient_name != patient['patient_name']:
                     existing.patient_name = patient['patient_name']
                     changed_fields.append('patient_name')
+                # Les renseignements saisis par le médecin référant priment sur les tags DICOM.
+                referred = PatientReferral.objects.filter(exam=existing).exists()
                 for field in ('patient_id', 'patient_birth_date', 'patient_age', 'patient_history'):
+                    if referred and field == 'patient_history':
+                        continue
+                    if referred and field == 'patient_age' and patient[field] is None:
+                        continue
                     if getattr(existing, field) != patient[field]:
                         setattr(existing, field, patient[field])
                         changed_fields.append(field)
@@ -948,7 +960,7 @@ def sync_orthanc(request):
                     existing.save(update_fields=changed_fields + ['updated_at'])
             updated += 1
         else:
-            Exam.objects.create(
+            new_exam = Exam.objects.create(
                 study_instance_uid=dicom_study_uid,
                 **patient,
                 exam_type='Rétinographie',
@@ -959,6 +971,7 @@ def sync_orthanc(request):
                 modality_ip=origin['modality_ip'],
                 notes='',
             )
+            link_exam_to_pending_referral(new_exam)
             created += 1
 
     # New studies go through FTHNet, then segmentation and distribution.
@@ -1128,6 +1141,7 @@ def orthanc_webhook(request):
         modality_ip=origin['modality_ip'],
         notes='',
     )
+    link_exam_to_pending_referral(exam)
 
     # Évaluer d'abord la qualité; cette tâche déclenche ensuite la segmentation.
     try:
@@ -2897,3 +2911,113 @@ def export_report_docx(request, pk):
     buffer = export_report_to_docx(report)
     filename = f"rapport-{report.patient_id}-{report.pk}.docx"
     return FileResponse(buffer, as_attachment=True, filename=filename)
+
+
+def _is_medecin_referant(request):
+    if not request.user.is_authenticated:
+        return False
+    roles = getattr(request, 'roles', []) or []
+    if any(r in roles for r in ('MEDECIN_REFERANT', 'MedecinReferant')):
+        return True
+    try:
+        return request.user.profil.role in ('MedecinReferant', 'MEDECIN_REFERANT')
+    except Exception:
+        return False
+
+
+REFERRAL_CLINICAL_KEYS = (
+    'diabete_type', 'duree_diabete', 'derniere_glycemie', 'date_derniere_glycemie',
+    'derniere_hba1c', 'date_derniere_hba1c', 'type_traitement', 'hta',
+    'autre_pathologie', 'motif_notes',
+)
+
+
+def _referral_payload(referral):
+    exam = referral.exam
+    return {
+        'id': referral.id,
+        'patient_id': referral.patient_id,
+        'patient_age': referral.patient_age,
+        'priority': referral.priority,
+        'clinical_info': referral.clinical_info or {},
+        'patient_history': referral.patient_history,
+        'etablissement': referral.etablissement,
+        'created_at': referral.created_at.isoformat(),
+        'created_by_name': (
+            f"{referral.created_by.first_name} {referral.created_by.last_name}".strip()
+            or referral.created_by.email
+        ) if referral.created_by else '',
+        'exam_id': exam.id if exam else None,
+        'exam_status': exam.status if exam else None,
+        'exam_date': exam.date.isoformat() if exam and exam.date else None,
+    }
+
+
+@api_view(['GET', 'POST'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def patient_referrals(request):
+    """Patients adressés par le médecin référant (saisie + suivi)."""
+    is_admin, _ = _role_flags(request)
+    is_referant = _is_medecin_referant(request)
+    if not (is_admin or is_referant):
+        return Response({'error': 'Accès réservé au médecin référant.'}, status=status.HTTP_403_FORBIDDEN)
+
+    if request.method == 'GET':
+        qs = PatientReferral.objects.select_related('exam', 'created_by')
+        if not is_admin:
+            qs = qs.filter(created_by=request.user)
+        q = (request.query_params.get('search') or '').strip()
+        if q:
+            qs = qs.filter(patient_id__icontains=q)
+        return Response([_referral_payload(r) for r in qs[:500]])
+
+    if not is_referant:
+        return Response({'error': 'Seul le médecin référant peut adresser un patient.'}, status=status.HTTP_403_FORBIDDEN)
+
+    data = request.data or {}
+    errors = {}
+    patient_id = str(data.get('patient_id') or '').strip()
+    if not patient_id:
+        errors['patient_id'] = "L'identifiant patient est obligatoire."
+    elif len(patient_id) > 255:
+        errors['patient_id'] = "Identifiant patient trop long."
+    try:
+        age = int(str(data.get('patient_age', '')).strip())
+        if age < 0 or age > 130:
+            raise ValueError
+    except (TypeError, ValueError):
+        errors['patient_age'] = "Âge invalide (0 à 130 ans)."
+        age = None
+    priority = data.get('priority') or Exam.Priority.NORMAL
+    if priority not in Exam.Priority.values:
+        errors['priority'] = "Priorité invalide (Urgent ou Normal)."
+    raw_info = data.get('clinical_info') or {}
+    if not isinstance(raw_info, dict):
+        errors['clinical_info'] = "Format des antécédents invalide."
+        raw_info = {}
+    if errors:
+        return Response({'error': 'Formulaire invalide.', 'fields': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    clinical_info = {
+        k: str(raw_info[k]).strip()[:2000]
+        for k in REFERRAL_CLINICAL_KEYS
+        if raw_info.get(k) not in (None, '') and str(raw_info[k]).strip()
+    }
+    try:
+        etablissement = request.user.profil.region_affectation or ''
+    except Exception:
+        etablissement = ''
+
+    referral = PatientReferral.objects.create(
+        patient_id=patient_id,
+        patient_age=age,
+        priority=priority,
+        clinical_info=clinical_info or None,
+        patient_history=build_history(clinical_info),
+        etablissement=etablissement,
+        created_by=request.user,
+    )
+    link_referral_to_existing_exam(referral)
+    referral.refresh_from_db()
+    return Response(_referral_payload(referral), status=status.HTTP_201_CREATED)

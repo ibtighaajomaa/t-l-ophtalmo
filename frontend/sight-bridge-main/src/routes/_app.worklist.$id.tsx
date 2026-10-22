@@ -18,6 +18,7 @@ import {
   Layers,
 } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AIPanel } from "@/components/AIPanel";
 import { fetchAnalysis, getExam, updateExam } from "@/lib/exam-api";
 import { createOhifBridge } from "@/lib/ohif-bridge";
@@ -25,7 +26,11 @@ import type { Exam } from "@/lib/mock-worklist";
 import type { OhifBridge } from "@/lib/ohif-bridge";
 
 export const Route = createFileRoute("/_app/worklist/$id")({
-  component: ExamDetail,
+  component: () => (
+    <ProtectedRoute roles={["Admin", "Chef", "Medecin", "Resident", "Technicien"]}>
+      <ExamDetail />
+    </ProtectedRoute>
+  ),
 });
 
 // ── Segmentation series data ────────────────────────────────────────────────

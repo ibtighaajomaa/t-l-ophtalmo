@@ -14,6 +14,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppWorklistRouteImport } from './routes/_app.worklist'
+import { Route as AppPatientsRouteImport } from './routes/_app.patients'
 import { Route as AppLogsRouteImport } from './routes/_app.logs'
 import { Route as AppCalendrierRouteImport } from './routes/_app.calendrier'
 import { Route as AppAnalyseRouteImport } from './routes/_app.analyse'
@@ -44,6 +45,11 @@ const IndexRoute = IndexRouteImport.update({
 const AppWorklistRoute = AppWorklistRouteImport.update({
   id: '/worklist',
   path: '/worklist',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPatientsRoute = AppPatientsRouteImport.update({
+  id: '/patients',
+  path: '/patients',
   getParentRoute: () => AppRoute,
 } as any)
 const AppLogsRoute = AppLogsRouteImport.update({
@@ -90,6 +96,7 @@ export interface FileRoutesByFullPath {
   '/analyse': typeof AppAnalyseRoute
   '/calendrier': typeof AppCalendrierRoute
   '/logs': typeof AppLogsRoute
+  '/patients': typeof AppPatientsRoute
   '/worklist': typeof AppWorklistRouteWithChildren
   '/compte-rendu/$id': typeof AppCompteRenduIdRoute
   '/historique/examens': typeof AppHistoriqueExamensRoute
@@ -103,6 +110,7 @@ export interface FileRoutesByTo {
   '/analyse': typeof AppAnalyseRoute
   '/calendrier': typeof AppCalendrierRoute
   '/logs': typeof AppLogsRoute
+  '/patients': typeof AppPatientsRoute
   '/worklist': typeof AppWorklistRouteWithChildren
   '/compte-rendu/$id': typeof AppCompteRenduIdRoute
   '/historique/examens': typeof AppHistoriqueExamensRoute
@@ -118,6 +126,7 @@ export interface FileRoutesById {
   '/_app/analyse': typeof AppAnalyseRoute
   '/_app/calendrier': typeof AppCalendrierRoute
   '/_app/logs': typeof AppLogsRoute
+  '/_app/patients': typeof AppPatientsRoute
   '/_app/worklist': typeof AppWorklistRouteWithChildren
   '/_app/compte-rendu/$id': typeof AppCompteRenduIdRoute
   '/_app/historique/examens': typeof AppHistoriqueExamensRoute
@@ -133,6 +142,7 @@ export interface FileRouteTypes {
     | '/analyse'
     | '/calendrier'
     | '/logs'
+    | '/patients'
     | '/worklist'
     | '/compte-rendu/$id'
     | '/historique/examens'
@@ -146,6 +156,7 @@ export interface FileRouteTypes {
     | '/analyse'
     | '/calendrier'
     | '/logs'
+    | '/patients'
     | '/worklist'
     | '/compte-rendu/$id'
     | '/historique/examens'
@@ -160,6 +171,7 @@ export interface FileRouteTypes {
     | '/_app/analyse'
     | '/_app/calendrier'
     | '/_app/logs'
+    | '/_app/patients'
     | '/_app/worklist'
     | '/_app/compte-rendu/$id'
     | '/_app/historique/examens'
@@ -208,6 +220,13 @@ declare module '@tanstack/react-router' {
       path: '/worklist'
       fullPath: '/worklist'
       preLoaderRoute: typeof AppWorklistRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/patients': {
+      id: '/_app/patients'
+      path: '/patients'
+      fullPath: '/patients'
+      preLoaderRoute: typeof AppPatientsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/logs': {
@@ -279,6 +298,7 @@ interface AppRouteChildren {
   AppAnalyseRoute: typeof AppAnalyseRoute
   AppCalendrierRoute: typeof AppCalendrierRoute
   AppLogsRoute: typeof AppLogsRoute
+  AppPatientsRoute: typeof AppPatientsRoute
   AppWorklistRoute: typeof AppWorklistRouteWithChildren
   AppCompteRenduIdRoute: typeof AppCompteRenduIdRoute
   AppHistoriqueExamensRoute: typeof AppHistoriqueExamensRoute
@@ -289,6 +309,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAnalyseRoute: AppAnalyseRoute,
   AppCalendrierRoute: AppCalendrierRoute,
   AppLogsRoute: AppLogsRoute,
+  AppPatientsRoute: AppPatientsRoute,
   AppWorklistRoute: AppWorklistRouteWithChildren,
   AppCompteRenduIdRoute: AppCompteRenduIdRoute,
   AppHistoriqueExamensRoute: AppHistoriqueExamensRoute,

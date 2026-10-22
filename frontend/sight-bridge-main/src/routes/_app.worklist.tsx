@@ -2,9 +2,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Navbar } from "@/components/Navbar";
 import { Worklist } from "@/components/Worklist";
 import { useAuth } from "@/lib/auth-context";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
 
 export const Route = createFileRoute("/_app/worklist")({
-  component: WorklistPage,
+  component: () => (
+    <ProtectedRoute roles={["Admin", "Chef", "Medecin", "Resident", "Technicien"]}>
+      <WorklistPage />
+    </ProtectedRoute>
+  ),
 });
 
 function WorklistPage() {
