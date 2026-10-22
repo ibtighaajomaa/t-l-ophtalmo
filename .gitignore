@@ -31,3 +31,4 @@ monai-label/cache/
 monai-label/models/
 monai-apps/radiology/logs/
 Eye-laterality-detection/
+/t-l-ophtalmo/
