@@ -980,7 +980,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
   );
 }
 
-function StatPill({
+export function StatPill({
   label,
   value,
   icon: Icon,

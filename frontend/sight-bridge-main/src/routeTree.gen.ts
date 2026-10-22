@@ -18,6 +18,7 @@ import { Route as AppPatientsRouteImport } from './routes/_app.patients'
 import { Route as AppLogsRouteImport } from './routes/_app.logs'
 import { Route as AppCalendrierRouteImport } from './routes/_app.calendrier'
 import { Route as AppAnalyseRouteImport } from './routes/_app.analyse'
+import { Route as AppAjouterPatientRouteImport } from './routes/_app.ajouter-patient'
 import { Route as AppAdminRouteImport } from './routes/_app.admin'
 import { Route as AppWorklistIdRouteImport } from './routes/_app.worklist.$id'
 import { Route as AppHistoriqueExamensRouteImport } from './routes/_app.historique.examens'
@@ -67,6 +68,11 @@ const AppAnalyseRoute = AppAnalyseRouteImport.update({
   path: '/analyse',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAjouterPatientRoute = AppAjouterPatientRouteImport.update({
+  id: '/ajouter-patient',
+  path: '/ajouter-patient',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAdminRoute = AppAdminRouteImport.update({
   id: '/admin',
   path: '/admin',
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/reset-password': typeof ResetPasswordRoute
   '/admin': typeof AppAdminRoute
+  '/ajouter-patient': typeof AppAjouterPatientRoute
   '/analyse': typeof AppAnalyseRoute
   '/calendrier': typeof AppCalendrierRoute
   '/logs': typeof AppLogsRoute
@@ -107,6 +114,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/reset-password': typeof ResetPasswordRoute
   '/admin': typeof AppAdminRoute
+  '/ajouter-patient': typeof AppAjouterPatientRoute
   '/analyse': typeof AppAnalyseRoute
   '/calendrier': typeof AppCalendrierRoute
   '/logs': typeof AppLogsRoute
@@ -123,6 +131,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/reset-password': typeof ResetPasswordRoute
   '/_app/admin': typeof AppAdminRoute
+  '/_app/ajouter-patient': typeof AppAjouterPatientRoute
   '/_app/analyse': typeof AppAnalyseRoute
   '/_app/calendrier': typeof AppCalendrierRoute
   '/_app/logs': typeof AppLogsRoute
@@ -139,6 +148,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/reset-password'
     | '/admin'
+    | '/ajouter-patient'
     | '/analyse'
     | '/calendrier'
     | '/logs'
@@ -153,6 +163,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/reset-password'
     | '/admin'
+    | '/ajouter-patient'
     | '/analyse'
     | '/calendrier'
     | '/logs'
@@ -168,6 +179,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/reset-password'
     | '/_app/admin'
+    | '/_app/ajouter-patient'
     | '/_app/analyse'
     | '/_app/calendrier'
     | '/_app/logs'
@@ -250,6 +262,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAnalyseRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/ajouter-patient': {
+      id: '/_app/ajouter-patient'
+      path: '/ajouter-patient'
+      fullPath: '/ajouter-patient'
+      preLoaderRoute: typeof AppAjouterPatientRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/admin': {
       id: '/_app/admin'
       path: '/admin'
@@ -295,6 +314,7 @@ const AppWorklistRouteWithChildren = AppWorklistRoute._addFileChildren(
 
 interface AppRouteChildren {
   AppAdminRoute: typeof AppAdminRoute
+  AppAjouterPatientRoute: typeof AppAjouterPatientRoute
   AppAnalyseRoute: typeof AppAnalyseRoute
   AppCalendrierRoute: typeof AppCalendrierRoute
   AppLogsRoute: typeof AppLogsRoute
@@ -306,6 +326,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppAdminRoute: AppAdminRoute,
+  AppAjouterPatientRoute: AppAjouterPatientRoute,
   AppAnalyseRoute: AppAnalyseRoute,
   AppCalendrierRoute: AppCalendrierRoute,
   AppLogsRoute: AppLogsRoute,

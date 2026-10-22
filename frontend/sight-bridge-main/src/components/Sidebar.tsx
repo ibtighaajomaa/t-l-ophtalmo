@@ -3,7 +3,6 @@ import { useState } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
   LayoutDashboard,
-  Users,
   ClipboardList,
   Eye,
   LogOut,
@@ -37,9 +36,16 @@ const NAV: NavItem[] = [
     roles: ["Admin", "Chef", "Medecin", "Resident", "Technicien"],
   },
   {
+    to: "/ajouter-patient",
+    label: "Ajouter le patient",
+    icon: UserPlus,
+    roles: ["MedecinReferant"],
+  },
+  {
+    // Worklist du médecin référant : ses patients adressés et le suivi de leurs examens.
     to: "/patients",
-    label: "Patients adressés",
-    icon: Users,
+    label: "Worklist",
+    icon: ClipboardList,
     roles: ["MedecinReferant"],
   },
   {

@@ -170,7 +170,7 @@ function CompteRenduPage() {
           to={isReferant ? "/patients" : "/worklist"}
           className="mb-5 inline-flex items-center gap-1.5 text-sm text-slate-600 hover:text-blue-600"
         >
-          <ArrowLeft className="h-4 w-4" /> {isReferant ? "Patients adressés" : "Worklist"}
+          <ArrowLeft className="h-4 w-4" /> Worklist
         </Link>
 
         {error ? (
