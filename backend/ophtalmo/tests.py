@@ -1463,6 +1463,17 @@ class TechnicienEtablissementFilterTest(TestCase):
         ids = {e["id"] for e in res.data["results"]}
         self.assertEqual(ids, {self.kebili_by_region.id, self.kebili_by_ip.id})
 
+    def test_stats_qualite_du_technicien(self):
+        Exam.objects.filter(id=self.kebili_by_region.id).update(quality_category="good")
+        Exam.objects.filter(id=self.kebili_by_ip.id).update(quality_category="bad", priority="Urgent")
+        Exam.objects.filter(id=self.kelibia.id).update(quality_category="good")  # autre établissement
+        res = self._get(self.exam_stats, self.tech, "/api/exams/stats/")
+        self.assertEqual(
+            (res.data["quality_good"], res.data["quality_acceptable"], res.data["quality_bad"]), (1, 0, 1)
+        )
+        res = self._get(self.exam_stats, self.tech, "/api/exams/stats/", {"priority": "Urgent"})
+        self.assertEqual((res.data["total"], res.data["quality_good"], res.data["quality_bad"]), (1, 0, 1))
+
     def test_technicien_sans_etablissement_ne_voit_rien(self):
         res = self._get(self.exam_list, self.tech_sans_etab, "/api/exams/")
         self.assertEqual(res.data["count"], 0)
@@ -1547,9 +1558,64 @@ class PatientReferralTest(TestCase):
         self.assertIsNone(link_exam_to_pending_referral(other))
 
     def test_validation(self):
-        res = self._post(self.referant, self._valid(patient_id=" ", patient_age="abc", priority="Haute"))
+        res = self._post(
+            self.referant,
+            self._valid(
+                patient_id=" ",
+                patient_age="abc",
+                priority="Haute",
+                clinical_info={"date_derniere_hba1c": "102026-02-22", "date_derniere_glycemie": "2999-01-01"},
+            ),
+        )
         self.assertEqual(res.status_code, 400)
-        self.assertEqual(set(res.data["fields"]), {"patient_id", "patient_age", "priority"})
+        self.assertEqual(
+            set(res.data["fields"]),
+            {"patient_id", "patient_age", "priority", "date_derniere_hba1c", "date_derniere_glycemie"},
+        )
+
+    def test_age_facultatif(self):
+        data = self._valid()
+        del data["patient_age"]
+        res = self._post(self.referant, data)
+        self.assertEqual(res.status_code, 201)
+        self.assertIsNone(res.data["patient_age"])
+
+    def _report_for(self, exam):
+        from ophtalmo.models import MedicalReport
+
+        return MedicalReport.objects.create(patient_id=exam.patient_id, examination_id=str(exam.id), ai_content="IA")
+
+    def _call(self, view, method, user, pk, data=None):
+        request = getattr(self.factory, method)("/x/", data or {}, format="json")
+        force_authenticate(request, user=user)
+        return view(request, pk=pk)
+
+    def test_compte_rendu_de_ses_patients_seulement(self):
+        from ophtalmo.views import exam_detail, medical_report_detail, medical_report_list, sign_medical_report
+
+        mine = Exam.objects.create(patient_name="X", patient_id="P-100", date=TODAY)
+        other = Exam.objects.create(patient_name="Y", patient_id="P-999", date=TODAY, status="Interprété")
+        self._post(self.referant, self._valid())
+        Exam.objects.filter(id=mine.id).update(status="Interprété")
+        my_report, other_report = self._report_for(mine), self._report_for(other)
+
+        self.assertEqual(self._call(exam_detail, "get", self.referant, mine.id).status_code, 200)
+        self.assertEqual(self._call(exam_detail, "get", self.referant, other.id).status_code, 403)
+        self.assertEqual(self._call(exam_detail, "put", self.referant, mine.id, {"notes": "x"}).status_code, 403)
+
+        res = self._call(medical_report_detail, "put", self.referant, my_report.id, {"doctor_content": "<p>Modifié</p>"})
+        self.assertEqual(res.status_code, 200)
+        my_report.refresh_from_db()
+        self.assertEqual(my_report.doctor_content, "<p>Modifié</p>")
+        self.assertEqual(my_report.versions.last().modified_by, self.referant)
+        self.assertEqual(self._call(medical_report_detail, "get", self.referant, other_report.id).status_code, 403)
+        self.assertEqual(self._call(sign_medical_report, "post", self.referant, my_report.id).status_code, 403)
+
+        request = self.factory.get("/api/exams/medical-reports/")
+        force_authenticate(request, user=self.referant)
+        self.assertEqual([r["id"] for r in medical_report_list(request).data], [my_report.id])
+        # L'ophtalmologue garde l'accès à tous les comptes rendus.
+        self.assertEqual(self._call(medical_report_detail, "get", self.ophtalmo, other_report.id).status_code, 200)
 
     def test_reserve_au_medecin_referant(self):
         self.assertEqual(self._post(self.ophtalmo, self._valid()).status_code, 403)

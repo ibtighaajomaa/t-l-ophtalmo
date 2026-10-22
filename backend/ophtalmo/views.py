@@ -527,6 +527,11 @@ def exam_detail(request, pk):
     except Exam.DoesNotExist:
         return Response({'error': 'Exam not found'}, status=status.HTTP_404_NOT_FOUND)
 
+    # Le médecin référant ne consulte que les examens de ses patients, sans les modifier.
+    if _is_medecin_referant(request):
+        if request.method != 'GET' or exam.id not in _referant_exam_ids(request):
+            return Response({'error': 'Accès refusé.'}, status=status.HTTP_403_FORBIDDEN)
+
     if request.method == 'GET':
         serializer = ExamSerializer(exam)
         return Response(serializer.data)
@@ -620,6 +625,10 @@ def exam_stats(request):
         except ValueError:
             pass
 
+    priority_param = request.query_params.get('priority')
+    if priority_param and priority_param != 'Tous':
+        exams = exams.filter(priority=priority_param)
+
     total = exams.count()
     attente = exams.filter(status='En attente').count()
     cours = exams.filter(status='En cours').count()
@@ -631,6 +640,9 @@ def exam_stats(request):
         'En cours': cours,
         'Interprété': interprete,
         'Urgent': urgent,
+        'quality_good': exams.filter(quality_category='good').count(),
+        'quality_acceptable': exams.filter(quality_category='acceptable').count(),
+        'quality_bad': exams.filter(quality_category='bad').count(),
     })
 
 
@@ -2757,12 +2769,16 @@ def medical_report_list(request):
             if exam:
                 lookup_ids.add(str(exam.id))
             qs = qs.filter(examination_id__in=lookup_ids)
+        if _is_medecin_referant(request):
+            qs = qs.filter(examination_id__in=[str(i) for i in _referant_exam_ids(request)])
         limit = int(request.query_params.get('limit', 50))
         qs = qs[:limit]
         serializer = MedicalReportSerializer(qs, many=True)
         return Response(serializer.data)
 
     elif request.method == 'POST':
+        if _is_medecin_referant(request):
+            return Response({'error': 'Accès refusé.'}, status=status.HTTP_403_FORBIDDEN)
         patient_id = request.data.get('patient_id')
         examination_id = request.data.get('examination_id')
         study_instance_uid = request.data.get('study_instance_uid')
@@ -2815,6 +2831,9 @@ def medical_report_detail(request, pk):
     except MedicalReport.DoesNotExist:
         return Response({'error': 'Report not found'}, status=status.HTTP_404_NOT_FOUND)
 
+    if _is_medecin_referant(request) and not _referant_can_access_report(request, report):
+        return Response({'error': 'Accès refusé.'}, status=status.HTTP_403_FORBIDDEN)
+
     if request.method == 'GET':
         serializer = MedicalReportSerializer(report)
         return Response(serializer.data)
@@ -2860,6 +2879,9 @@ def sign_medical_report(request, pk):
     except MedicalReport.DoesNotExist:
         return Response({'error': 'Report not found'}, status=status.HTTP_404_NOT_FOUND)
 
+    if _is_medecin_referant(request):
+        return Response({'error': "La signature est réservée à l'ophtalmologue."}, status=status.HTTP_403_FORBIDDEN)
+
     if report.status == MedicalReport.Status.SIGNED:
         return Response({'error': 'Report already signed'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -2893,6 +2915,9 @@ def list_report_versions(request, pk):
         report = MedicalReport.objects.get(pk=pk)
     except MedicalReport.DoesNotExist:
         return Response({'error': 'Report not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if _is_medecin_referant(request) and not _referant_can_access_report(request, report):
+        return Response({'error': 'Accès refusé.'}, status=status.HTTP_403_FORBIDDEN)
     versions = report.versions.all()
     serializer = MedicalReportVersionSerializer(versions, many=True)
     return Response(serializer.data)
@@ -2906,6 +2931,9 @@ def export_report_docx(request, pk):
         report = MedicalReport.objects.get(pk=pk)
     except MedicalReport.DoesNotExist:
         return Response({'error': 'Report not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if _is_medecin_referant(request) and not _referant_can_access_report(request, report):
+        return Response({'error': 'Accès refusé.'}, status=status.HTTP_403_FORBIDDEN)
 
     from .docx_export import export_report_to_docx
     buffer = export_report_to_docx(report)
@@ -2932,6 +2960,29 @@ REFERRAL_CLINICAL_KEYS = (
 )
 
 
+REFERRAL_DATE_KEYS = {
+    'date_derniere_glycemie': 'de la dernière glycémie',
+    'date_derniere_hba1c': 'de la dernière HbA1c',
+}
+
+
+def _referant_exam_ids(request):
+    """Examens visibles par un médecin référant : ceux de ses patients adressés."""
+    return set(
+        PatientReferral.objects.filter(created_by=request.user, exam__isnull=False)
+        .values_list('exam_id', flat=True)
+    )
+
+
+def _referant_can_access_report(request, report):
+    try:
+        exam_id = int(str(report.examination_id))
+    except (TypeError, ValueError):
+        exam = Exam.objects.filter(study_instance_uid=report.examination_id).first()
+        exam_id = exam.id if exam else None
+    return exam_id is not None and exam_id in _referant_exam_ids(request)
+
+
 def _referral_payload(referral):
     exam = referral.exam
     return {
@@ -2950,6 +3001,8 @@ def _referral_payload(referral):
         'exam_id': exam.id if exam else None,
         'exam_status': exam.status if exam else None,
         'exam_date': exam.date.isoformat() if exam and exam.date else None,
+        'exam_patient_name': exam.patient_name if exam else '',
+        'exam_patient_age': exam.patient_age if exam else None,
     }
 
 
@@ -2982,13 +3035,16 @@ def patient_referrals(request):
         errors['patient_id'] = "L'identifiant patient est obligatoire."
     elif len(patient_id) > 255:
         errors['patient_id'] = "Identifiant patient trop long."
-    try:
-        age = int(str(data.get('patient_age', '')).strip())
-        if age < 0 or age > 130:
-            raise ValueError
-    except (TypeError, ValueError):
-        errors['patient_age'] = "Âge invalide (0 à 130 ans)."
-        age = None
+    age = None
+    raw_age = data.get('patient_age')
+    if raw_age not in (None, ''):
+        try:
+            age = int(str(raw_age).strip())
+            if age < 0 or age > 130:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors['patient_age'] = "Âge invalide (0 à 130 ans)."
+            age = None
     priority = data.get('priority') or Exam.Priority.NORMAL
     if priority not in Exam.Priority.values:
         errors['priority'] = "Priorité invalide (Urgent ou Normal)."
@@ -2996,6 +3052,16 @@ def patient_referrals(request):
     if not isinstance(raw_info, dict):
         errors['clinical_info'] = "Format des antécédents invalide."
         raw_info = {}
+    for key, label in REFERRAL_DATE_KEYS.items():
+        value = str(raw_info.get(key) or '').strip()
+        if not value:
+            continue
+        try:
+            parsed = datetime.strptime(value, '%Y-%m-%d').date()
+            if len(value) != 10 or parsed.year < 1900 or parsed > date.today():
+                raise ValueError
+        except ValueError:
+            errors[key] = f"Date {label} invalide (JJ/MM/AAAA, pas dans le futur)."
     if errors:
         return Response({'error': 'Formulaire invalide.', 'fields': errors}, status=status.HTTP_400_BAD_REQUEST)
 

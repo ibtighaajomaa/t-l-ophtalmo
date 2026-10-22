@@ -18,7 +18,7 @@ export interface ReferralClinicalInfo {
 export interface PatientReferral {
   id: number;
   patient_id: string;
-  patient_age: number;
+  patient_age: number | null;
   priority: ReferralPriority;
   clinical_info: ReferralClinicalInfo;
   patient_history: string;
@@ -28,11 +28,12 @@ export interface PatientReferral {
   exam_id: number | null;
   exam_status: "En attente" | "En cours" | "Interprété" | null;
   exam_date: string | null;
+  exam_patient_name: string;
+  exam_patient_age: number | null;
 }
 
 export interface NewReferral {
   patient_id: string;
-  patient_age: number;
   priority: ReferralPriority;
   clinical_info: ReferralClinicalInfo;
 }

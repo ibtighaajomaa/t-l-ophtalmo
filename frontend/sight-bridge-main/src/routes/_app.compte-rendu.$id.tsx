@@ -20,6 +20,7 @@ import { Navbar } from "@/components/Navbar";
 import { fetchMedicalReports, getExam, updateMedicalReport } from "@/lib/exam-api";
 import type { Exam } from "@/lib/mock-worklist";
 import type { MedicalReport } from "@/lib/exam-api";
+import { useAuth } from "@/lib/auth-context";
 
 export const Route = createFileRoute("/_app/compte-rendu/$id")({
   component: CompteRenduPage,
@@ -61,6 +62,8 @@ function normalizeReportHtml(value: string) {
 
 function CompteRenduPage() {
   const { id } = Route.useParams();
+  const { user } = useAuth();
+  const isReferant = user?.role === "MedecinReferant";
   const [exam, setExam] = useState<Exam | null>(null);
   const [report, setReport] = useState<MedicalReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -164,10 +167,10 @@ function CompteRenduPage() {
       />
       <div className="flex-1 p-6">
         <Link
-          to="/worklist"
+          to={isReferant ? "/patients" : "/worklist"}
           className="mb-5 inline-flex items-center gap-1.5 text-sm text-slate-600 hover:text-blue-600"
         >
-          <ArrowLeft className="h-4 w-4" /> Worklist
+          <ArrowLeft className="h-4 w-4" /> {isReferant ? "Patients adressés" : "Worklist"}
         </Link>
 
         {error ? (
@@ -204,10 +207,22 @@ function CompteRenduPage() {
 
             <div className="border-b border-slate-200 bg-white px-6 py-3">
               <div className="flex flex-wrap items-center gap-2">
-                <EditorButton label="Titre" icon={Heading2} onClick={() => applyFormat("formatBlock", "h2")} />
+                <EditorButton
+                  label="Titre"
+                  icon={Heading2}
+                  onClick={() => applyFormat("formatBlock", "h2")}
+                />
                 <EditorButton label="Gras" icon={Bold} onClick={() => applyFormat("bold")} />
-                <EditorButton label="Italique" icon={Italic} onClick={() => applyFormat("italic")} />
-                <EditorButton label="Souligné" icon={Underline} onClick={() => applyFormat("underline")} />
+                <EditorButton
+                  label="Italique"
+                  icon={Italic}
+                  onClick={() => applyFormat("italic")}
+                />
+                <EditorButton
+                  label="Souligné"
+                  icon={Underline}
+                  onClick={() => applyFormat("underline")}
+                />
                 <EditorButton
                   label="Liste"
                   icon={List}
@@ -241,7 +256,11 @@ function CompteRenduPage() {
                 disabled={saving}
                 className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                {saving ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
                 {saving ? "Enregistrement..." : "Enregistrer"}
               </button>
             </div>

@@ -1,6 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { AlertCircle, CheckCircle2, Loader2, Search, UserPlus } from "lucide-react";
+import { AlertCircle, CheckCircle2, FileText, Loader2, Search, UserPlus } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import {
@@ -19,9 +19,13 @@ export const Route = createFileRoute("/_app/patients")({
   ),
 });
 
+// Date locale du jour au format AAAA-MM-JJ : borne des champs date (pas de bilan futur).
+const TODAY_ISO = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
+  .toISOString()
+  .slice(0, 10);
+
 const EMPTY_FORM = {
   patient_id: "",
-  patient_age: "",
   priority: "Normal" as ReferralPriority,
   clinical: {} as ReferralClinicalInfo,
 };
@@ -141,15 +145,11 @@ function PatientsPage() {
     e.preventDefault();
     setFormError(null);
     setSaved(null);
-    const age = Number(form.patient_age);
     if (!form.patient_id.trim()) return setFormError("L'identifiant patient est obligatoire.");
-    if (!Number.isInteger(age) || age < 0 || age > 130)
-      return setFormError("Âge invalide (0 à 130 ans).");
     setSaving(true);
     try {
       const created = await createReferral({
         patient_id: form.patient_id.trim(),
-        patient_age: age,
         priority: form.priority,
         clinical_info: form.clinical,
       });
@@ -177,7 +177,7 @@ function PatientsPage() {
             title="Patient"
             subtitle="L'identifiant doit être celui saisi sur le rétinographe."
           >
-            <div className="grid gap-4 sm:grid-cols-[1fr_160px]">
+            <div className="max-w-md">
               <label className="block">
                 <span className={labelClass}>ID patient *</span>
                 <input
@@ -187,19 +187,6 @@ function PatientsPage() {
                   className={inputClass}
                   placeholder="Ex. 20037559"
                   maxLength={255}
-                />
-              </label>
-              <label className="block">
-                <span className={labelClass}>Âge *</span>
-                <input
-                  required
-                  type="number"
-                  min={0}
-                  max={130}
-                  value={form.patient_age}
-                  onChange={(e) => setForm({ ...form, patient_age: e.target.value })}
-                  className={inputClass}
-                  placeholder="ans"
                 />
               </label>
             </div>
@@ -259,6 +246,8 @@ function PatientsPage() {
                   <span className={labelClass}>Date</span>
                   <input
                     type="date"
+                    min="1900-01-01"
+                    max={TODAY_ISO}
                     value={c.date_derniere_glycemie ?? ""}
                     onChange={(e) => setClinical("date_derniere_glycemie", e.target.value)}
                     className={inputClass}
@@ -279,6 +268,8 @@ function PatientsPage() {
                   <span className={labelClass}>Date</span>
                   <input
                     type="date"
+                    min="1900-01-01"
+                    max={TODAY_ISO}
                     value={c.date_derniere_hba1c ?? ""}
                     onChange={(e) => setClinical("date_derniere_hba1c", e.target.value)}
                     className={inputClass}
@@ -388,29 +379,30 @@ function PatientsPage() {
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-4 py-3 text-left font-semibold">ID patient</th>
-                  <th className="px-4 py-3 text-left font-semibold">Âge</th>
+                  <th className="px-4 py-3 text-left font-semibold">Patient</th>
                   <th className="px-4 py-3 text-left font-semibold">Priorité</th>
                   <th className="px-4 py-3 text-left font-semibold">Antécédents</th>
                   <th className="px-4 py-3 text-left font-semibold">Ajouté le</th>
                   <th className="px-4 py-3 text-left font-semibold">Suivi</th>
+                  <th className="px-4 py-3 text-left font-semibold">Compte rendu</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                    <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
                       <Loader2 className="mx-auto h-5 w-5 animate-spin" />
                     </td>
                   </tr>
                 ) : listError ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-red-600">
+                    <td colSpan={7} className="px-4 py-8 text-center text-red-600">
                       {listError}
                     </td>
                   </tr>
                 ) : referrals.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                    <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
                       Aucun patient adressé.
                     </td>
                   </tr>
@@ -418,7 +410,20 @@ function PatientsPage() {
                   referrals.map((r) => (
                     <tr key={r.id} className="align-top">
                       <td className="px-4 py-3 font-medium text-slate-900">{r.patient_id}</td>
-                      <td className="px-4 py-3 text-slate-700">{r.patient_age} ans</td>
+                      <td className="px-4 py-3 text-slate-700">
+                        {r.exam_patient_name ? (
+                          <>
+                            <div className="font-medium text-slate-900">{r.exam_patient_name}</div>
+                            {(r.exam_patient_age ?? r.patient_age) != null && (
+                              <div className="text-xs text-slate-500">
+                                {r.exam_patient_age ?? r.patient_age} ans
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <span
                           className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
@@ -438,6 +443,19 @@ function PatientsPage() {
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge referral={r} />
+                      </td>
+                      <td className="px-4 py-3">
+                        {r.exam_id && r.exam_status === "Interprété" ? (
+                          <Link
+                            to="/compte-rendu/$id"
+                            params={{ id: String(r.exam_id) }}
+                            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                          >
+                            <FileText className="h-3.5 w-3.5" /> Voir / modifier
+                          </Link>
+                        ) : (
+                          <span className="text-xs text-slate-400">Pas encore disponible</span>
+                        )}
                       </td>
                     </tr>
                   ))

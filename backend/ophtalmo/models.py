@@ -381,7 +381,7 @@ class PatientReferral(models.Model):
     """
 
     patient_id = models.CharField(max_length=255, db_index=True)
-    patient_age = models.PositiveIntegerField()
+    patient_age = models.PositiveIntegerField(null=True, blank=True)
     clinical_info = models.JSONField(null=True, blank=True)
     patient_history = models.TextField(blank=True, default="")
     priority = models.CharField(

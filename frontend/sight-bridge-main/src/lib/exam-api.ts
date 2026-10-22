@@ -55,6 +55,9 @@ interface ExamStats {
   "En cours": number;
   Interprété: number;
   Urgent: number;
+  quality_good: number;
+  quality_acceptable: number;
+  quality_bad: number;
 }
 
 type ApiUser = {
@@ -292,12 +295,14 @@ export async function getExamStats(params?: {
   region?: string;
   doctor?: string;
   date?: string;
+  priority?: string;
 }): Promise<ExamStats> {
   const searchParams = new URLSearchParams();
   if (params?.q) searchParams.set("q", params.q);
   if (params?.region) searchParams.set("region", params.region);
   if (params?.doctor) searchParams.set("doctor", params.doctor);
   if (params?.date) searchParams.set("date", params.date);
+  if (params?.priority) searchParams.set("priority", params.priority);
 
   const res = await fetch(`${BASE}/stats/?${searchParams.toString()}`, { headers: getHeaders() });
   if (!res.ok) throw new Error("Failed to fetch exam stats");

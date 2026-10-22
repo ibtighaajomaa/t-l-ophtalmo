@@ -9,6 +9,8 @@ import {
   Clock,
   Loader2,
   CheckCircle2,
+  AlertTriangle,
+  XCircle,
   Calendar,
   ClipboardList,
   X,
@@ -436,7 +438,14 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
   const [qualityModalExam, setQualityModalExam] = useState<Exam | null>(null);
   const [reportUnavailableExam, setReportUnavailableExam] = useState<Exam | null>(null);
 
-  const [stats, setStats] = useState({ attente: 0, cours: 0, interprete: 0 });
+  const [stats, setStats] = useState({
+    attente: 0,
+    cours: 0,
+    interprete: 0,
+    qualityGood: 0,
+    qualityAcceptable: 0,
+    qualityBad: 0,
+  });
 
   const activeRegion = isTechnician ? "" : regionFilter;
 
@@ -471,11 +480,15 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
         region: activeRegion || undefined,
         doctor: isTechnician ? undefined : (doctorFilter || undefined),
         date: filterDate || undefined,
+        priority: isTechnician && priorityFilter !== "Tous" ? priorityFilter : undefined,
       });
       setStats({
         attente: statsData["En attente"],
         cours: statsData["En cours"],
         interprete: statsData["Interprété"],
+        qualityGood: statsData.quality_good ?? 0,
+        qualityAcceptable: statsData.quality_acceptable ?? 0,
+        qualityBad: statsData.quality_bad ?? 0,
       });
     } catch (err) {
       console.error("[Worklist] Failed to load exams:", err);
@@ -579,19 +592,15 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
         >
           {isTechnician ? (
             <>
-              <StatPill label="Total examens" value={total} icon={ClipboardList} color="blue" />
+              {/* Qualité IA des acquisitions de l'établissement (tous examens, pas seulement la page). */}
+              <StatPill label="Bonne" value={stats.qualityGood} icon={CheckCircle2} color="green" />
               <StatPill
-                label="Examens urgents"
-                value={exams.filter((e) => e.priority === "Urgent").length}
-                icon={Clock}
+                label="Acceptable"
+                value={stats.qualityAcceptable}
+                icon={AlertTriangle}
                 color="orange"
               />
-              <StatPill
-                label="Bonne qualité IA"
-                value={exams.filter((e) => e.qualityCategory === "good").length}
-                icon={CheckCircle2}
-                color="green"
-              />
+              <StatPill label="Mauvaise" value={stats.qualityBad} icon={XCircle} color="red" />
             </>
           ) : (
             <>
@@ -980,7 +989,7 @@ function StatPill({
   label: string;
   value: number;
   icon: typeof Clock;
-  color: "orange" | "blue" | "green";
+  color: "orange" | "blue" | "green" | "red";
 }) {
   const map = {
     orange: {
@@ -996,6 +1005,7 @@ function StatPill({
       ring: "ring-green-200",
       icon: "text-green-500",
     },
+    red: { bg: "bg-red-50", text: "text-red-700", ring: "ring-red-200", icon: "text-red-500" },
   } as const;
   const c = map[color];
   return (
