@@ -78,6 +78,7 @@ export type PlatformDoctor = {
 
 type FetchExamsParams = {
   status?: string;
+  priority?: string;
   q?: string;
   region?: string;
   doctor?: string;
@@ -163,6 +164,7 @@ function toFrontendExam(api: ApiExam): Exam {
 export async function fetchExams(params?: FetchExamsParams): Promise<{ exams: Exam[]; total: number }> {
   const searchParams = new URLSearchParams();
   if (params?.status) searchParams.set("status", params.status);
+  if (params?.priority) searchParams.set("priority", params.priority);
   if (params?.q) searchParams.set("q", params.q);
   if (params?.region) searchParams.set("region", params.region);
   if (params?.doctor) searchParams.set("doctor", params.doctor);

@@ -49,7 +49,14 @@ function AdminDashboard() {
   const [totalPages, setTotalPages] = useState(0);
   const [reloadTrigger, setReloadTrigger] = useState(0);
 
-  const [stats, setStats] = useState({ total: 0, chefs: 0, medecins: 0, residents: 0 });
+  const [stats, setStats] = useState<{
+    total: number;
+    chefs: number;
+    medecins: number;
+    residents: number;
+    techniciens?: number;
+    medecinReferants?: number;
+  }>({ total: 0, chefs: 0, medecins: 0, residents: 0 });
 
   // States for Edit Modal
   const [editingUser, setEditingUser] = useState<AppUser | null>(null);
@@ -59,12 +66,14 @@ function AdminDashboard() {
     email: string;
     phone: string;
     role: Role;
+    etablissement: string;
   }>({
     firstName: "",
     lastName: "",
     email: "",
     phone: "",
     role: "Medecin",
+    etablissement: "",
   });
   const [editError, setEditError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -184,6 +193,7 @@ function AdminDashboard() {
       email: u.email,
       phone: u.phone || "",
       role: u.role,
+      etablissement: u.etablissement || "",
     });
     setEditError(null);
   };
@@ -206,6 +216,7 @@ function AdminDashboard() {
         email: editForm.email.trim(),
         phone: editForm.phone.trim() || undefined,
         role: editForm.role,
+        etablissement: editForm.etablissement.trim() || undefined,
       });
 
       if (res.ok) {
@@ -321,6 +332,11 @@ function AdminDashboard() {
                       </td>
                       <td className="py-3 pr-4">
                         <RoleBadge role={u.role} />
+                        {u.etablissement && (
+                          <div className="text-[11px] text-slate-500 mt-1 font-normal truncate max-w-[150px]" title={u.etablissement}>
+                            🏥 {u.etablissement}
+                          </div>
+                        )}
                       </td>
                       <td className="py-3 pr-4 text-slate-600">
                         <div className="font-medium">{u.email}</div>
@@ -567,6 +583,28 @@ function AdminDashboard() {
                     </>
                   )}
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Établissement / Hôpital {editForm.role === "Technicien" && <span className="text-purple-600 font-normal">(filtrage worklist)</span>}
+                </label>
+                <input
+                  type="text"
+                  list="edit-etablissements-list"
+                  value={editForm.etablissement}
+                  onChange={(e) => setEditForm({ ...editForm, etablissement: e.target.value })}
+                  placeholder="Ex: HOPITAL CIRCONSCRIPTION KELIBIA"
+                  className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-100"
+                />
+                <datalist id="edit-etablissements-list">
+                  <option value="HOPITAL CIRCONSCRIPTION KELIBIA" />
+                  <option value="Hôpital de Circonscription Menzel Temime" />
+                  <option value="HOPITAL REGIONAL KEBILI" />
+                  <option value="Hôpital de Circonscription Deguech" />
+                  <option value="Hôpital de Circonscription Mateur" />
+                  <option value="HOPITAL REGIONAL SILIANA" />
+                </datalist>
               </div>
 
               <div className="flex justify-end gap-3 border-t border-slate-100 pt-4 mt-6">

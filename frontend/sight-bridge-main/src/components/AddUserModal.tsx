@@ -25,6 +25,20 @@ const ROLE_OPTIONS: { value: CreatableRole; label: string; icon: LucideIcon }[] 
   { value: "MedecinReferant", label: "Médecin Référant", icon: HeartPulse },
 ];
 
+// Rôles pour lesquels le champ "Nom d'établissement" est proposé.
+const ETABLISSEMENT_ROLES: CreatableRole[] = ["Technicien", "MedecinReferant", "Medecin"];
+// Seul le technicien est obligatoirement rattaché à un établissement (sa worklist en dépend).
+const ETABLISSEMENT_REQUIRED_ROLES: CreatableRole[] = ["Technicien"];
+
+const ETABLISSEMENTS = [
+  "HOPITAL CIRCONSCRIPTION KELIBIA",
+  "Hôpital de Circonscription Menzel Temime",
+  "HOPITAL REGIONAL KEBILI",
+  "Hôpital de Circonscription Deguech",
+  "Hôpital de Circonscription Mateur",
+  "HOPITAL REGIONAL SILIANA",
+];
+
 export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { createUser, user } = useAuth();
   const [role, setRole] = useState<CreatableRole>("Medecin");
@@ -34,11 +48,15 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
     email: "",
     specialty: "",
     phone: "",
+    etablissement: "",
     password: Math.random().toString(36).slice(-8),
   });
   const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
+
+  const showsEtablissement = ETABLISSEMENT_ROLES.includes(role);
+  const requiresEtablissement = ETABLISSEMENT_REQUIRED_ROLES.includes(role);
 
   if (!open) return null;
 
@@ -46,7 +64,11 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
     e.preventDefault();
     setIsLoading(true);
     setFeedback(null);
-    const res = await createUser({ ...form, role });
+    const res = await createUser({
+      ...form,
+      etablissement: showsEtablissement ? form.etablissement : "",
+      role,
+    });
     setIsLoading(false);
     if (res.ok) {
       setFeedback({ ok: true, msg: `${form.firstName} ${form.lastName} ajouté(e) avec succès.` });
@@ -56,6 +78,7 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
         email: "",
         specialty: "",
         phone: "",
+        etablissement: "",
         password: Math.random().toString(36).slice(-8),
       });
     } else {
@@ -132,6 +155,33 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
             value={form.phone}
             onChange={(v) => setForm({ ...form, phone: v })}
           />
+
+          {showsEtablissement && (
+            <div>
+              <label className="text-xs font-medium text-slate-600">
+                Nom d'établissement{" "}
+                {requiresEtablissement ? (
+                  <span className="text-blue-600 font-semibold">(obligatoire)</span>
+                ) : (
+                  <span className="text-slate-400">(optionnel)</span>
+                )}
+              </label>
+              <select
+                required={requiresEtablissement}
+                value={form.etablissement}
+                onChange={(e) => setForm({ ...form, etablissement: e.target.value })}
+                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              >
+                <option value="">— Sélectionner un établissement —</option>
+                {ETABLISSEMENTS.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <Field
             label="Mot de passe provisoire"
             value={form.password}

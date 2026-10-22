@@ -14,7 +14,9 @@ function WorklistPage() {
       ? "Activité du jour — supervision (lecture seule)"
       : user?.role === "Chef"
         ? "Examens du jour — filtrer, assigner et superviser"
-        : "Examens du jour à interpréter";
+        : user?.role === "Technicien"
+          ? `Acquisitions de l'établissement${user?.etablissement ? ` (${user.etablissement})` : ""}`
+          : "Examens du jour à interpréter";
   return (
     <>
       <Navbar title="Worklist" subtitle={subtitle} />

@@ -45,12 +45,14 @@ class CreerUtilisateurView(APIView):
                 "enabled": True,
                 "credentials": [{"value": data['password_provisoire'], "type": "password", "temporary": True}]
             }
-            if data.get('createdBy') or data.get('telephone'):
+            if data.get('createdBy') or data.get('telephone') or data.get('etablissement'):
                 kc_payload["attributes"] = {}
                 if data.get('createdBy'):
                     kc_payload["attributes"]["createdBy"] = [data['createdBy']]
                 if data.get('telephone'):
                     kc_payload["attributes"]["phone"] = [data['telephone']]
+                if data.get('etablissement'):
+                    kc_payload["attributes"]["etablissement"] = [data['etablissement']]
                 
             user_id = keycloak_admin.create_user(kc_payload)
 
@@ -85,6 +87,8 @@ class CreerUtilisateurView(APIView):
             profil_defaults = {'role': mapped_role}
             if 'telephone' in data:
                 profil_defaults['telephone'] = data['telephone']
+            if data.get('etablissement') or data.get('region_affectation'):
+                profil_defaults['region_affectation'] = data.get('etablissement') or data.get('region_affectation')
 
             profil, _ = Profil.objects.update_or_create(
                 user=user,
@@ -534,6 +538,7 @@ def update_keycloak_user(request):
         prenom = data.get('prenom')
         nom = data.get('nom')
         telephone = data.get('telephone')
+        etablissement = data.get('etablissement')
         new_role_code = data.get('role') # e.g., 'ADMIN_SYSTEME', 'CHEF_SERVICE', 'OPHTALMOLOGUE', 'RESIDENT'
         
         if not old_email or not new_email:
@@ -568,6 +573,10 @@ def update_keycloak_user(request):
             if not payload['attributes']:
                 payload['attributes'] = {}
             payload['attributes']['phone'] = [telephone]
+        if etablissement is not None:
+            if not payload['attributes']:
+                payload['attributes'] = {}
+            payload['attributes']['etablissement'] = [etablissement]
             
         keycloak_admin.update_user(user_id, payload)
         
@@ -639,6 +648,8 @@ def update_keycloak_user(request):
                 defaults['telephone'] = telephone
             if mapped_role:
                 defaults['role'] = mapped_role
+            if etablissement is not None:
+                defaults['region_affectation'] = etablissement
                 
             if defaults:
                 Profil.objects.update_or_create(
@@ -658,6 +669,8 @@ def update_keycloak_user(request):
                 defaults['telephone'] = telephone
             if mapped_role:
                 defaults['role'] = mapped_role
+            if etablissement is not None:
+                defaults['region_affectation'] = etablissement
             Profil.objects.create(**defaults)
             
         return Response({"status": "success", "message": "Utilisateur mis à jour avec succès"})
@@ -768,6 +781,7 @@ def get_paginated_users(request):
             local_role = role_map_reverse.get(local_role, local_role)
 
             telephone = prof.telephone if prof and prof.telephone else (u.get('attributes', {}).get('phone', [''])[0] if u.get('attributes') else '')
+            etablissement_attr = prof.region_affectation if prof and prof.region_affectation else (u.get('attributes', {}).get('etablissement', [''])[0] if u.get('attributes') else '')
             created_by_attr = u.get('attributes', {}).get('createdBy', [''])[0] if u.get('attributes') else ''
             
             is_disponible = prof.is_disponible if prof else True
@@ -784,6 +798,7 @@ def get_paginated_users(request):
                 "lastName": u.get('lastName', ''),
                 "role": local_role,
                 "phone": telephone,
+                "etablissement": etablissement_attr,
                 "createdAt": created_at_iso,
                 "createdBy": created_by_attr,
                 "is_disponible": is_disponible,

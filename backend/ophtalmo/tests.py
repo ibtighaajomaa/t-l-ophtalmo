@@ -1418,3 +1418,58 @@ class DoctorSegFinalVersionTest(TestCase):
         self.assertEqual(sorted(deleted), ['uid-legacy', 'uid-old-v'])
         deleted_ids = sorted(call.args[0].rsplit('/', 1)[1] for call in fake.delete.call_args_list)
         self.assertEqual(deleted_ids, ['legacy-vessels', 'old-vessels'])
+
+
+class TechnicienEtablissementFilterTest(TestCase):
+    """Le technicien ne voit que les examens de son établissement, sans contournement."""
+
+    def setUp(self):
+        from ophtalmo.models import DicomModalitySite
+        from ophtalmo.views import exam_list, exam_stats
+        from users.models import Profil
+
+        self.exam_list = exam_list
+        self.exam_stats = exam_stats
+        self.factory = APIRequestFactory()
+        DicomModalitySite.objects.create(institution_name="kebili", remote_ip="10.99.0.1")
+        DicomModalitySite.objects.create(institution_name="Hôpital de Kélibia", remote_ip="10.99.0.2")
+
+        self.kebili_by_region = Exam.objects.create(patient_name="A", date=TODAY, region="kebili")
+        self.kebili_by_ip = Exam.objects.create(
+            patient_name="B", date=TODAY, region="Etablissement inconnu", modality_ip="10.99.0.1"
+        )
+        self.kelibia = Exam.objects.create(patient_name="C", date=TODAY, region="Hôpital de Kélibia")
+        self.temime = Exam.objects.create(patient_name="D", date=TODAY, region="Manzel Temim")
+
+        User = get_user_model()
+        self.tech = User.objects.create_user(username="tech", email="tech@x.tn", password="x")
+        Profil.objects.create(user=self.tech, role="Technicien", region_affectation="HOPITAL REGIONAL KEBILI")
+        self.tech_sans_etab = User.objects.create_user(username="tech2", email="tech2@x.tn", password="x")
+        Profil.objects.create(user=self.tech_sans_etab, role="Technicien", region_affectation="")
+
+    def _get(self, view, user, path, params=None):
+        request = self.factory.get(path, params or {})
+        force_authenticate(request, user=user)
+        return view(request)
+
+    def test_technicien_ne_voit_que_son_etablissement(self):
+        res = self._get(self.exam_list, self.tech, "/api/exams/")
+        self.assertEqual(res.status_code, 200)
+        ids = {e["id"] for e in res.data["results"]}
+        self.assertEqual(ids, {self.kebili_by_region.id, self.kebili_by_ip.id})
+
+    def test_parametre_region_ignore_pour_le_technicien(self):
+        res = self._get(self.exam_list, self.tech, "/api/exams/", {"region": "Kélibia"})
+        ids = {e["id"] for e in res.data["results"]}
+        self.assertEqual(ids, {self.kebili_by_region.id, self.kebili_by_ip.id})
+
+    def test_technicien_sans_etablissement_ne_voit_rien(self):
+        res = self._get(self.exam_list, self.tech_sans_etab, "/api/exams/")
+        self.assertEqual(res.data["count"], 0)
+        res = self._get(self.exam_list, self.tech_sans_etab, "/api/exams/", {"region": "kebili"})
+        self.assertEqual(res.data["count"], 0)
+
+    def test_stats_filtrees_sur_l_etablissement(self):
+        res = self._get(self.exam_stats, self.tech, "/api/exams/stats/", {"region": "Kélibia"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["En attente"], 2)

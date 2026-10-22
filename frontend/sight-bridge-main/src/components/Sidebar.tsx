@@ -40,7 +40,7 @@ const NAV: NavItem[] = [
     to: "/analyse",
     label: "Analyse",
     icon: BarChart3,
-    roles: ["Admin", "Chef", "Medecin", "Resident", "Technicien", "MedecinReferant"],
+    roles: ["Admin", "Chef", "Medecin", "Resident", "MedecinReferant"],
   },
   {
     to: "/historique/examens",
@@ -52,7 +52,7 @@ const NAV: NavItem[] = [
     to: "/calendrier",
     label: "Calendrier",
     icon: Calendar,
-    roles: ["Admin", "Chef", "Medecin", "Resident", "Technicien", "MedecinReferant"],
+    roles: ["Admin", "Chef", "Medecin", "Resident", "MedecinReferant"],
   },
   {
     to: "/logs",

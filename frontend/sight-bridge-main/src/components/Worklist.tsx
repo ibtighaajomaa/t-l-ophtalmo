@@ -12,6 +12,7 @@ import {
   Calendar,
   ClipboardList,
   X,
+  Building2,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -416,6 +417,10 @@ interface WorklistProps {
 export function Worklist({ todayOnly = false, showStats = false }: WorklistProps) {
   const { user } = useAuth();
   const isDoctorView = user?.role === "Medecin" || user?.role === "Resident";
+  const isTechnician = user?.role === "Technicien";
+  const [priorityFilter, setPriorityFilter] = useState<"Tous" | "Normal" | "Urgent">("Tous");
+  // Technicien : le backend restreint lui-même les examens à l'établissement du profil,
+  // aucun filtre établissement n'est envoyé ni appliqué côté client.
   const [exams, setExams] = useState<Exam[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -433,6 +438,8 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
 
   const [stats, setStats] = useState({ attente: 0, cours: 0, interprete: 0 });
 
+  const activeRegion = isTechnician ? "" : regionFilter;
+
   const loadExams = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -440,16 +447,17 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
       console.log("[Worklist] Fetching exams...", {
         statusFilter,
         query,
-        regionFilter,
+        regionFilter: activeRegion,
         doctorFilter,
         filterDate,
         page,
       });
       const result = await fetchExams({
-        status: statusFilter === "Tous" ? undefined : statusFilter,
+        status: isTechnician ? undefined : (statusFilter === "Tous" ? undefined : statusFilter),
+        priority: isTechnician && priorityFilter !== "Tous" ? priorityFilter : undefined,
         q: query || undefined,
-        region: regionFilter || undefined,
-        doctor: doctorFilter || undefined,
+        region: activeRegion || undefined,
+        doctor: isTechnician ? undefined : (doctorFilter || undefined),
         date: filterDate || undefined,
         page,
         page_size: 10,
@@ -460,8 +468,8 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
 
       const statsData = await getExamStats({
         q: query || undefined,
-        region: regionFilter || undefined,
-        doctor: doctorFilter || undefined,
+        region: activeRegion || undefined,
+        doctor: isTechnician ? undefined : (doctorFilter || undefined),
         date: filterDate || undefined,
       });
       setStats({
@@ -475,7 +483,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, query, regionFilter, doctorFilter, filterDate, page]);
+  }, [statusFilter, priorityFilter, query, activeRegion, doctorFilter, filterDate, page, isTechnician]);
 
   useEffect(() => {
     loadExams();
@@ -527,7 +535,8 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
   const filtered = useMemo(
     () =>
       scopedExams.filter((e) => {
-        const matchStatus = statusFilter === "Tous" || e.status === statusFilter;
+        const matchStatus = isTechnician || statusFilter === "Tous" || e.status === statusFilter;
+        const matchPriority = priorityFilter === "Tous" || e.priority === priorityFilter;
         const q = query.toLowerCase();
         const matchQ =
           !q ||
@@ -535,14 +544,17 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
           e.id.toLowerCase().includes(q) ||
           (e.patientId?.toLowerCase().includes(q) ?? false);
         const matchRegion =
-          !regionFilter ||
-          (e.region && e.region.toLowerCase().includes(regionFilter.toLowerCase()));
+          isTechnician ||
+          !activeRegion ||
+          (e.region && e.region.toLowerCase().includes(activeRegion.toLowerCase())) ||
+          (e.institutionName && e.institutionName.toLowerCase().includes(activeRegion.toLowerCase()));
         const matchDoctor =
+          isTechnician ||
           !doctorFilter ||
           (e.assignedTo && e.assignedTo.toLowerCase().includes(doctorFilter.toLowerCase()));
-        return matchStatus && matchQ && matchRegion && matchDoctor;
+        return matchStatus && matchPriority && matchQ && matchRegion && matchDoctor;
       }),
-    [scopedExams, statusFilter, query, regionFilter, doctorFilter],
+    [scopedExams, isTechnician, statusFilter, priorityFilter, query, activeRegion, doctorFilter],
   );
 
   const paginatedExams = useMemo(() => {
@@ -561,13 +573,35 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
 
       {showStats && !loading && (
         <div
-          className={`grid grid-cols-1 gap-3 ${isDoctorView ? "sm:grid-cols-2" : "sm:grid-cols-3"}`}
+          className={`grid grid-cols-1 gap-3 ${
+            isDoctorView ? "sm:grid-cols-2" : "sm:grid-cols-3"
+          }`}
         >
-          {!isDoctorView && (
-            <StatPill label="En attente" value={stats.attente} icon={Clock} color="orange" />
+          {isTechnician ? (
+            <>
+              <StatPill label="Total examens" value={total} icon={ClipboardList} color="blue" />
+              <StatPill
+                label="Examens urgents"
+                value={exams.filter((e) => e.priority === "Urgent").length}
+                icon={Clock}
+                color="orange"
+              />
+              <StatPill
+                label="Bonne qualité IA"
+                value={exams.filter((e) => e.qualityCategory === "good").length}
+                icon={CheckCircle2}
+                color="green"
+              />
+            </>
+          ) : (
+            <>
+              {!isDoctorView && (
+                <StatPill label="En attente" value={stats.attente} icon={Clock} color="orange" />
+              )}
+              <StatPill label="En cours" value={stats.cours} icon={Loader2} color="blue" />
+              <StatPill label="Interprété" value={stats.interprete} icon={CheckCircle2} color="green" />
+            </>
           )}
-          <StatPill label="En cours" value={stats.cours} icon={Loader2} color="blue" />
-          <StatPill label="Interprété" value={stats.interprete} icon={CheckCircle2} color="green" />
         </div>
       )}
 
@@ -584,47 +618,87 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
             className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-10 pr-3 text-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
           />
         </div>
-        <div className="flex-1 max-w-xs">
-          <input
-            value={regionFilter}
-            onChange={(e) => {
-              setRegionFilter(e.target.value);
-              setPage(1);
-            }}
-            placeholder="Filtrer par établissement…"
-            className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-          />
-        </div>
-        <div className="flex-1 max-w-xs">
-          <input
-            value={doctorFilter}
-            onChange={(e) => {
-              setDoctorFilter(e.target.value);
-              setPage(1);
-            }}
-            placeholder="Filtrer par médecin assigné…"
-            className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-          />
-        </div>
+
+        {isTechnician ? (
+          <div className="flex items-center gap-2">
+            {user?.etablissement ? (
+              <div className="flex items-center gap-1.5 rounded-lg bg-purple-50 border border-purple-200 px-3 py-2 text-xs font-medium text-purple-700">
+                <Building2 className="h-4 w-4 text-purple-600" />
+                <span>Établissement : <strong>{user.etablissement}</strong></span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs font-medium text-amber-700">
+                <Building2 className="h-4 w-4 text-amber-600" />
+                <span>Aucun établissement rattaché à votre compte</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="flex-1 max-w-xs">
+              <input
+                value={regionFilter}
+                onChange={(e) => {
+                  setRegionFilter(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="Filtrer par établissement…"
+                className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              />
+            </div>
+            <div className="flex-1 max-w-xs">
+              <input
+                value={doctorFilter}
+                onChange={(e) => {
+                  setDoctorFilter(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="Filtrer par médecin assigné…"
+                className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              />
+            </div>
+          </>
+        )}
+
         <div className="flex items-center gap-2">
           <Filter className="h-4 w-4 text-slate-400" />
-          {(["Tous", "En attente", "En cours", "Interprété"] as const).map((s) => (
-            <button
-              key={s}
-              onClick={() => {
-                setStatusFilter(s);
-                setPage(1);
-              }}
-              className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
-                statusFilter === s
-                  ? "bg-blue-600 text-white"
-                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
-              }`}
-            >
-              {s}
-            </button>
-          ))}
+          {isTechnician ? (
+            (["Tous", "Normal", "Urgent"] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => {
+                  setPriorityFilter(p);
+                  setPage(1);
+                }}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                  priorityFilter === p
+                    ? "bg-purple-600 text-white"
+                    : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+                }`}
+              >
+                {p === "Tous" ? "Toutes priorités" : p}
+              </button>
+            ))
+          ) : (
+            (["Tous", "En attente", "En cours", "Interprété"] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => {
+                  setStatusFilter(s);
+                  setPage(1);
+                }}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                  statusFilter === s
+                    ? "bg-blue-600 text-white"
+                    : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+                }`}
+              >
+                {s}
+              </button>
+            ))
+          )}
         </div>
+
         <div className="flex items-center gap-2">
           <Calendar className="h-4 w-4 text-slate-400" />
           <input
@@ -654,22 +728,22 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
               <tr>
                 <th className="px-4 py-3 text-left font-semibold">ID patient</th>
                 <th className="px-4 py-3 text-left font-semibold">Patient</th>
-                <th className="px-4 py-3 text-left font-semibold">Antécédents</th>
+                {!isTechnician && <th className="px-4 py-3 text-left font-semibold">Antécédents</th>}
                 <th className="px-4 py-3 text-left font-semibold">Date</th>
-                <th className="px-4 py-3 text-left font-semibold">Priorité</th>
-                <th className="px-4 py-3 text-left font-semibold">Nom d'établissement</th>
                 <th className="px-4 py-3 text-left font-semibold">Qualité IA</th>
-                <th className="px-4 py-3 text-left font-semibold">Statut</th>
-                {showAssignedTo && <th className="px-4 py-3 text-left font-semibold">Assigné à</th>}
-                <th className="px-4 py-3 text-center font-semibold">Compte rendu</th>
-                <th className="px-4 py-3 text-right font-semibold">Actions</th>
+                {!isTechnician && <th className="px-4 py-3 text-left font-semibold">Priorité</th>}
+                {!isTechnician && <th className="px-4 py-3 text-left font-semibold">Nom d'établissement</th>}
+                {!isTechnician && <th className="px-4 py-3 text-left font-semibold">Statut</th>}
+                {!isTechnician && showAssignedTo && <th className="px-4 py-3 text-left font-semibold">Assigné à</th>}
+                {!isTechnician && <th className="px-4 py-3 text-center font-semibold">Compte rendu</th>}
+                {!isTechnician && <th className="px-4 py-3 text-right font-semibold">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
                   <td
-                    colSpan={showAssignedTo ? 11 : 10}
+                    colSpan={isTechnician ? 4 : (showAssignedTo ? 11 : 10)}
                     className="px-4 py-10 text-center text-sm text-slate-500"
                   >
                     <Loader2 className="inline h-5 w-5 animate-spin mr-2" />
@@ -698,113 +772,123 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                           {exam.patientBirthDate ? `${exam.patientAge} ans` : "Âge non renseigné"}
                         </div>
                       </td>
-                      <td className="px-4 py-3">
-                        <button
-                          type="button"
-                          onClick={() => setHistoryExam(exam)}
-                          title="Afficher les antécédents"
-                          aria-label={`Afficher les antécédents de ${exam.patientName}`}
-                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-700 ring-1 ring-blue-200 transition hover:bg-blue-100"
-                        >
-                          <ClipboardList className="h-4 w-4" />
-                        </button>
-                      </td>
+                      {!isTechnician && (
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => setHistoryExam(exam)}
+                            title="Afficher les antécédents"
+                            aria-label={`Afficher les antécédents de ${exam.patientName}`}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-700 ring-1 ring-blue-200 transition hover:bg-blue-100"
+                          >
+                            <ClipboardList className="h-4 w-4" />
+                          </button>
+                        </td>
+                      )}
                       <td className="px-4 py-3 text-slate-600">{exam.date}</td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
-                            exam.priority === "Urgent"
-                              ? "bg-red-50 text-red-700 ring-1 ring-red-200"
-                              : "bg-slate-100 text-slate-600"
-                          }`}
-                        >
-                          {exam.priority === "Urgent" && (
-                            <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-                          )}
-                          {exam.priority}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div
-                          className="max-w-56 truncate font-medium text-slate-800"
-                          title={exam.institutionName || exam.region || "Établissement inconnu"}
-                        >
-                          {exam.institutionName || exam.region || "Établissement inconnu"}
-                        </div>
-                      </td>
                       <td className="px-4 py-3">
                         <QualityBadge exam={exam} onClick={() => setQualityModalExam(exam)} />
                       </td>
-                      <td className="px-4 py-3">
-                        {isOldDoctor && exam.isReassigned24h ? (
-                          <span className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 bg-red-100 text-red-700 ring-red-200">
-                            Retiré et réassigné
-                          </span>
-                        ) : (
+                      {!isTechnician && (
+                        <td className="px-4 py-3">
                           <span
-                            className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${STATUS_STYLES[exam.status]}`}
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+                              exam.priority === "Urgent"
+                                ? "bg-red-50 text-red-700 ring-1 ring-red-200"
+                                : "bg-slate-100 text-slate-600"
+                            }`}
                           >
-                            {exam.status}
-                          </span>
-                        )}
-                        {exam.isReassigned24h && !isOldDoctor && (
-                          <div className="mt-1 text-[10px] text-red-600 font-medium">
-                            ⚠️ Réassigné (retard 24h)
-                          </div>
-                        )}
-                      </td>
-                      {showAssignedTo && (
-                        <td className="px-4 py-3 text-slate-700">
-                          <span className="text-sm">
-                            {exam.assignedTo ?? (
-                              <span className="text-slate-400 italic">Non assigné</span>
+                            {exam.priority === "Urgent" && (
+                              <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
                             )}
+                            {exam.priority}
                           </span>
-                          {exam.isReassigned24h && exam.reassignedFromName && (
-                            <div className="text-[10px] text-red-500 mt-0.5">
-                              Retiré à : {exam.reassignedFromName}
-                            </div>
-                          )}
                         </td>
                       )}
-                      <td className="px-4 py-3 text-center">
-                        {exam.status === "Interprété" ? (
-                          <a
-                            href={`/compte-rendu/${encodeURIComponent(exam.id)}`}
-                            title="Afficher le compte rendu"
-                            aria-label={`Afficher le compte rendu de ${exam.patientName}`}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 transition hover:bg-emerald-100"
-                          >
-                            <FileText className="h-4 w-4" />
-                          </a>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setReportUnavailableExam(exam)}
-                            title="Compte rendu non disponible"
-                            aria-label={`Compte rendu non disponible pour ${exam.patientName}`}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-red-50 text-red-700 ring-1 ring-red-200 transition hover:bg-red-100"
-                          >
-                            <FileText className="h-4 w-4" />
-                          </button>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          {dicomStudyInstanceUid && (
-                            <a
-                              href={`/ohif/viewer?StudyInstanceUIDs=${encodeURIComponent(
-                                dicomStudyInstanceUid,
-                              )}&lng=fr`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 transition"
+                      {!isTechnician && (
+                        <>
+                          <td className="px-4 py-3">
+                            <div
+                              className="max-w-56 truncate font-medium text-slate-800"
+                              title={exam.institutionName || exam.region || "Établissement inconnu"}
                             >
-                              <MonitorPlay className="h-3.5 w-3.5" /> Visualiser
-                            </a>
+                              {exam.institutionName || exam.region || "Établissement inconnu"}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            {isOldDoctor && exam.isReassigned24h ? (
+                              <span className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 bg-red-100 text-red-700 ring-red-200">
+                                Retiré et réassigné
+                              </span>
+                            ) : (
+                              <span
+                                className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${STATUS_STYLES[exam.status]}`}
+                              >
+                                {exam.status}
+                              </span>
+                            )}
+                            {exam.isReassigned24h && !isOldDoctor && (
+                              <div className="mt-1 text-[10px] text-red-600 font-medium">
+                                ⚠️ Réassigné (retard 24h)
+                              </div>
+                            )}
+                          </td>
+                          {showAssignedTo && (
+                            <td className="px-4 py-3 text-slate-700">
+                              <span className="text-sm">
+                                {exam.assignedTo ?? (
+                                  <span className="text-slate-400 italic">Non assigné</span>
+                                )}
+                              </span>
+                              {exam.isReassigned24h && exam.reassignedFromName && (
+                                <div className="text-[10px] text-red-500 mt-0.5">
+                                  Retiré à : {exam.reassignedFromName}
+                                </div>
+                              )}
+                            </td>
                           )}
-                        </div>
-                      </td>
+                          <td className="px-4 py-3 text-center">
+                            {exam.status === "Interprété" ? (
+                              <a
+                                href={`/compte-rendu/${encodeURIComponent(exam.id)}`}
+                                title="Afficher le compte rendu"
+                                aria-label={`Afficher le compte rendu de ${exam.patientName}`}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 transition hover:bg-emerald-100"
+                              >
+                                <FileText className="h-4 w-4" />
+                              </a>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setReportUnavailableExam(exam)}
+                                title="Compte rendu non disponible"
+                                aria-label={`Compte rendu non disponible pour ${exam.patientName}`}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-red-50 text-red-700 ring-1 ring-red-200 transition hover:bg-red-100"
+                              >
+                                <FileText className="h-4 w-4" />
+                              </button>
+                            )}
+                          </td>
+                        </>
+                      )}
+                      {!isTechnician && (
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            {dicomStudyInstanceUid && (
+                              <a
+                                href={`/ohif/viewer?StudyInstanceUIDs=${encodeURIComponent(
+                                  dicomStudyInstanceUid,
+                                )}&lng=fr`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 transition"
+                              >
+                                <MonitorPlay className="h-3.5 w-3.5" /> Visualiser
+                              </a>
+                            )}
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })
@@ -812,7 +896,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
               {!loading && filtered.length === 0 && (
                 <tr>
                   <td
-                    colSpan={showAssignedTo ? 11 : 10}
+                    colSpan={isTechnician ? 4 : (showAssignedTo ? 11 : 10)}
                     className="px-4 py-10 text-center text-sm text-slate-500"
                   >
                     Aucun examen ne correspond aux filtres.

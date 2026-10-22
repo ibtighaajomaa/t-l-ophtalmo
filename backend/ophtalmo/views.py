@@ -27,6 +27,7 @@ from .serializers import (
 from users.authentication import KeycloakAuthentication
 from .dicom_patient import patient_metadata
 from .orthanc_origin import resolve_study_origin
+from .etablissements import filter_exams_by_etablissement
 from .analysis_utils import (
     DEEPSEENET_FACTORS,
     DEEPSEENET_LABELS_FR,
@@ -51,6 +52,31 @@ from .dmi_integration import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _role_flags(request):
+    """(is_admin, is_technicien) d'après les rôles Keycloak puis le Profil."""
+    if not request.user.is_authenticated:
+        return False, False
+    roles = getattr(request, 'roles', []) or []
+    is_admin = any(r in roles for r in ('ADMIN_SYSTEME', 'ADMIN', 'Admin'))
+    is_technicien = any(r in roles for r in ('TECHNICIEN', 'Technicien'))
+    try:
+        profil_role = request.user.profil.role
+    except Exception:
+        profil_role = ''
+    is_admin = is_admin or profil_role in ('Admin', 'ADMIN_SYSTEME')
+    is_technicien = is_technicien or profil_role in ('Technicien', 'TECHNICIEN')
+    return is_admin, is_technicien
+
+
+def _technicien_etablissement(request):
+    """Établissement de rattachement du technicien (Profil.region_affectation)."""
+    try:
+        return (request.user.profil.region_affectation or '').strip()
+    except Exception:
+        return ''
+
 
 
 LESION_SEGMENT_FIELDS = {
@@ -418,9 +444,20 @@ def exam_list(request):
                 Q(patient_name__icontains=q) | Q(patient_id__icontains=q) | Q(id__icontains=q)
             )
 
-        region = request.query_params.get('region', '')
-        if region:
-            exams = exams.filter(region__icontains=region)
+        priority_param = request.query_params.get('priority')
+        if priority_param and priority_param != 'Tous':
+            exams = exams.filter(priority=priority_param)
+
+        is_admin, is_technicien = _role_flags(request)
+
+        region = request.query_params.get('region', '') or request.query_params.get('etablissement', '')
+        if region and not is_technicien:
+            from .models import DicomModalitySite
+            matching_ips = list(
+                DicomModalitySite.objects.filter(institution_name__icontains=region)
+                .values_list('remote_ip', flat=True)
+            )
+            exams = exams.filter(Q(region__icontains=region) | Q(modality_ip__in=matching_ips))
 
         doctor = request.query_params.get('doctor', '')
         if doctor:
@@ -438,20 +475,12 @@ def exam_list(request):
 
         if request.user.is_authenticated:
             try:
-                roles = getattr(request, 'roles', [])
-                is_admin = any(r in roles for r in ('ADMIN_SYSTEME', 'ADMIN', 'Admin'))
-                if not is_admin:
-                    try:
-                        is_admin = request.user.profil.role in ('Admin', 'ADMIN_SYSTEME')
-                    except Exception:
-                        pass
-
-                if not is_admin:
-                    # Tout utilisateur non-admin (Médecin, Chef, Résident ou sans rôle spécifique)
-                    # ne visualise QUE les examens qui lui sont assignés
+                if is_technicien:
+                    # Le technicien visualise uniquement les examens de son établissement
+                    exams = filter_exams_by_etablissement(exams, _technicien_etablissement(request))
+                elif not is_admin:
+                    # Médecin / Chef / Résident : ne visualise QUE les examens qui lui sont assignés le jour J
                     exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
-                    
-                    # ET il ne visualise QUE les examens assignés LE JOUR J (aujourd'hui)
                     from django.utils import timezone
                     today = timezone.now().date()
                     exams = exams.filter(date_assignation__date=today)
@@ -538,20 +567,14 @@ def exam_stats(request):
             logger.error(f"Error during auto-cleanup redistribution: {e}")
 
     exams = Exam.objects.all()
+    is_admin, is_technicien = _role_flags(request)
     if request.user.is_authenticated:
         try:
-            roles = getattr(request, 'roles', [])
-            is_admin = any(r in roles for r in ('ADMIN_SYSTEME', 'ADMIN', 'Admin'))
-            if not is_admin:
-                try:
-                    is_admin = request.user.profil.role in ('Admin', 'ADMIN_SYSTEME')
-                except Exception:
-                    pass
-
-            if not is_admin:
+            if is_technicien:
+                # Le technicien visualise uniquement les examens de son établissement
+                exams = filter_exams_by_etablissement(exams, _technicien_etablissement(request))
+            elif not is_admin:
                 exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
-                
-                # Appliquer la même restriction pour les stats (seulement le jour J)
                 from django.utils import timezone
                 today = timezone.now().date()
                 exams = exams.filter(date_assignation__date=today)
@@ -568,9 +591,14 @@ def exam_stats(request):
             Q(patient_name__icontains=q) | Q(id__icontains=q)
         )
 
-    region = request.query_params.get('region', '')
-    if region:
-        exams = exams.filter(region__icontains=region)
+    region = request.query_params.get('region', '') or request.query_params.get('etablissement', '')
+    if region and not is_technicien:
+        from .models import DicomModalitySite
+        matching_ips = list(
+            DicomModalitySite.objects.filter(institution_name__icontains=region)
+            .values_list('remote_ip', flat=True)
+        )
+        exams = exams.filter(Q(region__icontains=region) | Q(modality_ip__in=matching_ips))
 
     doctor = request.query_params.get('doctor', '')
     if doctor:

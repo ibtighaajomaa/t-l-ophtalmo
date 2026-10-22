@@ -28,6 +28,7 @@ export interface AppUser {
   lastName: string;
   specialty?: string;
   phone?: string;
+  etablissement?: string;
   createdAt?: string; // ISO date
   createdBy?: string; // Admin's name who added the user
   is_disponible?: boolean;
@@ -179,6 +180,7 @@ interface AuthContextValue {
       firstName: string;
       lastName: string;
       phone?: string;
+      etablissement?: string;
       role?: Role;
       password?: string;
       oldPassword?: string;
@@ -265,6 +267,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         else if (roles.includes("MEDECIN_REFERANT")) userRole = "MedecinReferant";
 
         const email = decoded.email || "user@example.com";
+        const savedEtab =
+          localStorage.getItem(`teleoph.user_etab.${email}`) ||
+          ((decoded as Record<string, any>).attributes?.etablissement?.[0]) ||
+          ((decoded as Record<string, any>).attributes?.region_affectation?.[0]) ||
+          "";
         const loggedUser: AppUser = {
           id: email,
           email: email,
@@ -272,6 +279,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           role: userRole,
           firstName: decoded.given_name || email.split("@")[0],
           lastName: decoded.family_name || "",
+          etablissement: savedEtab,
         };
 
         localStorage.setItem(STORAGE_SESSION, loggedUser.id);
@@ -283,6 +291,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return prev;
         });
         setUser(loggedUser);
+
+        if (!savedEtab) {
+          fetch(`/api/users/paginated/?search=${encodeURIComponent(email)}`)
+            .then((r) => r.json())
+            .then((d) => {
+              const found = d.users?.find((u: any) => u.email.toLowerCase() === email.toLowerCase());
+              if (found?.etablissement) {
+                localStorage.setItem(`teleoph.user_etab.${email}`, found.etablissement);
+                setUser((prev) => (prev ? { ...prev, etablissement: found.etablissement } : null));
+              }
+            })
+            .catch(() => {});
+        }
       } catch (err) {
         console.error("Token invalide", err);
         localStorage.removeItem("teleoph.token");
@@ -332,6 +353,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             else if (roles.includes("TECHNICIEN")) userRole = "Technicien";
             else if (roles.includes("MEDECIN_REFERANT")) userRole = "MedecinReferant";
 
+            const savedEtab =
+              localStorage.getItem(`teleoph.user_etab.${email}`) ||
+              ((decoded as Record<string, any>).attributes?.etablissement?.[0]) ||
+              ((decoded as Record<string, any>).attributes?.region_affectation?.[0]) ||
+              "";
             const loggedUser: AppUser = {
               id: email,
               email: email,
@@ -339,6 +365,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               role: userRole,
               firstName: decoded.given_name || email.split("@")[0],
               lastName: decoded.family_name || "",
+              etablissement: savedEtab,
             };
 
             localStorage.setItem(STORAGE_SESSION, loggedUser.id);
@@ -350,6 +377,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               return prev;
             });
             setUser(loggedUser);
+
+            if (!savedEtab) {
+              fetch(`/api/users/paginated/?search=${encodeURIComponent(email)}`)
+                .then((r) => r.json())
+                .then((d) => {
+                  const found = d.users?.find((u: any) => u.email.toLowerCase() === email.toLowerCase());
+                  if (found?.etablissement) {
+                    localStorage.setItem(`teleoph.user_etab.${email}`, found.etablissement);
+                    setUser((prev) => (prev ? { ...prev, etablissement: found.etablissement } : null));
+                  }
+                })
+                .catch(() => {});
+            }
+
             return { ok: true };
           } else {
             const errData = await response.json();
@@ -431,9 +472,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                         : "OPHTALMOLOGUE",
             password_provisoire: data.password,
             telephone: data.phone,
+            etablissement: data.etablissement,
             createdBy: user ? `${user.firstName} ${user.lastName}` : "",
             creatorRole: user?.role,
           };
+          if (data.etablissement && data.email) {
+            localStorage.setItem(`teleoph.user_etab.${data.email}`, data.etablissement);
+          }
 
           const token =
             localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
@@ -497,6 +542,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             prenom: data.firstName,
             nom: data.lastName,
             telephone: data.phone,
+            etablissement: data.etablissement,
             password: data.password, // Nouveau mot de passe (optionnel)
             old_password: data.oldPassword, // Ancien mot de passe
             role: data.role
@@ -534,12 +580,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUsers((prev) =>
             prev.map((u) => {
               if (u.email === oldEmail) {
+                if (data.etablissement !== undefined) {
+                  localStorage.setItem(`teleoph.user_etab.${data.email}`, data.etablissement);
+                }
                 return {
                   ...u,
                   email: data.email,
                   firstName: data.firstName,
                   lastName: data.lastName,
                   phone: data.phone,
+                  etablissement: data.etablissement !== undefined ? data.etablissement : u.etablissement,
                   role: data.role || u.role,
                 };
               }
@@ -552,13 +602,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser((prev) =>
               prev
                 ? {
-                  ...prev,
-                  email: data.email,
-                  firstName: data.firstName,
-                  lastName: data.lastName,
-                  phone: data.phone,
-                  role: data.role || prev.role,
-                }
+                    ...prev,
+                    email: data.email,
+                    firstName: data.firstName,
+                    lastName: data.lastName,
+                    phone: data.phone,
+                    etablissement: data.etablissement !== undefined ? data.etablissement : prev.etablissement,
+                    role: data.role || prev.role,
+                  }
                 : null,
             );
           }
