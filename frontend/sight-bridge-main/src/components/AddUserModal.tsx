@@ -25,10 +25,9 @@ const ROLE_OPTIONS: { value: CreatableRole; label: string; icon: LucideIcon }[] 
   { value: "MedecinReferant", label: "Médecin Référant", icon: HeartPulse },
 ];
 
-// Rôles pour lesquels le champ "Nom d'établissement" est proposé.
-const ETABLISSEMENT_ROLES: CreatableRole[] = ["Technicien", "MedecinReferant", "Medecin"];
-// Seul le technicien est obligatoirement rattaché à un établissement (sa worklist en dépend).
-const ETABLISSEMENT_REQUIRED_ROLES: CreatableRole[] = ["Technicien"];
+// Seul le technicien est rattaché à un établissement (sa worklist en dépend) :
+// le champ "Nom d'établissement" n'est proposé, et obligatoire, que pour lui.
+const ETABLISSEMENT_ROLES: CreatableRole[] = ["Technicien"];
 
 const ETABLISSEMENTS = [
   "HOPITAL CIRCONSCRIPTION KELIBIA",
@@ -56,7 +55,6 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
   const [isLoading, setIsLoading] = useState(false);
 
   const showsEtablissement = ETABLISSEMENT_ROLES.includes(role);
-  const requiresEtablissement = ETABLISSEMENT_REQUIRED_ROLES.includes(role);
 
   if (!open) return null;
 
@@ -160,14 +158,10 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
             <div>
               <label className="text-xs font-medium text-slate-600">
                 Nom d'établissement{" "}
-                {requiresEtablissement ? (
-                  <span className="text-blue-600 font-semibold">(obligatoire)</span>
-                ) : (
-                  <span className="text-slate-400">(optionnel)</span>
-                )}
+                <span className="text-blue-600 font-semibold">(obligatoire)</span>
               </label>
               <select
-                required={requiresEtablissement}
+                required
                 value={form.etablissement}
                 onChange={(e) => setForm({ ...form, etablissement: e.target.value })}
                 className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"

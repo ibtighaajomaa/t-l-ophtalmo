@@ -19,6 +19,13 @@ interface KeycloakTokenPayload {
 
 export type Role = "Admin" | "Chef" | "Medecin" | "Resident" | "Technicien" | "MedecinReferant";
 
+/** Page d'accueil de chaque rôle (le médecin référant n'a pas accès à la worklist). */
+export function homePathFor(role: Role): "/admin" | "/patients" | "/worklist" {
+  if (role === "Admin") return "/admin";
+  if (role === "MedecinReferant") return "/patients";
+  return "/worklist";
+}
+
 export interface AppUser {
   id: string;
   email: string;
@@ -229,6 +236,25 @@ function loadSession(users: AppUser[]): AppUser | null {
   }
 }
 
+// L'établissement de rattachement fait foi côté serveur (Profil.region_affectation) :
+// le localStorage n'est qu'un cache d'affichage, mis à jour après chaque réponse du serveur.
+function syncEtablissementFromServer(
+  email: string,
+  apply: (etablissement: string) => void,
+) {
+  fetch(`/api/users/paginated/?search=${encodeURIComponent(email)}`)
+    .then((r) => r.json())
+    .then((d) => {
+      const found = d.users?.find((u: any) => (u.email || "").toLowerCase() === email.toLowerCase());
+      if (!found) return;
+      const etab = (found.etablissement || "").trim();
+      if (etab) localStorage.setItem(`teleoph.user_etab.${email}`, etab);
+      else localStorage.removeItem(`teleoph.user_etab.${email}`);
+      apply(etab);
+    })
+    .catch(() => {});
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [initKeycloak, setInitKeycloak] = useState(false);
   const [users, setUsers] = useState<AppUser[]>(() => loadUsers());
@@ -292,18 +318,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         setUser(loggedUser);
 
-        if (!savedEtab) {
-          fetch(`/api/users/paginated/?search=${encodeURIComponent(email)}`)
-            .then((r) => r.json())
-            .then((d) => {
-              const found = d.users?.find((u: any) => u.email.toLowerCase() === email.toLowerCase());
-              if (found?.etablissement) {
-                localStorage.setItem(`teleoph.user_etab.${email}`, found.etablissement);
-                setUser((prev) => (prev ? { ...prev, etablissement: found.etablissement } : null));
-              }
-            })
-            .catch(() => {});
-        }
+        syncEtablissementFromServer(email, (etab) =>
+          setUser((prev) => (prev ? { ...prev, etablissement: etab } : null)),
+        );
       } catch (err) {
         console.error("Token invalide", err);
         localStorage.removeItem("teleoph.token");
@@ -378,18 +395,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             });
             setUser(loggedUser);
 
-            if (!savedEtab) {
-              fetch(`/api/users/paginated/?search=${encodeURIComponent(email)}`)
-                .then((r) => r.json())
-                .then((d) => {
-                  const found = d.users?.find((u: any) => u.email.toLowerCase() === email.toLowerCase());
-                  if (found?.etablissement) {
-                    localStorage.setItem(`teleoph.user_etab.${email}`, found.etablissement);
-                    setUser((prev) => (prev ? { ...prev, etablissement: found.etablissement } : null));
-                  }
-                })
-                .catch(() => {});
-            }
+            syncEtablissementFromServer(email, (etab) =>
+              setUser((prev) => (prev ? { ...prev, etablissement: etab } : null)),
+            );
 
             return { ok: true };
           } else {
