@@ -13,3 +13,7 @@ Published_Data.zip
 rns.crt
 rns_truststore.jks
 docker-compose.yml
+
+# Livraison production (plusieurs dizaines de Go)
+release_prod
+deploy_complet_prod.tar.gz*

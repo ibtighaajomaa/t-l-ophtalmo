@@ -32,3 +32,8 @@ monai-label/models/
 monai-apps/radiology/logs/
 Eye-laterality-detection/
 /t-l-ophtalmo/
+
+# Livraison production (deploy/prod/export_release.sh)
+/release_prod/
+/deploy_complet_prod.tar.gz
+/deploy_complet_prod.tar.gz.sha256
