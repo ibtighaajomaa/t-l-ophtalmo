@@ -5,7 +5,7 @@ import { Worklist } from "@/components/Worklist";
 
 export const Route = createFileRoute("/_app/historique/examens")({
   component: () => (
-    <ProtectedRoute roles={["Admin", "Chef", "Resident"]}>
+    <ProtectedRoute roles={["Admin", "Chef"]}>
       <ExamHistory />
     </ProtectedRoute>
   ),

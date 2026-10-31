@@ -16,6 +16,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppWorklistRouteImport } from './routes/_app.worklist'
 import { Route as AppPatientsRouteImport } from './routes/_app.patients'
 import { Route as AppLogsRouteImport } from './routes/_app.logs'
+import { Route as AppDemandesRouteImport } from './routes/_app.demandes'
 import { Route as AppCalendrierRouteImport } from './routes/_app.calendrier'
 import { Route as AppAnalyseRouteImport } from './routes/_app.analyse'
 import { Route as AppAjouterPatientRouteImport } from './routes/_app.ajouter-patient'
@@ -56,6 +57,11 @@ const AppPatientsRoute = AppPatientsRouteImport.update({
 const AppLogsRoute = AppLogsRouteImport.update({
   id: '/logs',
   path: '/logs',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDemandesRoute = AppDemandesRouteImport.update({
+  id: '/demandes',
+  path: '/demandes',
   getParentRoute: () => AppRoute,
 } as any)
 const AppCalendrierRoute = AppCalendrierRouteImport.update({
@@ -102,6 +108,7 @@ export interface FileRoutesByFullPath {
   '/ajouter-patient': typeof AppAjouterPatientRoute
   '/analyse': typeof AppAnalyseRoute
   '/calendrier': typeof AppCalendrierRoute
+  '/demandes': typeof AppDemandesRoute
   '/logs': typeof AppLogsRoute
   '/patients': typeof AppPatientsRoute
   '/worklist': typeof AppWorklistRouteWithChildren
@@ -117,6 +124,7 @@ export interface FileRoutesByTo {
   '/ajouter-patient': typeof AppAjouterPatientRoute
   '/analyse': typeof AppAnalyseRoute
   '/calendrier': typeof AppCalendrierRoute
+  '/demandes': typeof AppDemandesRoute
   '/logs': typeof AppLogsRoute
   '/patients': typeof AppPatientsRoute
   '/worklist': typeof AppWorklistRouteWithChildren
@@ -134,6 +142,7 @@ export interface FileRoutesById {
   '/_app/ajouter-patient': typeof AppAjouterPatientRoute
   '/_app/analyse': typeof AppAnalyseRoute
   '/_app/calendrier': typeof AppCalendrierRoute
+  '/_app/demandes': typeof AppDemandesRoute
   '/_app/logs': typeof AppLogsRoute
   '/_app/patients': typeof AppPatientsRoute
   '/_app/worklist': typeof AppWorklistRouteWithChildren
@@ -151,6 +160,7 @@ export interface FileRouteTypes {
     | '/ajouter-patient'
     | '/analyse'
     | '/calendrier'
+    | '/demandes'
     | '/logs'
     | '/patients'
     | '/worklist'
@@ -166,6 +176,7 @@ export interface FileRouteTypes {
     | '/ajouter-patient'
     | '/analyse'
     | '/calendrier'
+    | '/demandes'
     | '/logs'
     | '/patients'
     | '/worklist'
@@ -182,6 +193,7 @@ export interface FileRouteTypes {
     | '/_app/ajouter-patient'
     | '/_app/analyse'
     | '/_app/calendrier'
+    | '/_app/demandes'
     | '/_app/logs'
     | '/_app/patients'
     | '/_app/worklist'
@@ -246,6 +258,13 @@ declare module '@tanstack/react-router' {
       path: '/logs'
       fullPath: '/logs'
       preLoaderRoute: typeof AppLogsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/demandes': {
+      id: '/_app/demandes'
+      path: '/demandes'
+      fullPath: '/demandes'
+      preLoaderRoute: typeof AppDemandesRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/calendrier': {
@@ -317,6 +336,7 @@ interface AppRouteChildren {
   AppAjouterPatientRoute: typeof AppAjouterPatientRoute
   AppAnalyseRoute: typeof AppAnalyseRoute
   AppCalendrierRoute: typeof AppCalendrierRoute
+  AppDemandesRoute: typeof AppDemandesRoute
   AppLogsRoute: typeof AppLogsRoute
   AppPatientsRoute: typeof AppPatientsRoute
   AppWorklistRoute: typeof AppWorklistRouteWithChildren
@@ -329,6 +349,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAjouterPatientRoute: AppAjouterPatientRoute,
   AppAnalyseRoute: AppAnalyseRoute,
   AppCalendrierRoute: AppCalendrierRoute,
+  AppDemandesRoute: AppDemandesRoute,
   AppLogsRoute: AppLogsRoute,
   AppPatientsRoute: AppPatientsRoute,
   AppWorklistRoute: AppWorklistRouteWithChildren,

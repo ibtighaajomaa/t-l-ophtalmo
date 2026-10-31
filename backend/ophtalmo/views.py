@@ -33,7 +33,7 @@ from .patient_referrals import (
     link_referral_to_existing_exam,
 )
 from .orthanc_origin import resolve_study_origin
-from .etablissements import filter_exams_by_etablissement
+from .etablissements import etablissement_matches, filter_exams_by_etablissement
 from .analysis_utils import (
     DEEPSEENET_FACTORS,
     DEEPSEENET_LABELS_FR,
@@ -76,8 +76,27 @@ def _role_flags(request):
     return is_admin, is_technicien
 
 
-def _technicien_etablissement(request):
-    """Établissement de rattachement du technicien (Profil.region_affectation)."""
+def _is_chef(request):
+    """Coordinateur d'établissement (rôle Keycloak CHEF_SERVICE) : observe son établissement."""
+    if not request.user.is_authenticated:
+        return False
+    roles = getattr(request, 'roles', []) or []
+    if any(r in roles for r in ('CHEF_SERVICE', 'Chef')):
+        return True
+    try:
+        return request.user.profil.role in ('Chef', 'CHEF_SERVICE')
+    except Exception:
+        return False
+
+
+def _scoped_to_etablissement(request):
+    """True si l'utilisateur ne voit que son établissement (technicien, coordinateur d'établissement)."""
+    is_admin, is_technicien = _role_flags(request)
+    return not is_admin and (is_technicien or _is_chef(request))
+
+
+def _etablissement_utilisateur(request):
+    """Établissement de rattachement de l'utilisateur (Profil.region_affectation)."""
     try:
         return (request.user.profil.region_affectation or '').strip()
     except Exception:
@@ -455,9 +474,10 @@ def exam_list(request):
             exams = exams.filter(priority=priority_param)
 
         is_admin, is_technicien = _role_flags(request)
+        scoped = _scoped_to_etablissement(request)
 
         region = request.query_params.get('region', '') or request.query_params.get('etablissement', '')
-        if region and not is_technicien:
+        if region and not scoped:
             from .models import DicomModalitySite
             matching_ips = list(
                 DicomModalitySite.objects.filter(institution_name__icontains=region)
@@ -481,11 +501,11 @@ def exam_list(request):
 
         if request.user.is_authenticated:
             try:
-                if is_technicien:
-                    # Le technicien visualise uniquement les examens de son établissement
-                    exams = filter_exams_by_etablissement(exams, _technicien_etablissement(request))
+                if scoped:
+                    # Technicien et coordinateur d'établissement : uniquement les examens de leur établissement
+                    exams = filter_exams_by_etablissement(exams, _etablissement_utilisateur(request))
                 elif not is_admin:
-                    # Médecin / Chef / Résident : ne visualise QUE les examens qui lui sont assignés le jour J
+                    # Médecin : ne visualise QUE les examens qui lui sont assignés le jour J
                     exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
                     from django.utils import timezone
                     today = timezone.now().date()
@@ -579,11 +599,12 @@ def exam_stats(request):
 
     exams = Exam.objects.all()
     is_admin, is_technicien = _role_flags(request)
+    scoped = _scoped_to_etablissement(request)
     if request.user.is_authenticated:
         try:
-            if is_technicien:
-                # Le technicien visualise uniquement les examens de son établissement
-                exams = filter_exams_by_etablissement(exams, _technicien_etablissement(request))
+            if scoped:
+                # Technicien et coordinateur d'établissement : uniquement les examens de leur établissement
+                exams = filter_exams_by_etablissement(exams, _etablissement_utilisateur(request))
             elif not is_admin:
                 exams = exams.filter(Q(assigned_to=request.user) | Q(reassigned_from=request.user))
                 from django.utils import timezone
@@ -603,7 +624,7 @@ def exam_stats(request):
         )
 
     region = request.query_params.get('region', '') or request.query_params.get('etablissement', '')
-    if region and not is_technicien:
+    if region and not scoped:
         from .models import DicomModalitySite
         matching_ips = list(
             DicomModalitySite.objects.filter(institution_name__icontains=region)
@@ -3010,20 +3031,33 @@ def _referral_payload(referral):
 @authentication_classes([KeycloakAuthentication])
 @permission_classes([IsAuthenticated])
 def patient_referrals(request):
-    """Patients adressés par le médecin référant (saisie + suivi)."""
-    is_admin, _ = _role_flags(request)
+    """Patients adressés par le médecin référant (saisie + suivi).
+
+    En lecture, le technicien et le coordinateur d'établissement voient les
+    demandes de leur établissement : c'est la liste d'attente d'acquisition.
+    """
+    is_admin, is_technicien = _role_flags(request)
     is_referant = _is_medecin_referant(request)
-    if not (is_admin or is_referant):
-        return Response({'error': 'Accès réservé au médecin référant.'}, status=status.HTTP_403_FORBIDDEN)
+    if not (is_admin or is_referant or is_technicien or _is_chef(request)):
+        return Response(
+            {'error': "Accès réservé au médecin référant, au technicien et au coordinateur d'établissement."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
     if request.method == 'GET':
         qs = PatientReferral.objects.select_related('exam', 'created_by')
-        if not is_admin:
+        if not is_admin and is_referant:
             qs = qs.filter(created_by=request.user)
         q = (request.query_params.get('search') or '').strip()
         if q:
             qs = qs.filter(patient_id__icontains=q)
-        return Response([_referral_payload(r) for r in qs[:500]])
+        if not is_admin and not is_referant:
+            # Même règle que la worklist : sans établissement, ou sans correspondance, rien.
+            etablissement = _etablissement_utilisateur(request)
+            referrals = [r for r in qs if etablissement_matches(etablissement, r.etablissement)]
+        else:
+            referrals = qs
+        return Response([_referral_payload(r) for r in referrals[:500]])
 
     if not is_referant:
         return Response({'error': 'Seul le médecin référant peut adresser un patient.'}, status=status.HTTP_403_FORBIDDEN)

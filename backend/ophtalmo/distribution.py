@@ -9,7 +9,7 @@ Priorité :
 Contraintes :
   - Max 30 examens par médecin
   - Médecin doit être disponible (is_disponible=True)
-  - Médecin doit avoir le rôle approprié (Medecin, Resident, OPHTALMOLOGUE)
+  - Médecin doit avoir le rôle approprié (Medecin / OPHTALMOLOGUE)
 """
 import logging
 from datetime import timedelta
@@ -27,8 +27,9 @@ logger = logging.getLogger(__name__)
 
 MAX_CHARGE_PAR_MEDECIN = 30
 
-# Rôles éligibles pour recevoir des examens
-ROLES_MEDECIN = ['Medecin', 'Resident', 'RESIDENT', 'Chef']
+# Rôles éligibles pour recevoir des examens : seuls les ophtalmologues lisent.
+# Le coordinateur d'établissement (Chef) observe, il n'interprète pas.
+ROLES_MEDECIN = ['Medecin', 'OPHTALMOLOGUE']
 
 
 def get_medecins_disponibles():

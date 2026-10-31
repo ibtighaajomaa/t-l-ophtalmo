@@ -164,7 +164,9 @@ function toFrontendExam(api: ApiExam): Exam {
   };
 }
 
-export async function fetchExams(params?: FetchExamsParams): Promise<{ exams: Exam[]; total: number }> {
+export async function fetchExams(
+  params?: FetchExamsParams,
+): Promise<{ exams: Exam[]; total: number }> {
   const searchParams = new URLSearchParams();
   if (params?.status) searchParams.set("status", params.status);
   if (params?.priority) searchParams.set("priority", params.priority);
@@ -186,7 +188,9 @@ export async function fetchExams(params?: FetchExamsParams): Promise<{ exams: Ex
   };
 }
 
-export async function fetchAllExams(params?: Omit<FetchExamsParams, "page" | "page_size">): Promise<{
+export async function fetchAllExams(
+  params?: Omit<FetchExamsParams, "page" | "page_size">,
+): Promise<{
   exams: Exam[];
   total: number;
 }> {
@@ -215,14 +219,15 @@ export async function fetchPlatformDoctors(): Promise<PlatformDoctor[]> {
 
   for (const user of users) {
     const role = user.role || "";
-    const isCareDoctor = role === "Medecin" || role === "Resident" || role === "Chef";
+    // Seuls les ophtalmologues interprètent ; les coordinateurs (Admin/Chef) supervisent.
+    const isCareDoctor = role === "Medecin";
     const isActive = user.is_active !== false && user.isActive !== false;
     if (!isCareDoctor || !isActive) continue;
 
     const first = user.firstName ?? user.first_name ?? "";
     const last = user.lastName ?? user.last_name ?? "";
     const fallback = user.username || user.email || "";
-    const title = role === "Chef" ? "Pr." : "Dr.";
+    const title = "Dr.";
     const fullName = `${title} ${first} ${last}`.trim().replace(/\s+/g, " ");
     const name = fullName === title ? fallback : fullName;
     if (!name) continue;
@@ -486,11 +491,16 @@ export interface AnalysisResult {
 }
 
 export type EyeSide = "right" | "left";
-export type PerEyeAnalysis = Partial<Record<EyeSide, AnalysisResult & {
-  side?: EyeSide;
-  series_instance_uids?: string[];
-  source_series_uid?: string;
-}>>;
+export type PerEyeAnalysis = Partial<
+  Record<
+    EyeSide,
+    AnalysisResult & {
+      side?: EyeSide;
+      series_instance_uids?: string[];
+      source_series_uid?: string;
+    }
+  >
+>;
 
 export async function runAIAnalysis(
   studyInstanceUid: string,
@@ -507,17 +517,19 @@ export async function runAIAnalysis(
   return res.json();
 }
 
-export async function fetchAnalysis(
-  studyInstanceUid: string,
-): Promise<{ status: string; analysis: PerEyeAnalysis; fovea_markers?: Array<{
-  study_instance_uid?: string;
-  series_instance_uid?: string;
-  sop_instance_uid: string;
-  x_px: number;
-  y_px: number;
-  source_width: number;
-  source_height: number;
-}> }> {
+export async function fetchAnalysis(studyInstanceUid: string): Promise<{
+  status: string;
+  analysis: PerEyeAnalysis;
+  fovea_markers?: Array<{
+    study_instance_uid?: string;
+    series_instance_uid?: string;
+    sop_instance_uid: string;
+    x_px: number;
+    y_px: number;
+    source_width: number;
+    source_height: number;
+  }>;
+}> {
   const res = await fetch(
     `${BASE}/analysis/?study_instance_uid=${encodeURIComponent(studyInstanceUid)}`,
     { headers: getHeaders() },
@@ -533,7 +545,12 @@ export async function generateReport(
   analysisData: AnalysisResult,
   patientId: string,
   options?: { patientAge?: number; eye?: string; seriesUid?: string; studyInstanceUid?: string },
-): Promise<{ report_text?: string; report_html?: string; status?: string; report_generation_status?: string }> {
+): Promise<{
+  report_text?: string;
+  report_html?: string;
+  status?: string;
+  report_generation_status?: string;
+}> {
   const res = await fetch(`${BASE}/generate-report/`, {
     method: "POST",
     headers: getHeaders(),

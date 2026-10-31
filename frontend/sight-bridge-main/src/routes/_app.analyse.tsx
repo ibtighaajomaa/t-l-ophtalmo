@@ -24,7 +24,7 @@ import type { Exam } from "@/lib/mock-worklist";
 
 export const Route = createFileRoute("/_app/analyse")({
   component: () => (
-    <ProtectedRoute roles={["Admin", "Chef", "Medecin", "Resident"]}>
+    <ProtectedRoute roles={["Admin", "Chef", "Medecin"]}>
       <AnalysePage />
     </ProtectedRoute>
   ),
@@ -306,7 +306,7 @@ function KpiTile({
 
 function AnalysePage() {
   const { user } = useAuth();
-  const isDoctorView = user.role === "Medecin" || user.role === "Resident";
+  const isDoctorView = user.role === "Medecin";
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
   const [dateRangeStart, setDateRangeStart] = useState<string>("");
   const [dateRangeEnd, setDateRangeEnd] = useState<string>("");

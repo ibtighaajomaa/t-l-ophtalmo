@@ -3,6 +3,7 @@ import { useMemo, useState, useEffect } from "react";
 import { toast } from "sonner";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { useAuth } from "@/lib/auth-context";
+import { isCoordinator } from "@/lib/roles";
 import { MOCK_PLANNING, PlanningSession } from "@/lib/mock-planning";
 import { fetchExams } from "@/lib/exam-api";
 import type { Exam } from "@/lib/mock-worklist";
@@ -53,7 +54,7 @@ import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_app/calendrier")({
   component: () => (
-    <ProtectedRoute roles={["Admin", "Chef", "Medecin", "Resident"]}>
+    <ProtectedRoute roles={["Admin", "Chef", "Medecin"]}>
       <CalendrierPage />
     </ProtectedRoute>
   ),
@@ -153,12 +154,9 @@ function CalendrierPage() {
           const docs = new Set<string>();
           const emails: Record<string, string> = {};
           data.users.forEach((u: any) => {
-            if (
-              (u.role === "Medecin" || u.role === "Resident" || u.role === "Chef") &&
-              u.is_disponible
-            ) {
-              const title = u.role === "Chef" ? "Pr" : "Dr";
-              const fullName = getFullName(title, u.firstName, u.lastName);
+            // Seuls les ophtalmologues lisent : les coordinateurs n'ont pas de sessions.
+            if (u.role === "Medecin" && u.is_disponible) {
+              const fullName = getFullName("Dr", u.firstName, u.lastName);
               docs.add(fullName);
               emails[fullName] = u.email;
             }
@@ -176,7 +174,7 @@ function CalendrierPage() {
   const [selectedDoctors, setSelectedDoctors] = useState<Set<string>>(new Set(doctors));
 
   useEffect(() => {
-    if (user?.role === "Admin") {
+    if (isCoordinator(user?.role)) {
       setSelectedDoctors(new Set(doctors));
     } else if (user?.firstName) {
       const title = user.role === "Chef" ? "Pr" : "Dr";
@@ -407,7 +405,9 @@ function CalendrierPage() {
                           const currentUserFullName = user
                             ? getFullName(currentUserTitle, user.firstName, user.lastName)
                             : "";
-                          setNewSessionDoctor(user?.role !== "Admin" ? currentUserFullName : "");
+                          setNewSessionDoctor(
+                            !isCoordinator(user?.role) ? currentUserFullName : "",
+                          );
                           setNewSessionCount(1);
                           setIsCreateDialogOpen(true);
                         }}
@@ -458,7 +458,7 @@ function CalendrierPage() {
                     return renderedSessions.map((session) => {
                       const renderStart = Math.max(START_HOUR, session._start);
                       const renderEnd = Math.min(END_HOUR + 1, session._end);
-                      
+
                       if (renderStart >= renderEnd) return null;
 
                       const duration = Math.max(0.5, renderEnd - renderStart);
@@ -488,7 +488,7 @@ function CalendrierPage() {
                               ? getFullName(currentUserTitle, user.firstName, user.lastName)
                               : "";
                             if (
-                              user?.role !== "Admin" &&
+                              !isCoordinator(user?.role) &&
                               session.doctorName !== currentUserFullName
                             )
                               return;
@@ -577,11 +577,13 @@ function CalendrierPage() {
                   <SelectValue placeholder="Heure de fin" />
                 </SelectTrigger>
                 <SelectContent className="rounded-xl">
-                  {[...HOURS, 24].filter((h) => h > newSessionStartHour).map((h) => (
-                    <SelectItem key={h} value={h.toString()}>
-                      {formatHour(h)}
-                    </SelectItem>
-                  ))}
+                  {[...HOURS, 24]
+                    .filter((h) => h > newSessionStartHour)
+                    .map((h) => (
+                      <SelectItem key={h} value={h.toString()}>
+                        {formatHour(h)}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -594,7 +596,7 @@ function CalendrierPage() {
                 <Select
                   value={newSessionDoctor}
                   onValueChange={setNewSessionDoctor}
-                  disabled={user?.role !== "Admin"}
+                  disabled={!isCoordinator(user?.role)}
                 >
                   <SelectTrigger
                     id="doctor"
@@ -685,7 +687,9 @@ function CalendrierPage() {
                           const updated = {
                             ...data.session,
                             parsedDate: new Date(data.session.parsedDate),
-                            doctorName: data.session.doctorName ? data.session.doctorName.replace(/\s+/g, " ").trim() : "",
+                            doctorName: data.session.doctorName
+                              ? data.session.doctorName.replace(/\s+/g, " ").trim()
+                              : "",
                           };
                           setPlanning((prev) =>
                             prev.map((s) => (s.id === editingSessionId ? updated : s)),
@@ -721,7 +725,9 @@ function CalendrierPage() {
                             const newS = {
                               ...data.session,
                               parsedDate: new Date(data.session.parsedDate),
-                              doctorName: data.session.doctorName ? data.session.doctorName.replace(/\s+/g, " ").trim() : "",
+                              doctorName: data.session.doctorName
+                                ? data.session.doctorName.replace(/\s+/g, " ").trim()
+                                : "",
                             };
                             setPlanning((prev) => [...prev, newS]);
                           } else if (data.error) {

@@ -4,6 +4,7 @@ import { Activity, Search, UserCheck, UserX } from "lucide-react";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { Navbar } from "@/components/Navbar";
 import { useAuth, type Role, type UsageEvent } from "@/lib/auth-context";
+import { ROLE_LABELS } from "@/lib/roles";
 import { Pagination } from "@/components/Pagination";
 
 export const Route = createFileRoute("/_app/logs")({
@@ -14,14 +15,7 @@ export const Route = createFileRoute("/_app/logs")({
   ),
 });
 
-const ROLE_LABEL: Record<Role, string> = {
-  Admin: "Admin",
-  Chef: "Chef de Service",
-  Medecin: "Ophtalmologue",
-  Resident: "Résident",
-  Technicien: "Technicien",
-  MedecinReferant: "Médecin Référant",
-};
+const ROLE_LABEL = ROLE_LABELS;
 
 function LogsPage() {
   const { users } = useAuth();
@@ -229,7 +223,7 @@ function LogsPage() {
                           {u.createdAt ? u.createdAt.slice(0, 10) : "—"}
                         </td>
                         <td className="py-3 pr-4">
-                          {u.role === "Medecin" || u.role === "Resident" || u.role === "Chef" ? (
+                          {u.role === "Medecin" ? (
                             <button
                               onClick={() => handleToggleAvailability(u.email)}
                               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium transition hover:opacity-80 cursor-pointer ${

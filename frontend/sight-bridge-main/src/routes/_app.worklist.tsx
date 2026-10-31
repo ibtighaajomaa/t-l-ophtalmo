@@ -6,7 +6,7 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 
 export const Route = createFileRoute("/_app/worklist")({
   component: () => (
-    <ProtectedRoute roles={["Admin", "Chef", "Medecin", "Resident", "Technicien"]}>
+    <ProtectedRoute roles={["Admin", "Chef", "Medecin", "Technicien"]}>
       <WorklistPage />
     </ProtectedRoute>
   ),
@@ -16,9 +16,9 @@ function WorklistPage() {
   const { user } = useAuth();
   const subtitle =
     user?.role === "Admin"
-      ? "Activité du jour — supervision (lecture seule)"
+      ? "Activité du jour — supervision nationale (lecture seule)"
       : user?.role === "Chef"
-        ? "Examens du jour — filtrer, assigner et superviser"
+        ? `Activité du jour — supervision de l'établissement${user?.etablissement ? ` (${user.etablissement})` : ""}`
         : user?.role === "Technicien"
           ? `Acquisitions de l'établissement${user?.etablissement ? ` (${user.etablissement})` : ""}`
           : "Examens du jour à interpréter";

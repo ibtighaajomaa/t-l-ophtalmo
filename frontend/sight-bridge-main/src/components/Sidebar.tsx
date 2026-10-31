@@ -9,6 +9,7 @@ import {
   Stethoscope,
   UserPlus,
   History,
+  Inbox,
   ChevronDown,
   Activity,
   FileText,
@@ -17,6 +18,7 @@ import {
   User,
 } from "lucide-react";
 import { useAuth, type Role } from "@/lib/auth-context";
+import { ROLE_LABELS } from "@/lib/roles";
 import { AddUserModal } from "./AddUserModal";
 import { ProfileModal } from "./ProfileModal";
 
@@ -33,7 +35,14 @@ const NAV: NavItem[] = [
     to: "/worklist",
     label: "Worklist",
     icon: ClipboardList,
-    roles: ["Admin", "Chef", "Medecin", "Resident", "Technicien"],
+    roles: ["Admin", "Chef", "Medecin", "Technicien"],
+  },
+  {
+    // Liste d'attente du technicien : demandes d'acquisition créées par les médecins référants.
+    to: "/demandes",
+    label: "Demandes",
+    icon: Inbox,
+    roles: ["Technicien", "Chef"],
   },
   {
     to: "/ajouter-patient",
@@ -52,19 +61,19 @@ const NAV: NavItem[] = [
     to: "/analyse",
     label: "Analyse",
     icon: BarChart3,
-    roles: ["Admin", "Chef", "Medecin", "Resident"],
+    roles: ["Admin", "Chef", "Medecin"],
   },
   {
     to: "/historique/examens",
     label: "Historique des examens",
     icon: FileText,
-    roles: ["Chef", "Resident"],
+    roles: ["Chef"],
   },
   {
     to: "/calendrier",
     label: "Calendrier",
     icon: Calendar,
-    roles: ["Admin", "Chef", "Medecin", "Resident"],
+    roles: ["Admin", "Chef", "Medecin"],
   },
   {
     to: "/logs",
@@ -74,7 +83,7 @@ const NAV: NavItem[] = [
   },
 ];
 
-const HISTORY_ROLES: Role[] = ["Admin", "Chef", "Medecin", "Resident", "Technicien", "MedecinReferant"];
+const HISTORY_ROLES: Role[] = ["Admin", "Chef", "Medecin", "Technicien", "MedecinReferant"];
 
 export function Sidebar() {
   const { user, logout } = useAuth();
@@ -141,7 +150,12 @@ export function Sidebar() {
                 <div className="truncate text-sm font-medium text-slate-900">
                   {user.firstName} {user.lastName}
                 </div>
-                <div className="truncate text-xs text-slate-500">{user.role}</div>
+                <div className="truncate text-xs text-slate-500">{ROLE_LABELS[user.role]}</div>
+                {user.etablissement && (
+                  <div className="truncate text-[11px] text-slate-400" title={user.etablissement}>
+                    {user.etablissement}
+                  </div>
+                )}
               </div>
             </div>
             <button

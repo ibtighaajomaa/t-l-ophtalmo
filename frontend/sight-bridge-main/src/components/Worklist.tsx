@@ -219,7 +219,11 @@ function QualityModal({ exam, onClose }: { exam: Exam; onClose: () => void }) {
   );
 }
 
-function clinicalValue(info: Record<string, unknown> | null | undefined, keys: string[], fallback = "") {
+function clinicalValue(
+  info: Record<string, unknown> | null | undefined,
+  keys: string[],
+  fallback = "",
+) {
   if (!info) return fallback;
   for (const key of keys) {
     const value = info[key];
@@ -240,15 +244,38 @@ function clinicalBoolean(info: Record<string, unknown> | null | undefined, keys:
 
 function ClinicalHistoryModal({ exam, onClose }: { exam: Exam; onClose: () => void }) {
   const info = exam.clinicalInfo;
-  const diabetesType = clinicalValue(info, ["diabetes_type", "diabete_type", "type_diabete", "typeDiabete"]);
+  const diabetesType = clinicalValue(info, [
+    "diabetes_type",
+    "diabete_type",
+    "type_diabete",
+    "typeDiabete",
+  ]);
   const hta = clinicalBoolean(info, ["hta", "hypertension", "hypertension_arterielle"]);
-  const otherPathology = clinicalValue(info, ["other_pathology", "autre_pathologie", "autrePathologie"]);
-  const notes = clinicalValue(info, ["notes", "motif", "motif_notes", "motifNotes", "clinical_notes"]);
+  const otherPathology = clinicalValue(info, [
+    "other_pathology",
+    "autre_pathologie",
+    "autrePathologie",
+  ]);
+  const notes = clinicalValue(info, [
+    "notes",
+    "motif",
+    "motif_notes",
+    "motifNotes",
+    "clinical_notes",
+  ]);
   const inputClass =
     "min-h-11 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 shadow-sm";
   const labelClass = "text-xs font-semibold uppercase tracking-wide text-slate-500";
 
-  function Field({ label, value, className = "" }: { label: string; value: string; className?: string }) {
+  function Field({
+    label,
+    value,
+    className = "",
+  }: {
+    label: string;
+    value: string;
+    className?: string;
+  }) {
     return (
       <label className={`space-y-1.5 ${className}`}>
         <span className={labelClass}>{label}</span>
@@ -279,7 +306,9 @@ function ClinicalHistoryModal({ exam, onClose }: { exam: Exam; onClose: () => vo
       >
         <span
           className={`h-3.5 w-3.5 rounded-full border ${
-            selected ? "border-current bg-current shadow-[inset_0_0_0_3px_white]" : "border-slate-300 bg-white"
+            selected
+              ? "border-current bg-current shadow-[inset_0_0_0_3px_white]"
+              : "border-slate-300 bg-white"
           }`}
         />
         {label}
@@ -304,7 +333,9 @@ function ClinicalHistoryModal({ exam, onClose }: { exam: Exam; onClose: () => vo
               <ClipboardList className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-blue-600">Dossier clinique</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-blue-600">
+                Dossier clinique
+              </p>
               <h2 id="patient-history-title" className="mt-1 text-xl font-semibold text-slate-950">
                 Renseignements cliniques et antécédents
               </h2>
@@ -330,7 +361,9 @@ function ClinicalHistoryModal({ exam, onClose }: { exam: Exam; onClose: () => vo
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
                   <h3 className="font-semibold text-slate-950">Diabète</h3>
-                  <p className="mt-0.5 text-sm text-slate-500">Type, durée et derniers bilans biologiques.</p>
+                  <p className="mt-0.5 text-sm text-slate-500">
+                    Type, durée et derniers bilans biologiques.
+                  </p>
                 </div>
               </div>
 
@@ -338,49 +371,90 @@ function ClinicalHistoryModal({ exam, onClose }: { exam: Exam; onClose: () => vo
                 <div className="space-y-1.5">
                   <span className={labelClass}>Type de diabète</span>
                   <div className="grid gap-2 sm:grid-cols-3">
-              {["TYPE 1", "TYPE 2", "Gestationnel"].map((type) => (
+                    {["TYPE 1", "TYPE 2", "Gestationnel"].map((type) => (
                       <Choice
                         key={type}
                         label={type}
-                        selected={diabetesType.toLowerCase().includes(type.toLowerCase().replace("type ", ""))}
+                        selected={diabetesType
+                          .toLowerCase()
+                          .includes(type.toLowerCase().replace("type ", ""))}
                       />
-              ))}
+                    ))}
                   </div>
                 </div>
 
-                <Field label="Durée du diabète" value={clinicalValue(info, ["diabetes_duration", "duree_diabete", "dureeDiabete"])} />
+                <Field
+                  label="Durée du diabète"
+                  value={clinicalValue(info, [
+                    "diabetes_duration",
+                    "duree_diabete",
+                    "dureeDiabete",
+                  ])}
+                />
 
                 <div className="grid gap-3 sm:grid-cols-[1fr_180px]">
-                  <Field label="Dernière glycémie" value={clinicalValue(info, ["last_glycemia", "derniere_glycemie", "glycemie"])} />
-                  <Field label="Date" value={clinicalValue(info, ["last_glycemia_date", "date_derniere_glycemie", "date_glycemie"])} />
+                  <Field
+                    label="Dernière glycémie"
+                    value={clinicalValue(info, ["last_glycemia", "derniere_glycemie", "glycemie"])}
+                  />
+                  <Field
+                    label="Date"
+                    value={clinicalValue(info, [
+                      "last_glycemia_date",
+                      "date_derniere_glycemie",
+                      "date_glycemie",
+                    ])}
+                  />
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-[1fr_180px]">
-                  <Field label="Dernière HbA1c" value={clinicalValue(info, ["last_hba1c", "derniere_hba1c", "hba1c"])} />
-                  <Field label="Date" value={clinicalValue(info, ["last_hba1c_date", "date_derniere_hba1c", "date_hba1c"])} />
+                  <Field
+                    label="Dernière HbA1c"
+                    value={clinicalValue(info, ["last_hba1c", "derniere_hba1c", "hba1c"])}
+                  />
+                  <Field
+                    label="Date"
+                    value={clinicalValue(info, [
+                      "last_hba1c_date",
+                      "date_derniere_hba1c",
+                      "date_hba1c",
+                    ])}
+                  />
                 </div>
               </div>
             </section>
 
             <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <h3 className="font-semibold text-slate-950">Traitement et facteurs de risque</h3>
-              <p className="mt-0.5 text-sm text-slate-500">Informations utiles avant lecture de l’examen.</p>
+              <p className="mt-0.5 text-sm text-slate-500">
+                Informations utiles avant lecture de l’examen.
+              </p>
 
               <div className="mt-4 space-y-4">
-                <Field label="Type de traitement" value={clinicalValue(info, ["treatment_type", "type_traitement", "traitement"])} />
+                <Field
+                  label="Type de traitement"
+                  value={clinicalValue(info, ["treatment_type", "type_traitement", "traitement"])}
+                />
 
                 <div className="space-y-1.5">
                   <span className={labelClass}>Hypertension artérielle (HTA)</span>
                   <div className="grid grid-cols-2 gap-2">
-              {["OUI", "NON"].map((choice) => (
-                      <Choice key={choice} label={choice} selected={hta === choice} tone="emerald" />
-              ))}
+                    {["OUI", "NON"].map((choice) => (
+                      <Choice
+                        key={choice}
+                        label={choice}
+                        selected={hta === choice}
+                        tone="emerald"
+                      />
+                    ))}
                   </div>
                 </div>
 
                 <label className="space-y-1.5">
                   <span className={labelClass}>Autre pathologie</span>
-                  <span className={`${inputClass} block min-h-28 whitespace-pre-line`}>{otherPathology}</span>
+                  <span className={`${inputClass} block min-h-28 whitespace-pre-line`}>
+                    {otherPathology}
+                  </span>
                 </label>
               </div>
             </section>
@@ -391,7 +465,9 @@ function ClinicalHistoryModal({ exam, onClose }: { exam: Exam; onClose: () => vo
               <Calendar className="h-4 w-4 text-blue-600" />
               <h3 className="font-semibold text-slate-950">Motif et notes</h3>
             </div>
-            <div className={`${inputClass} block min-h-32 whitespace-pre-line leading-relaxed`}>{notes}</div>
+            <div className={`${inputClass} block min-h-32 whitespace-pre-line leading-relaxed`}>
+              {notes}
+            </div>
           </section>
 
           <div className="mt-5 flex justify-end border-t border-slate-200 pt-4">
@@ -418,8 +494,11 @@ interface WorklistProps {
 
 export function Worklist({ todayOnly = false, showStats = false }: WorklistProps) {
   const { user } = useAuth();
-  const isDoctorView = user?.role === "Medecin" || user?.role === "Resident";
+  const isDoctorView = user?.role === "Medecin";
   const isTechnician = user?.role === "Technicien";
+  // Technicien et coordinateur d'établissement : le backend restreint lui-même les examens
+  // à l'établissement du profil, le filtre établissement n'a donc pas lieu d'être.
+  const isEtablissementScoped = isTechnician || user?.role === "Chef";
   const [priorityFilter, setPriorityFilter] = useState<"Tous" | "Normal" | "Urgent">("Tous");
   // Technicien : le backend restreint lui-même les examens à l'établissement du profil,
   // aucun filtre établissement n'est envoyé ni appliqué côté client.
@@ -447,7 +526,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
     qualityBad: 0,
   });
 
-  const activeRegion = isTechnician ? "" : regionFilter;
+  const activeRegion = isEtablissementScoped ? "" : regionFilter;
 
   const loadExams = useCallback(async () => {
     setLoading(true);
@@ -462,11 +541,11 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
         page,
       });
       const result = await fetchExams({
-        status: isTechnician ? undefined : (statusFilter === "Tous" ? undefined : statusFilter),
+        status: isTechnician ? undefined : statusFilter === "Tous" ? undefined : statusFilter,
         priority: isTechnician && priorityFilter !== "Tous" ? priorityFilter : undefined,
         q: query || undefined,
         region: activeRegion || undefined,
-        doctor: isTechnician ? undefined : (doctorFilter || undefined),
+        doctor: isTechnician ? undefined : doctorFilter || undefined,
         date: filterDate || undefined,
         page,
         page_size: 10,
@@ -478,7 +557,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
       const statsData = await getExamStats({
         q: query || undefined,
         region: activeRegion || undefined,
-        doctor: isTechnician ? undefined : (doctorFilter || undefined),
+        doctor: isTechnician ? undefined : doctorFilter || undefined,
         date: filterDate || undefined,
         priority: isTechnician && priorityFilter !== "Tous" ? priorityFilter : undefined,
       });
@@ -496,7 +575,16 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, priorityFilter, query, activeRegion, doctorFilter, filterDate, page, isTechnician]);
+  }, [
+    statusFilter,
+    priorityFilter,
+    query,
+    activeRegion,
+    doctorFilter,
+    filterDate,
+    page,
+    isTechnician,
+  ]);
 
   useEffect(() => {
     loadExams();
@@ -513,8 +601,8 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
     return () => window.removeEventListener("storage", handleExamStatusUpdate);
   }, [loadExams]);
 
-  // On affiche la colonne "Assigné à" uniquement pour les admins (les autres médecins ne voient que leurs propres examens)
-  const showAssignedTo = user?.role === "Admin";
+  // La colonne "Assigné à" n'a de sens que pour les coordinateurs (les médecins ne voient que leurs propres examens)
+  const showAssignedTo = user?.role === "Admin" || user?.role === "Chef";
 
   const handleSync = async () => {
     setSyncing(true);
@@ -557,17 +645,27 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
           e.id.toLowerCase().includes(q) ||
           (e.patientId?.toLowerCase().includes(q) ?? false);
         const matchRegion =
-          isTechnician ||
+          isEtablissementScoped ||
           !activeRegion ||
           (e.region && e.region.toLowerCase().includes(activeRegion.toLowerCase())) ||
-          (e.institutionName && e.institutionName.toLowerCase().includes(activeRegion.toLowerCase()));
+          (e.institutionName &&
+            e.institutionName.toLowerCase().includes(activeRegion.toLowerCase()));
         const matchDoctor =
           isTechnician ||
           !doctorFilter ||
           (e.assignedTo && e.assignedTo.toLowerCase().includes(doctorFilter.toLowerCase()));
         return matchStatus && matchPriority && matchQ && matchRegion && matchDoctor;
       }),
-    [scopedExams, isTechnician, statusFilter, priorityFilter, query, activeRegion, doctorFilter],
+    [
+      scopedExams,
+      isTechnician,
+      isEtablissementScoped,
+      statusFilter,
+      priorityFilter,
+      query,
+      activeRegion,
+      doctorFilter,
+    ],
   );
 
   const paginatedExams = useMemo(() => {
@@ -586,9 +684,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
 
       {showStats && !loading && (
         <div
-          className={`grid grid-cols-1 gap-3 ${
-            isDoctorView ? "sm:grid-cols-2" : "sm:grid-cols-3"
-          }`}
+          className={`grid grid-cols-1 gap-3 ${isDoctorView ? "sm:grid-cols-2" : "sm:grid-cols-3"}`}
         >
           {isTechnician ? (
             <>
@@ -608,7 +704,12 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
                 <StatPill label="En attente" value={stats.attente} icon={Clock} color="orange" />
               )}
               <StatPill label="En cours" value={stats.cours} icon={Loader2} color="blue" />
-              <StatPill label="Interprété" value={stats.interprete} icon={CheckCircle2} color="green" />
+              <StatPill
+                label="Interprété"
+                value={stats.interprete}
+                icon={CheckCircle2}
+                color="green"
+              />
             </>
           )}
         </div>
@@ -628,18 +729,31 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
           />
         </div>
 
-        {isTechnician ? (
+        {isEtablissementScoped ? (
           <div className="flex items-center gap-2">
             {user?.etablissement ? (
               <div className="flex items-center gap-1.5 rounded-lg bg-purple-50 border border-purple-200 px-3 py-2 text-xs font-medium text-purple-700">
                 <Building2 className="h-4 w-4 text-purple-600" />
-                <span>Établissement : <strong>{user.etablissement}</strong></span>
+                <span>
+                  Établissement : <strong>{user.etablissement}</strong>
+                </span>
               </div>
             ) : (
               <div className="flex items-center gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs font-medium text-amber-700">
                 <Building2 className="h-4 w-4 text-amber-600" />
                 <span>Aucun établissement rattaché à votre compte</span>
               </div>
+            )}
+            {!isTechnician && (
+              <input
+                value={doctorFilter}
+                onChange={(e) => {
+                  setDoctorFilter(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="Filtrer par médecin assigné…"
+                className="w-64 rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              />
             )}
           </div>
         ) : (
@@ -671,41 +785,39 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
 
         <div className="flex items-center gap-2">
           <Filter className="h-4 w-4 text-slate-400" />
-          {isTechnician ? (
-            (["Tous", "Normal", "Urgent"] as const).map((p) => (
-              <button
-                key={p}
-                onClick={() => {
-                  setPriorityFilter(p);
-                  setPage(1);
-                }}
-                className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
-                  priorityFilter === p
-                    ? "bg-purple-600 text-white"
-                    : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
-                }`}
-              >
-                {p === "Tous" ? "Toutes priorités" : p}
-              </button>
-            ))
-          ) : (
-            (["Tous", "En attente", "En cours", "Interprété"] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => {
-                  setStatusFilter(s);
-                  setPage(1);
-                }}
-                className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
-                  statusFilter === s
-                    ? "bg-blue-600 text-white"
-                    : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
-                }`}
-              >
-                {s}
-              </button>
-            ))
-          )}
+          {isTechnician
+            ? (["Tous", "Normal", "Urgent"] as const).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => {
+                    setPriorityFilter(p);
+                    setPage(1);
+                  }}
+                  className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                    priorityFilter === p
+                      ? "bg-purple-600 text-white"
+                      : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+                  }`}
+                >
+                  {p === "Tous" ? "Toutes priorités" : p}
+                </button>
+              ))
+            : (["Tous", "En attente", "En cours", "Interprété"] as const).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => {
+                    setStatusFilter(s);
+                    setPage(1);
+                  }}
+                  className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                    statusFilter === s
+                      ? "bg-blue-600 text-white"
+                      : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+                  }`}
+                >
+                  {s}
+                </button>
+              ))}
         </div>
 
         <div className="flex items-center gap-2">
@@ -737,14 +849,22 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
               <tr>
                 <th className="px-4 py-3 text-left font-semibold">ID patient</th>
                 <th className="px-4 py-3 text-left font-semibold">Patient</th>
-                {!isTechnician && <th className="px-4 py-3 text-left font-semibold">Antécédents</th>}
+                {!isTechnician && (
+                  <th className="px-4 py-3 text-left font-semibold">Antécédents</th>
+                )}
                 <th className="px-4 py-3 text-left font-semibold">Date</th>
                 <th className="px-4 py-3 text-left font-semibold">Qualité IA</th>
                 {!isTechnician && <th className="px-4 py-3 text-left font-semibold">Priorité</th>}
-                {!isTechnician && <th className="px-4 py-3 text-left font-semibold">Nom d'établissement</th>}
+                {!isTechnician && (
+                  <th className="px-4 py-3 text-left font-semibold">Nom d'établissement</th>
+                )}
                 {!isTechnician && <th className="px-4 py-3 text-left font-semibold">Statut</th>}
-                {!isTechnician && showAssignedTo && <th className="px-4 py-3 text-left font-semibold">Assigné à</th>}
-                {!isTechnician && <th className="px-4 py-3 text-center font-semibold">Compte rendu</th>}
+                {!isTechnician && showAssignedTo && (
+                  <th className="px-4 py-3 text-left font-semibold">Assigné à</th>
+                )}
+                {!isTechnician && (
+                  <th className="px-4 py-3 text-center font-semibold">Compte rendu</th>
+                )}
                 {!isTechnician && <th className="px-4 py-3 text-right font-semibold">Actions</th>}
               </tr>
             </thead>
@@ -752,7 +872,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
               {loading ? (
                 <tr>
                   <td
-                    colSpan={isTechnician ? 4 : (showAssignedTo ? 11 : 10)}
+                    colSpan={isTechnician ? 4 : showAssignedTo ? 11 : 10}
                     className="px-4 py-10 text-center text-sm text-slate-500"
                   >
                     <Loader2 className="inline h-5 w-5 animate-spin mr-2" />
@@ -905,7 +1025,7 @@ export function Worklist({ todayOnly = false, showStats = false }: WorklistProps
               {!loading && filtered.length === 0 && (
                 <tr>
                   <td
-                    colSpan={isTechnician ? 4 : (showAssignedTo ? 11 : 10)}
+                    colSpan={isTechnician ? 4 : showAssignedTo ? 11 : 10}
                     className="px-4 py-10 text-center text-sm text-slate-500"
                   >
                     Aucun examen ne correspond aux filtres.

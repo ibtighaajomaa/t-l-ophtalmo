@@ -1,10 +1,10 @@
-/** Modal — Admin crée Chef de Service, Médecin (ophtalmologue), Résident, Technicien ou Médecin Référant. */
+/** Modal — création de compte. Le coordinateur national crée tous les rôles ; le coordinateur
+ *  d'établissement crée les comptes de son établissement (ophtalmologue, technicien, médecin référant). */
 import { useState } from "react";
 import {
   X,
   UserPlus,
   Stethoscope,
-  GraduationCap,
   Briefcase,
   CheckCircle2,
   ShieldCheck,
@@ -13,34 +13,23 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAuth, type Role } from "@/lib/auth-context";
+import { ETABLISSEMENTS, ROLE_LABELS, requiresEtablissement } from "@/lib/roles";
 
-type CreatableRole = Extract<Role, "Admin" | "Chef" | "Medecin" | "Resident" | "Technicien" | "MedecinReferant">;
+const ROLE_ICONS: Record<Role, LucideIcon> = {
+  Admin: ShieldCheck,
+  Chef: Briefcase,
+  Medecin: Stethoscope,
+  Technicien: Wrench,
+  MedecinReferant: HeartPulse,
+};
 
-const ROLE_OPTIONS: { value: CreatableRole; label: string; icon: LucideIcon }[] = [
-  { value: "Admin", label: "Administrateur", icon: ShieldCheck },
-  { value: "Chef", label: "Chef de Service", icon: Briefcase },
-  { value: "Medecin", label: "Ophtalmologue", icon: Stethoscope },
-  { value: "Resident", label: "Résident", icon: GraduationCap },
-  { value: "Technicien", label: "Technicien", icon: Wrench },
-  { value: "MedecinReferant", label: "Médecin Référant", icon: HeartPulse },
-];
-
-// Seul le technicien est rattaché à un établissement (sa worklist en dépend) :
-// le champ "Nom d'établissement" n'est proposé, et obligatoire, que pour lui.
-const ETABLISSEMENT_ROLES: CreatableRole[] = ["Technicien"];
-
-const ETABLISSEMENTS = [
-  "HOPITAL CIRCONSCRIPTION KELIBIA",
-  "Hôpital de Circonscription Menzel Temime",
-  "HOPITAL REGIONAL KEBILI",
-  "Hôpital de Circonscription Deguech",
-  "Hôpital de Circonscription Mateur",
-  "HOPITAL REGIONAL SILIANA",
-];
+const ALL_ROLES: Role[] = ["Admin", "Chef", "Medecin", "Technicien", "MedecinReferant"];
+// Le coordinateur d'établissement ne crée que les comptes rattachés à son établissement.
+const CHEF_CREATABLE_ROLES: Role[] = ["Medecin", "Technicien", "MedecinReferant"];
 
 export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { createUser, user } = useAuth();
-  const [role, setRole] = useState<CreatableRole>("Medecin");
+  const [role, setRole] = useState<Role>("Medecin");
   const [form, setForm] = useState({
     firstName: "",
     lastName: "",
@@ -54,19 +43,28 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
 
   const [isLoading, setIsLoading] = useState(false);
 
-  const showsEtablissement = ETABLISSEMENT_ROLES.includes(role);
+  const isChef = user?.role === "Chef";
+  const creatableRoles = isChef ? CHEF_CREATABLE_ROLES : ALL_ROLES;
+  // L'établissement du coordinateur d'établissement est imposé à tous les comptes qu'il crée.
+  const etablissement = isChef ? user?.etablissement || "" : form.etablissement;
+  const etablissementRequired = requiresEtablissement(role);
 
   if (!open) return null;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (etablissementRequired && !etablissement.trim()) {
+      setFeedback({
+        ok: false,
+        msg: isChef
+          ? "Aucun établissement n'est rattaché à votre compte : impossible de créer un utilisateur."
+          : "L'établissement est obligatoire pour ce rôle.",
+      });
+      return;
+    }
     setIsLoading(true);
     setFeedback(null);
-    const res = await createUser({
-      ...form,
-      etablissement: showsEtablissement ? form.etablissement : "",
-      role,
-    });
+    const res = await createUser({ ...form, etablissement, role });
     setIsLoading(false);
     if (res.ok) {
       setFeedback({ ok: true, msg: `${form.firstName} ${form.lastName} ajouté(e) avec succès.` });
@@ -104,17 +102,14 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
           <div>
             <label className="mb-2 block text-xs font-medium text-slate-600">Rôle</label>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {(user?.role === "Admin"
-                ? ROLE_OPTIONS
-                : ROLE_OPTIONS.filter((r) => r.value === "Medecin" || r.value === "Resident")
-              ).map((opt) => {
-                const Icon = opt.icon;
-                const active = role === opt.value;
+              {creatableRoles.map((value) => {
+                const Icon = ROLE_ICONS[value];
+                const active = role === value;
                 return (
                   <button
                     type="button"
-                    key={opt.value}
-                    onClick={() => setRole(opt.value)}
+                    key={value}
+                    onClick={() => setRole(value)}
                     className={`flex flex-col items-center gap-1.5 rounded-lg border px-2 py-3 text-xs font-medium transition ${
                       active
                         ? "border-blue-600 bg-blue-50 text-blue-700"
@@ -122,7 +117,7 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
                     }`}
                   >
                     <Icon className="h-5 w-5" />
-                    {opt.label}
+                    {ROLE_LABELS[value]}
                   </button>
                 );
               })}
@@ -154,14 +149,24 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
             onChange={(v) => setForm({ ...form, phone: v })}
           />
 
-          {showsEtablissement && (
-            <div>
-              <label className="text-xs font-medium text-slate-600">
-                Nom d'établissement{" "}
-                <span className="text-blue-600 font-semibold">(obligatoire)</span>
-              </label>
+          <div>
+            <label className="text-xs font-medium text-slate-600">
+              Établissement{" "}
+              {etablissementRequired ? (
+                <span className="font-semibold text-blue-600">(obligatoire)</span>
+              ) : (
+                <span className="text-slate-400">(facultatif pour le coordinateur national)</span>
+              )}
+            </label>
+            {isChef ? (
+              <input
+                readOnly
+                value={etablissement || "Aucun établissement rattaché à votre compte"}
+                className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600"
+              />
+            ) : (
               <select
-                required
+                required={etablissementRequired}
                 value={form.etablissement}
                 onChange={(e) => setForm({ ...form, etablissement: e.target.value })}
                 className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
@@ -173,8 +178,8 @@ export function AddUserModal({ open, onClose }: { open: boolean; onClose: () => 
                   </option>
                 ))}
               </select>
-            </div>
-          )}
+            )}
+          </div>
 
           <Field
             label="Mot de passe provisoire"

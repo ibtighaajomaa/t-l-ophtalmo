@@ -27,7 +27,7 @@ import type { OhifBridge } from "@/lib/ohif-bridge";
 
 export const Route = createFileRoute("/_app/worklist/$id")({
   component: () => (
-    <ProtectedRoute roles={["Admin", "Chef", "Medecin", "Resident", "Technicien"]}>
+    <ProtectedRoute roles={["Admin", "Chef", "Medecin", "Technicien"]}>
       <ExamDetail />
     </ProtectedRoute>
   ),

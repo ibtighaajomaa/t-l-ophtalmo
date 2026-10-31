@@ -11,6 +11,60 @@ from .models import Profil
 from .authentication import KeycloakAuthentication
 import requests
 
+# Rôles Keycloak → rôles applicatifs. ADMIN_SYSTEME = coordinateur national,
+# CHEF_SERVICE = coordinateur d'établissement. Le rôle RESIDENT a été supprimé.
+KC_ROLE_TO_APP = {
+    'ADMIN_SYSTEME': 'Admin',
+    'CHEF_SERVICE': 'Chef',
+    'OPHTALMOLOGUE': 'Medecin',
+    'TECHNICIEN': 'Technicien',
+    'MEDECIN_REFERANT': 'MedecinReferant',
+}
+APP_ROLE_TO_KC = {v: k for k, v in KC_ROLE_TO_APP.items()}
+# Anciens rôles encore présents chez certains comptes Keycloak, à retirer lors d'un changement de rôle.
+LEGACY_KC_ROLES = ['RESIDENT']
+
+
+def _etablissement_of_kc_user(u, profiles):
+    """Établissement d'un utilisateur Keycloak : le Profil fait foi, sinon l'attribut Keycloak."""
+    prof = profiles.get((u.get('username') or u.get('email') or '').lower())
+    if prof and prof.region_affectation:
+        return prof.region_affectation
+    attrs = u.get('attributes') or {}
+    return (attrs.get('etablissement') or [''])[0]
+
+
+def _filter_kc_users(users, search, role_filter, profiles):
+    """Filtres recherche / rôle appliqués en Python sur une liste d'utilisateurs Keycloak."""
+    if search:
+        q = search.lower()
+        users = [
+            u for u in users
+            if q in (u.get('firstName') or '').lower()
+            or q in (u.get('lastName') or '').lower()
+            or q in (u.get('email') or '').lower()
+        ]
+    if role_filter:
+        users = [
+            u for u in users
+            if (prof := profiles.get((u.get('username') or u.get('email') or '').lower())) and prof.role == role_filter
+        ]
+    return users
+
+
+def _kc_users_of_scope(base_url, realm, headers, etablissement, created_by, profiles):
+    """Utilisateurs d'un coordinateur d'établissement (par établissement) ou créés par un compte donné."""
+    if etablissement:
+        from ophtalmo.etablissements import etablissement_matches
+        users = requests.get(f"{base_url}/admin/realms/{realm}/users?max=1000", headers=headers).json()
+        if not isinstance(users, list):
+            users = []
+        return [u for u in users if etablissement_matches(etablissement, _etablissement_of_kc_user(u, profiles))]
+    users = requests.get(
+        f"{base_url}/admin/realms/{realm}/users?q=createdBy:\"{created_by}\"&max=1000", headers=headers
+    ).json()
+    return users if isinstance(users, list) else []
+
 class CreerUtilisateurView(APIView):
     # Idéalement, seul un IsAdmin ou IsChefDeService peut appeler cette route
     # Mais pour tester facilement sans token depuis le frontend, on utilise AllowAny
@@ -24,6 +78,11 @@ class CreerUtilisateurView(APIView):
         for field in required_fields:
             if field not in data:
                 return Response({"error": f"Champ manquant: {field}"}, status=status.HTTP_400_BAD_REQUEST)
+        if data['role'] not in KC_ROLE_TO_APP:
+            return Response({"error": f"Rôle inconnu : {data['role']}."}, status=status.HTTP_400_BAD_REQUEST)
+        # Tout compte est rattaché à un établissement, sauf le coordinateur national.
+        if data['role'] != 'ADMIN_SYSTEME' and not str(data.get('etablissement') or '').strip():
+            return Response({"error": "L'établissement est obligatoire pour ce rôle."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             # 1. Connecter Django à Keycloak en tant qu'admin
@@ -74,15 +133,7 @@ class CreerUtilisateurView(APIView):
             )
 
             # 5. Créer ou mettre à jour le Profil
-            role_map = {
-                'ADMIN_SYSTEME': 'Admin',
-                'CHEF_SERVICE': 'Chef',
-                'OPHTALMOLOGUE': 'Medecin',
-                'RESIDENT': 'Resident',
-                'TECHNICIEN': 'Technicien',
-                'MEDECIN_REFERANT': 'MedecinReferant'
-            }
-            mapped_role = role_map.get(data['role'], data['role'])
+            mapped_role = KC_ROLE_TO_APP[data['role']]
 
             profil_defaults = {'role': mapped_role}
             if 'telephone' in data:
@@ -103,7 +154,7 @@ class CreerUtilisateurView(APIView):
             # 6. Envoyer l'email de bienvenue avec les identifiants
             from django.core.mail import send_mail
             sujet = "Bienvenue sur Télé-rétinographie - Vos identifiants"
-            lien_login = "http://193.95.31.196/login"
+            lien_login = f"{settings.PUBLIC_BASE_URL}/login"
             
             message = f"""Bonjour Dr {data['prenom']} {data['nom']},
             
@@ -313,7 +364,7 @@ def request_password_reset(request):
     reset_obj = PasswordResetToken.objects.create(email=email)
     
     # 3. Envoyer le mail vers REACT
-    link = f"http://193.95.31.196/reset-password?token={reset_obj.token}"
+    link = f"{settings.PUBLIC_BASE_URL}/reset-password?token={reset_obj.token}"
     sujet = "[Télé-rétinographie] Demande de réinitialisation de votre mot de passe"
     message = f"""Bonjour Dr {prenom_medecin} {nom_medecin},
 
@@ -415,8 +466,6 @@ def get_keycloak_events(request):
                 return "Admin"
             elif kc_role_upper == "CHEF_SERVICE":
                 return "Chef"
-            elif kc_role_upper == "RESIDENT":
-                return "Resident"
             else:
                 return "Medecin"
 
@@ -539,10 +588,12 @@ def update_keycloak_user(request):
         nom = data.get('nom')
         telephone = data.get('telephone')
         etablissement = data.get('etablissement')
-        new_role_code = data.get('role') # e.g., 'ADMIN_SYSTEME', 'CHEF_SERVICE', 'OPHTALMOLOGUE', 'RESIDENT'
-        
+        new_role_code = data.get('role')  # e.g. 'ADMIN_SYSTEME', 'CHEF_SERVICE', 'OPHTALMOLOGUE'
+
         if not old_email or not new_email:
             return Response({"error": "old_email et email sont requis"}, status=400)
+        if new_role_code and new_role_code not in KC_ROLE_TO_APP:
+            return Response({"error": f"Rôle inconnu : {new_role_code}."}, status=400)
 
         # 1. Connect to Keycloak as admin
         keycloak_admin = KeycloakAdmin(
@@ -613,7 +664,7 @@ def update_keycloak_user(request):
                 # Get current user roles in Keycloak
                 user_roles = keycloak_admin.get_realm_roles_of_user(user_id)
                 # Remove existing app roles to avoid duplicate/conflicting roles
-                app_roles_to_remove = [r for r in user_roles if r['name'] in ['ADMIN_SYSTEME', 'CHEF_SERVICE', 'OPHTALMOLOGUE', 'RESIDENT', 'TECHNICIEN', 'MEDECIN_REFERANT']]
+                app_roles_to_remove = [r for r in user_roles if r['name'] in KC_ROLE_TO_APP or r['name'] in LEGACY_KC_ROLES]
                 if app_roles_to_remove:
                     keycloak_admin.delete_realm_roles_of_user(user_id, app_roles_to_remove)
                     
@@ -625,15 +676,7 @@ def update_keycloak_user(request):
                 print(f"Error updating Keycloak roles: {role_err}")
         
         # 4. Update local Django Database (Postgres)
-        role_map = {
-            'ADMIN_SYSTEME': 'Admin',
-            'CHEF_SERVICE': 'Chef',
-            'OPHTALMOLOGUE': 'Medecin',
-            'RESIDENT': 'Resident',
-            'TECHNICIEN': 'Technicien',
-            'MEDECIN_REFERANT': 'MedecinReferant'
-        }
-        mapped_role = role_map.get(new_role_code) if new_role_code else None
+        mapped_role = KC_ROLE_TO_APP.get(new_role_code) if new_role_code else None
 
         try:
             django_user = User.objects.get(username=old_email)
@@ -692,7 +735,9 @@ def get_paginated_users(request):
         search = request.GET.get('search', '').strip()
         role_filter = request.GET.get('role', '').strip()
         created_by = request.GET.get('createdBy', '').strip()
-        
+        # Coordinateur d'établissement : uniquement les comptes rattachés à son établissement.
+        etablissement = request.GET.get('etablissement', '').strip()
+
         first = (page - 1) * page_size
         
         # 1. Connect to Keycloak
@@ -709,39 +754,23 @@ def get_paginated_users(request):
         base_url = settings.KEYCLOAK_SERVER_URL.rstrip('/')
         realm = settings.KEYCLOAK_REALM
         
-        # Determine the Keycloak role if filtering
-        kc_role = None
-        if role_filter == "Admin": kc_role = "ADMIN_SYSTEME"
-        elif role_filter == "Chef": kc_role = "CHEF_SERVICE"
-        elif role_filter == "Medecin": kc_role = "OPHTALMOLOGUE"
-        elif role_filter == "Resident": kc_role = "RESIDENT"
-        elif role_filter == "Technicien": kc_role = "TECHNICIEN"
-        elif role_filter == "MedecinReferant": kc_role = "MEDECIN_REFERANT"
+        kc_role = APP_ROLE_TO_KC.get(role_filter)
 
         # Enrichir avec la base de données locale (Profil)
         profiles = {
-            p.user.username.lower(): p 
-            for p in Profil.objects.select_related('user').all() 
+            p.user.username.lower(): p
+            for p in Profil.objects.select_related('user').all()
             if p.user and p.user.username
         }
-        
+
         users_res = []
         total_count = 0
-        
-        if created_by:
-            users_url = f"{base_url}/admin/realms/{realm}/users?q=createdBy:\"{created_by}\"&max=1000"
-            all_chef_users = requests.get(users_url, headers=headers).json()
-            if not isinstance(all_chef_users, list): all_chef_users = []
-            
-            if search:
-                s = search.lower()
-                all_chef_users = [u for u in all_chef_users if s in u.get('firstName', '').lower() or s in u.get('lastName', '').lower() or s in u.get('email', '').lower()]
-                
-            if role_filter:
-                all_chef_users = [u for u in all_chef_users if profiles.get(u.get('username', u.get('email', '')).lower()) and profiles.get(u.get('username', u.get('email', '')).lower()).role == role_filter]
 
-            total_count = len(all_chef_users)
-            users_res = all_chef_users[first:first+page_size]
+        if etablissement or created_by:
+            scoped = _kc_users_of_scope(base_url, realm, headers, etablissement, created_by, profiles)
+            scoped = _filter_kc_users(scoped, search, role_filter, profiles)
+            total_count = len(scoped)
+            users_res = scoped[first:first+page_size]
             
         elif kc_role:
             users_url = f"{base_url}/admin/realms/{realm}/roles/{kc_role}/users?first={first}&max={page_size}"
@@ -770,18 +799,10 @@ def get_paginated_users(request):
             local_role = prof.role if prof and prof.role else "Medecin"
             
             # Re-map Keycloak role names to Frontend role names if needed
-            role_map_reverse = {
-                'ADMIN_SYSTEME': 'Admin',
-                'CHEF_SERVICE': 'Chef',
-                'OPHTALMOLOGUE': 'Medecin',
-                'RESIDENT': 'Resident',
-                'TECHNICIEN': 'Technicien',
-                'MEDECIN_REFERANT': 'MedecinReferant'
-            }
-            local_role = role_map_reverse.get(local_role, local_role)
+            local_role = KC_ROLE_TO_APP.get(local_role, local_role)
 
             telephone = prof.telephone if prof and prof.telephone else (u.get('attributes', {}).get('phone', [''])[0] if u.get('attributes') else '')
-            etablissement_attr = prof.region_affectation if prof and prof.region_affectation else (u.get('attributes', {}).get('etablissement', [''])[0] if u.get('attributes') else '')
+            etablissement_attr = _etablissement_of_kc_user(u, profiles)
             created_by_attr = u.get('attributes', {}).get('createdBy', [''])[0] if u.get('attributes') else ''
             
             is_disponible = prof.is_disponible if prof else True
@@ -824,97 +845,58 @@ def get_paginated_users(request):
 @authentication_classes([])
 @permission_classes([permissions.AllowAny])
 def get_user_stats(request):
+    """Effectifs par rôle : globaux (coordinateur national) ou restreints à un établissement."""
     try:
         created_by = request.GET.get('createdBy', '').strip()
-        
-        if created_by:
-            # Si le paramètre createdBy est fourni, on interroge Keycloak pour avoir les statistiques exactes de ce Chef
-            keycloak_admin = KeycloakAdmin(
-                server_url=settings.KEYCLOAK_SERVER_URL,
-                username=settings.KEYCLOAK_ADMIN_USER,
-                password=settings.KEYCLOAK_ADMIN_PASSWORD,
-                realm_name=settings.KEYCLOAK_REALM,
-                user_realm_name="master",
-                verify=True
-            )
-            admin_token = keycloak_admin.token['access_token']
-            headers = {'Authorization': f'Bearer {admin_token}'}
-            base_url = settings.KEYCLOAK_SERVER_URL.rstrip('/')
-            realm = settings.KEYCLOAK_REALM
-            
-            users_url = f"{base_url}/admin/realms/{realm}/users?q=createdBy:\"{created_by}\"&max=1000"
-            all_chef_users = requests.get(users_url, headers=headers).json()
-            if not isinstance(all_chef_users, list): all_chef_users = []
-            
-            # Pour récupérer les rôles locaux
+        etablissement = request.GET.get('etablissement', '').strip()
+
+        keycloak_admin = KeycloakAdmin(
+            server_url=settings.KEYCLOAK_SERVER_URL,
+            username=settings.KEYCLOAK_ADMIN_USER,
+            password=settings.KEYCLOAK_ADMIN_PASSWORD,
+            realm_name=settings.KEYCLOAK_REALM,
+            user_realm_name="master",
+            verify=True
+        )
+        admin_token = keycloak_admin.token['access_token']
+        headers = {'Authorization': f'Bearer {admin_token}'}
+        base_url = settings.KEYCLOAK_SERVER_URL.rstrip('/')
+        realm = settings.KEYCLOAK_REALM
+
+        if etablissement or created_by:
             profiles = {
-                p.user.username.lower(): p 
-                for p in Profil.objects.select_related('user').all() 
+                p.user.username.lower(): p
+                for p in Profil.objects.select_related('user').all()
                 if p.user and p.user.username
             }
-            
-            chefs = 0
-            medecins = 0
-            residents = 0
-            
-            for u in all_chef_users:
-                username = u.get('username', u.get('email', '')).lower()
-                prof = profiles.get(username)
-                if prof:
-                    if prof.role == "Chef": chefs += 1
-                    elif prof.role == "Medecin": medecins += 1
-                    elif prof.role == "Resident": residents += 1
-                    
-            total = len(all_chef_users)
-            
+            scoped = _kc_users_of_scope(base_url, realm, headers, etablissement, created_by, profiles)
+            counts = {'Chef': 0, 'Medecin': 0, 'Technicien': 0, 'MedecinReferant': 0}
+            for u in scoped:
+                prof = profiles.get((u.get('username') or u.get('email') or '').lower())
+                if prof and prof.role in counts:
+                    counts[prof.role] += 1
             return JsonResponse({
-                "total": total,
-                "chefs": chefs,
-                "medecins": medecins,
-                "residents": residents
+                "total": len(scoped),
+                "chefs": counts['Chef'],
+                "medecins": counts['Medecin'],
+                "techniciens": counts['Technicien'],
+                "medecinReferants": counts['MedecinReferant'],
             })
-            
-        else:
-            # Pour les statistiques globales (Admin), on interroge Keycloak pour avoir les bons chiffres
-            keycloak_admin = KeycloakAdmin(
-                server_url=settings.KEYCLOAK_SERVER_URL,
-                username=settings.KEYCLOAK_ADMIN_USER,
-                password=settings.KEYCLOAK_ADMIN_PASSWORD,
-                realm_name=settings.KEYCLOAK_REALM,
-                user_realm_name="master",
-                verify=True
-            )
-            admin_token = keycloak_admin.token['access_token']
-            headers = {'Authorization': f'Bearer {admin_token}'}
-            base_url = settings.KEYCLOAK_SERVER_URL.rstrip('/')
-            realm = settings.KEYCLOAK_REALM
-            
-            # Nombre total
-            count_url = f"{base_url}/admin/realms/{realm}/users/count"
-            total = requests.get(count_url, headers=headers).json()
-            
-            # Pour les rôles, Keycloak n'a pas de /count sur les rôles, on récupère la liste (sans limite de pagination pour avoir le compte)
-            def count_role(role_name):
-                url = f"{base_url}/admin/realms/{realm}/roles/{role_name}/users?max=10000"
-                res = requests.get(url, headers=headers)
-                if res.status_code == 200:
-                    return len(res.json())
-                return 0
-                
-            chefs = count_role("CHEF_SERVICE")
-            medecins = count_role("OPHTALMOLOGUE")
-            residents = count_role("RESIDENT")
-            techniciens = count_role("TECHNICIEN")
-            medecin_referants = count_role("MEDECIN_REFERANT")
-            
-            return JsonResponse({
-                "total": total,
-                "chefs": chefs,
-                "medecins": medecins,
-                "residents": residents,
-                "techniciens": techniciens,
-                "medecinReferants": medecin_referants
-            })
+
+        # Statistiques globales : Keycloak n'a pas de /count par rôle, on récupère la liste.
+        total = requests.get(f"{base_url}/admin/realms/{realm}/users/count", headers=headers).json()
+
+        def count_role(role_name):
+            res = requests.get(f"{base_url}/admin/realms/{realm}/roles/{role_name}/users?max=10000", headers=headers)
+            return len(res.json()) if res.status_code == 200 else 0
+
+        return JsonResponse({
+            "total": total,
+            "chefs": count_role("CHEF_SERVICE"),
+            "medecins": count_role("OPHTALMOLOGUE"),
+            "techniciens": count_role("TECHNICIEN"),
+            "medecinReferants": count_role("MEDECIN_REFERANT"),
+        })
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 

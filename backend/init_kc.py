@@ -56,7 +56,8 @@ except Exception as e:
     print(f"Failed to ensure client {client_id}: {e}")
     sys.exit(1)
 
-roles = ["ADMIN_SYSTEME", "CHEF_SERVICE", "RESIDENT", "OPHTALMOLOGUE", "TECHNICIEN", "MEDECIN_REFERANT"]
+# ADMIN_SYSTEME = coordinateur national, CHEF_SERVICE = coordinateur d'établissement.
+roles = ["ADMIN_SYSTEME", "CHEF_SERVICE", "OPHTALMOLOGUE", "TECHNICIEN", "MEDECIN_REFERANT"]
 for role in roles:
     try:
         keycloak_admin.get_realm_role(role)
@@ -74,3 +75,14 @@ for role in roles:
     except Exception as e:
         print(f"Failed to ensure role {role}: {e}")
         sys.exit(1)
+
+# Le rôle RESIDENT n'existe plus : le supprimer retire l'accès aux comptes qui l'avaient encore.
+try:
+    keycloak_admin.get_realm_role("RESIDENT")
+    keycloak_admin.delete_realm_role("RESIDENT")
+    print("Role RESIDENT removed.")
+except KeycloakGetError as e:
+    if e.response_code != 404:
+        print(f"Failed to remove role RESIDENT: {e}")
+except Exception as e:
+    print(f"Failed to remove role RESIDENT: {e}")

@@ -1,8 +1,8 @@
 /**
  * AuthProvider — Contexte React simulant l'authentification.
  * Stocke l'utilisateur courant + persiste la session dans localStorage.
- * Gère également la création de comptes (Chef de Service par Admin,
- * Médecins/Résidents par Chef de Service) — stockés en mémoire/localStorage.
+ * Gère également la création de comptes (tous les rôles par le coordinateur national,
+ * les comptes de son établissement par le coordinateur d'établissement).
  * Conserve un historique d'utilisation (logins).
  */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -17,7 +17,10 @@ interface KeycloakTokenPayload {
   };
 }
 
-export type Role = "Admin" | "Chef" | "Medecin" | "Resident" | "Technicien" | "MedecinReferant";
+import { roleFromKeycloak, ROLE_TO_KEYCLOAK } from "@/lib/roles";
+
+/** Admin = coordinateur national, Chef = coordinateur d'établissement (libellés dans lib/roles.ts). */
+export type Role = "Admin" | "Chef" | "Medecin" | "Technicien" | "MedecinReferant";
 
 /** Page d'accueil de chaque rôle (le médecin référant n'a pas accès à la worklist). */
 export function homePathFor(role: Role): "/admin" | "/patients" | "/worklist" {
@@ -93,7 +96,7 @@ const SEED_USERS: AppUser[] = [
     id: "u-res",
     email: "resident@teleoph.com",
     password: "res123",
-    role: "Resident",
+    role: "Medecin",
     firstName: "Yanis",
     lastName: "Mokrane",
     createdAt: "2026-06-12T07:50:00Z",
@@ -130,7 +133,7 @@ const SEED_USAGE: UsageEvent[] = [
     id: "ev-3",
     userId: "u-res",
     userName: "Yanis Mokrane",
-    role: "Resident",
+    role: "Medecin",
     at: "2026-06-11T07:50:00Z",
     action: "login",
   },
@@ -238,14 +241,13 @@ function loadSession(users: AppUser[]): AppUser | null {
 
 // L'établissement de rattachement fait foi côté serveur (Profil.region_affectation) :
 // le localStorage n'est qu'un cache d'affichage, mis à jour après chaque réponse du serveur.
-function syncEtablissementFromServer(
-  email: string,
-  apply: (etablissement: string) => void,
-) {
+function syncEtablissementFromServer(email: string, apply: (etablissement: string) => void) {
   fetch(`/api/users/paginated/?search=${encodeURIComponent(email)}`)
     .then((r) => r.json())
     .then((d) => {
-      const found = d.users?.find((u: any) => (u.email || "").toLowerCase() === email.toLowerCase());
+      const found = d.users?.find(
+        (u: any) => (u.email || "").toLowerCase() === email.toLowerCase(),
+      );
       if (!found) return;
       const etab = (found.etablissement || "").trim();
       if (etab) localStorage.setItem(`teleoph.user_etab.${email}`, etab);
@@ -284,19 +286,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (token) {
       try {
         const decoded = jwtDecode<KeycloakTokenPayload>(token);
-        const roles = decoded.realm_access?.roles || [];
-        let userRole: Role = "Medecin";
-        if (roles.includes("ADMIN_SYSTEME") || roles.includes("ADMIN")) userRole = "Admin";
-        else if (roles.includes("CHEF_SERVICE")) userRole = "Chef";
-        else if (roles.includes("RESIDENT")) userRole = "Resident";
-        else if (roles.includes("TECHNICIEN")) userRole = "Technicien";
-        else if (roles.includes("MEDECIN_REFERANT")) userRole = "MedecinReferant";
+        const userRole = roleFromKeycloak(decoded.realm_access?.roles || []);
+        if (!userRole) throw new Error("Aucun rôle autorisé sur ce compte.");
 
         const email = decoded.email || "user@example.com";
         const savedEtab =
           localStorage.getItem(`teleoph.user_etab.${email}`) ||
-          ((decoded as Record<string, any>).attributes?.etablissement?.[0]) ||
-          ((decoded as Record<string, any>).attributes?.region_affectation?.[0]) ||
+          (decoded as Record<string, any>).attributes?.etablissement?.[0] ||
+          (decoded as Record<string, any>).attributes?.region_affectation?.[0] ||
           "";
         const loggedUser: AppUser = {
           id: email,
@@ -362,18 +359,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
 
             const decoded = jwtDecode<KeycloakTokenPayload>(tokens.access_token);
-            const roles = decoded.realm_access?.roles || [];
-            let userRole: Role = "Medecin";
-            if (roles.includes("ADMIN_SYSTEME") || roles.includes("ADMIN")) userRole = "Admin";
-            else if (roles.includes("CHEF_SERVICE")) userRole = "Chef";
-            else if (roles.includes("RESIDENT")) userRole = "Resident";
-            else if (roles.includes("TECHNICIEN")) userRole = "Technicien";
-            else if (roles.includes("MEDECIN_REFERANT")) userRole = "MedecinReferant";
+            const userRole = roleFromKeycloak(decoded.realm_access?.roles || []);
+            if (!userRole) {
+              // Compte sans rôle autorisé (ex. ancien résident) : la session n'est pas conservée.
+              localStorage.removeItem("teleoph.token");
+              localStorage.removeItem("teleoph.refresh_token");
+              return {
+                ok: false,
+                error: "Ce compte n'a plus accès à la plateforme (rôle non autorisé).",
+              };
+            }
 
             const savedEtab =
               localStorage.getItem(`teleoph.user_etab.${email}`) ||
-              ((decoded as Record<string, any>).attributes?.etablissement?.[0]) ||
-              ((decoded as Record<string, any>).attributes?.region_affectation?.[0]) ||
+              (decoded as Record<string, any>).attributes?.etablissement?.[0] ||
+              (decoded as Record<string, any>).attributes?.region_affectation?.[0] ||
               "";
             const loggedUser: AppUser = {
               id: email,
@@ -466,18 +466,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             email: data.email,
             prenom: data.firstName,
             nom: data.lastName,
-            role:
-              data.role === "Admin"
-                ? "ADMIN_SYSTEME"
-                : data.role === "Chef"
-                  ? "CHEF_SERVICE"
-                  : data.role === "Resident"
-                    ? "RESIDENT"
-                    : data.role === "Technicien"
-                      ? "TECHNICIEN"
-                      : data.role === "MedecinReferant"
-                        ? "MEDECIN_REFERANT"
-                        : "OPHTALMOLOGUE",
+            role: ROLE_TO_KEYCLOAK[data.role],
             password_provisoire: data.password,
             telephone: data.phone,
             etablissement: data.etablissement,
@@ -524,7 +513,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return { ok: false, error: "Vous ne pouvez pas supprimer votre propre compte." };
         }
         try {
-          const token = localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
+          const token =
+            localStorage.getItem("teleoph.token") || sessionStorage.getItem("teleoph.token");
           const res = await fetch(`/api/users/delete/${id}/`, {
             method: "DELETE",
             headers: {
@@ -553,19 +543,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             etablissement: data.etablissement,
             password: data.password, // Nouveau mot de passe (optionnel)
             old_password: data.oldPassword, // Ancien mot de passe
-            role: data.role
-              ? data.role === "Admin"
-                ? "ADMIN_SYSTEME"
-                : data.role === "Chef"
-                  ? "CHEF_SERVICE"
-                  : data.role === "Resident"
-                    ? "RESIDENT"
-                    : data.role === "Technicien"
-                      ? "TECHNICIEN"
-                      : data.role === "MedecinReferant"
-                        ? "MEDECIN_REFERANT"
-                        : "OPHTALMOLOGUE"
-              : undefined,
+            role: data.role ? ROLE_TO_KEYCLOAK[data.role] : undefined,
           };
 
           const token =
@@ -597,7 +575,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   firstName: data.firstName,
                   lastName: data.lastName,
                   phone: data.phone,
-                  etablissement: data.etablissement !== undefined ? data.etablissement : u.etablissement,
+                  etablissement:
+                    data.etablissement !== undefined ? data.etablissement : u.etablissement,
                   role: data.role || u.role,
                 };
               }
@@ -615,7 +594,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     firstName: data.firstName,
                     lastName: data.lastName,
                     phone: data.phone,
-                    etablissement: data.etablissement !== undefined ? data.etablissement : prev.etablissement,
+                    etablissement:
+                      data.etablissement !== undefined ? data.etablissement : prev.etablissement,
                     role: data.role || prev.role,
                   }
                 : null,

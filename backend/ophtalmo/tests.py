@@ -1485,6 +1485,35 @@ class TechnicienEtablissementFilterTest(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["En attente"], 2)
 
+    def test_coordinateur_d_etablissement_observe_son_etablissement(self):
+        """Le Chef (coordinateur d'établissement) voit tous les examens de son site, comme un admin local."""
+        from users.models import Profil
+
+        chef = get_user_model().objects.create_user(username="chef", email="chef@x.tn", password="x")
+        Profil.objects.create(user=chef, role="Chef", region_affectation="Hôpital de Kélibia")
+        res = self._get(self.exam_list, chef, "/api/exams/", {"region": "kebili"})
+        self.assertEqual({e["id"] for e in res.data["results"]}, {self.kelibia.id})
+        res = self._get(self.exam_stats, chef, "/api/exams/stats/")
+        self.assertEqual(res.data["En attente"], 1)
+
+    def test_coordinateur_sans_etablissement_ne_voit_rien(self):
+        from users.models import Profil
+
+        chef = get_user_model().objects.create_user(username="chef2", email="chef2@x.tn", password="x")
+        Profil.objects.create(user=chef, role="Chef", region_affectation="")
+        res = self._get(self.exam_list, chef, "/api/exams/")
+        self.assertEqual(res.data["count"], 0)
+
+    def test_le_coordinateur_ne_recoit_pas_d_examens(self):
+        from ophtalmo.distribution import get_medecins_disponibles
+        from users.models import Profil
+
+        chef = get_user_model().objects.create_user(username="chef3", email="chef3@x.tn", password="x")
+        Profil.objects.create(user=chef, role="Chef", region_affectation="Kélibia", is_disponible=True)
+        med = get_user_model().objects.create_user(username="med", email="med@x.tn", password="x")
+        Profil.objects.create(user=med, role="Medecin", is_disponible=True)
+        self.assertEqual([p.user_id for p in get_medecins_disponibles()], [med.id])
+
 
 class PatientReferralTest(TestCase):
     """Le médecin référant adresse un patient ; l'examen du même ID en hérite."""
@@ -1579,6 +1608,45 @@ class PatientReferralTest(TestCase):
         res = self._post(self.referant, data)
         self.assertEqual(res.status_code, 201)
         self.assertIsNone(res.data["patient_age"])
+
+    def _technicien(self, username, etablissement):
+        from users.models import Profil
+
+        user = get_user_model().objects.create_user(username=username, email=f"{username}@x.tn", password="x")
+        Profil.objects.create(user=user, role="Technicien", region_affectation=etablissement)
+        return user
+
+    def test_liste_d_attente_du_technicien(self):
+        """Le technicien voit les demandes de son établissement, pas celles des autres sites."""
+        from ophtalmo.models import PatientReferral
+
+        self._post(self.referant, self._valid())  # Kélibia
+        PatientReferral.objects.create(patient_id="P-200", etablissement="kebili", created_by=self.autre_referant)
+
+        res = self._get(self._technicien("tech-kelibia", "Hôpital de Kélibia"))
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual([r["patient_id"] for r in res.data], ["P-100"])
+        self.assertEqual(res.data[0]["created_by_name"], "ref@x.tn")
+
+        res = self._get(self._technicien("tech-kebili", "HOPITAL REGIONAL KEBILI"))
+        self.assertEqual([r["patient_id"] for r in res.data], ["P-200"])
+
+        res = self._get(self._technicien("tech-sans-etab", ""))
+        self.assertEqual(res.data, [])
+
+        # Le coordinateur d'établissement observe la même liste d'attente que son technicien.
+        from users.models import Profil
+
+        chef = get_user_model().objects.create_user(username="chef", email="chef@x.tn", password="x")
+        Profil.objects.create(user=chef, role="Chef", region_affectation="Hôpital de Kélibia")
+        res = self._get(chef)
+        self.assertEqual([r["patient_id"] for r in res.data], ["P-100"])
+
+    def test_technicien_ne_peut_pas_adresser(self):
+        res = self._post(self._technicien("tech", "Kélibia"), self._valid())
+        self.assertEqual(res.status_code, 403)
+        res = self._get(self.ophtalmo)
+        self.assertEqual(res.status_code, 403)
 
     def _report_for(self, exam):
         from ophtalmo.models import MedicalReport

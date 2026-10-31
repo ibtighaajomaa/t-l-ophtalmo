@@ -4,7 +4,6 @@ import {
   Users,
   Trash2,
   Stethoscope,
-  GraduationCap,
   Briefcase,
   Activity,
   Edit,
@@ -17,6 +16,7 @@ import {
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { Navbar } from "@/components/Navbar";
 import { useAuth, type Role, type AppUser } from "@/lib/auth-context";
+import { ETABLISSEMENTS, ROLE_LABELS } from "@/lib/roles";
 import { Pagination } from "@/components/Pagination";
 
 export const Route = createFileRoute("/_app/admin")({
@@ -29,12 +29,19 @@ export const Route = createFileRoute("/_app/admin")({
 
 const ROLE_FILTERS: { value: "all" | Role; label: string }[] = [
   { value: "all", label: "Tous" },
-  { value: "Chef", label: "Chefs de Service" },
+  { value: "Chef", label: "Coordinateurs d'établissement" },
   { value: "Medecin", label: "Ophtalmologues" },
-  { value: "Resident", label: "Résidents" },
   { value: "Technicien", label: "Techniciens" },
-  { value: "MedecinReferant", label: "Médecins Référants" },
+  { value: "MedecinReferant", label: "Médecins référants" },
 ];
+
+const EMPTY_STATS = { total: 0, chefs: 0, medecins: 0, techniciens: 0, medecinReferants: 0 };
+
+/** Paramètre de périmètre : le coordinateur d'établissement ne voit que son établissement. */
+function scopeParam(user: AppUser | null): string {
+  if (user?.role !== "Chef") return "";
+  return `etablissement=${encodeURIComponent(user.etablissement || "")}`;
+}
 
 function AdminDashboard() {
   const { user, users, deleteUser, updateUser } = useAuth();
@@ -49,14 +56,9 @@ function AdminDashboard() {
   const [totalPages, setTotalPages] = useState(0);
   const [reloadTrigger, setReloadTrigger] = useState(0);
 
-  const [stats, setStats] = useState<{
-    total: number;
-    chefs: number;
-    medecins: number;
-    residents: number;
-    techniciens?: number;
-    medecinReferants?: number;
-  }>({ total: 0, chefs: 0, medecins: 0, residents: 0 });
+  const [stats, setStats] = useState<typeof EMPTY_STATS>(EMPTY_STATS);
+  // Un coordinateur d'établissement sans établissement rattaché n'a aucun périmètre : on n'interroge pas le serveur.
+  const scopeMissing = user?.role === "Chef" && !user.etablissement;
 
   // States for Edit Modal
   const [editingUser, setEditingUser] = useState<AppUser | null>(null);
@@ -109,27 +111,33 @@ function AdminDashboard() {
 
   // Fetch stats on mount
   useEffect(() => {
-    let url = "/api/users/stats/";
-    if (user?.role === "Chef") {
-      url += `?createdBy=${encodeURIComponent(`${user.firstName} ${user.lastName}`)}`;
+    if (scopeMissing) {
+      setStats(EMPTY_STATS);
+      return;
     }
-    fetch(url)
+    const scope = scopeParam(user);
+    fetch(`/api/users/stats/${scope ? `?${scope}` : ""}`)
       .then((r) => r.json())
-      .then((d) => setStats(d))
+      .then((d) => setStats({ ...EMPTY_STATS, ...d }))
       .catch(console.error);
-  }, [user?.role, user?.firstName, user?.lastName]);
+  }, [user, scopeMissing]);
 
   // Fetch paginated users
   useEffect(() => {
     const loadUsers = async () => {
+      if (scopeMissing) {
+        setBackendUsers([]);
+        setTotalCount(0);
+        setTotalPages(0);
+        return;
+      }
       setLoading(true);
       try {
         let url = `/api/users/paginated/?page=${usersPage}&size=10`;
         if (nameFilter) url += `&search=${nameFilter}`;
         if (filter !== "all") url += `&role=${filter}`;
-        if (user?.role === "Chef") {
-          url += `&createdBy=${encodeURIComponent(`${user.firstName} ${user.lastName}`)}`;
-        }
+        const scope = scopeParam(user);
+        if (scope) url += `&${scope}`;
 
         const res = await fetch(url);
         const data = await res.json();
@@ -145,14 +153,11 @@ function AdminDashboard() {
       }
     };
     loadUsers();
-  }, [usersPage, nameFilter, filter, user?.role, user?.firstName, user?.lastName, reloadTrigger]);
+  }, [usersPage, nameFilter, filter, user, scopeMissing, reloadTrigger]);
 
   const visibleUsers = users.filter((u) => {
     if (user?.role === "Chef") {
-      return (
-        u.createdBy === `${user.firstName} ${user.lastName}` &&
-        (u.role === "Medecin" || u.role === "Resident")
-      );
+      return u.etablissement === user.etablissement && u.role !== "Admin";
     }
     return u.role !== "Admin";
   });
@@ -234,25 +239,42 @@ function AdminDashboard() {
 
   return (
     <>
-      <Navbar title="Dashboard" subtitle="Supervision globale & gestion des utilisateurs" />
+      <Navbar
+        title="Dashboard"
+        subtitle={
+          user?.role === "Chef"
+            ? `Supervision de l'établissement${user.etablissement ? ` — ${user.etablissement}` : ""}`
+            : "Supervision nationale & gestion des utilisateurs"
+        }
+      />
       <div className="flex-1 p-6 space-y-6">
+        {scopeMissing && (
+          <div className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-amber-200">
+            Aucun établissement n'est rattaché à votre compte : demandez au coordinateur national de
+            le renseigner.
+          </div>
+        )}
         {/* Stats */}
-        <div className="grid sm:grid-cols-3 lg:grid-cols-6 gap-4">
-          <StatCard label="Chefs de Service" value={stats.chefs} accent="blue" icon={Briefcase} />
+        <div className="grid sm:grid-cols-3 lg:grid-cols-5 gap-4">
+          <StatCard
+            label="Coord. d'établissement"
+            value={stats.chefs}
+            accent="blue"
+            icon={Briefcase}
+          />
           <StatCard
             label="Ophtalmologues"
             value={stats.medecins}
             accent="green"
             icon={Stethoscope}
           />
+          <StatCard label="Techniciens" value={stats.techniciens} accent="purple" icon={Wrench} />
           <StatCard
-            label="Résidents"
-            value={stats.residents}
-            accent="orange"
-            icon={GraduationCap}
+            label="Méd. référants"
+            value={stats.medecinReferants}
+            accent="rose"
+            icon={HeartPulse}
           />
-          <StatCard label="Techniciens" value={stats.techniciens ?? 0} accent="purple" icon={Wrench} />
-          <StatCard label="Méd. Référants" value={stats.medecinReferants ?? 0} accent="rose" icon={HeartPulse} />
           <StatCard label="Total" value={stats.total} accent="slate" icon={Users} />
         </div>
 
@@ -275,10 +297,11 @@ function AdminDashboard() {
                   <button
                     key={f.value}
                     onClick={() => setFilter(f.value)}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${filter === f.value
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                      filter === f.value
                         ? "bg-blue-600 text-white"
                         : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                      }`}
+                    }`}
                   >
                     {f.label}
                   </button>
@@ -333,7 +356,10 @@ function AdminDashboard() {
                       <td className="py-3 pr-4">
                         <RoleBadge role={u.role} />
                         {u.etablissement && (
-                          <div className="text-[11px] text-slate-500 mt-1 font-normal truncate max-w-[150px]" title={u.etablissement}>
+                          <div
+                            className="text-[11px] text-slate-500 mt-1 font-normal truncate max-w-[150px]"
+                            title={u.etablissement}
+                          >
                             🏥 {u.etablissement}
                           </div>
                         )}
@@ -343,7 +369,7 @@ function AdminDashboard() {
                         <div className="text-xs text-slate-400 mt-0.5">{u.phone || "—"}</div>
                       </td>
                       <td className="py-3 pr-4">
-                        {u.role === "Medecin" || u.role === "Resident" || u.role === "Chef" ? (
+                        {u.role === "Medecin" ? (
                           <div className="flex flex-col gap-1.5">
                             <div>
                               {u.is_disponible ? (
@@ -365,26 +391,24 @@ function AdminDashboard() {
                         <td className="py-3 pr-4 text-slate-600">{u.createdBy || "—"}</td>
                       )}
                       <td className="py-3 pr-4 text-right space-x-2">
-                        {((user?.role === "Admin" &&
-                          (u.role === "Medecin" || u.role === "Resident" || u.role === "Chef")) ||
-                          (user?.role === "Chef" &&
-                            (u.role === "Medecin" || u.role === "Resident"))) && (
-                            <button
-                              onClick={() => handleToggleAvailability(u.email)}
-                              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${u.is_disponible
-                                  ? "text-red-600 hover:bg-red-50"
-                                  : "text-green-600 hover:bg-green-50"
-                                }`}
-                              title={u.is_disponible ? "Rendre Indisponible" : "Rendre Disponible"}
-                            >
-                              {u.is_disponible ? (
-                                <UserX className="h-3.5 w-3.5" />
-                              ) : (
-                                <UserCheck className="h-3.5 w-3.5" />
-                              )}
-                              Basculer
-                            </button>
-                          )}
+                        {u.role === "Medecin" && (
+                          <button
+                            onClick={() => handleToggleAvailability(u.email)}
+                            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
+                              u.is_disponible
+                                ? "text-red-600 hover:bg-red-50"
+                                : "text-green-600 hover:bg-green-50"
+                            }`}
+                            title={u.is_disponible ? "Rendre Indisponible" : "Rendre Disponible"}
+                          >
+                            {u.is_disponible ? (
+                              <UserX className="h-3.5 w-3.5" />
+                            ) : (
+                              <UserCheck className="h-3.5 w-3.5" />
+                            )}
+                            Basculer
+                          </button>
+                        )}
                         <button
                           onClick={() => handleEdit(u)}
                           className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50"
@@ -418,7 +442,7 @@ function AdminDashboard() {
           </div>
         </div>
 
-        {/* Connexions et déconnexions du jour - Masqué pour le Chef de Service */}
+        {/* Connexions et déconnexions du jour - réservé au coordinateur national */}
         {user?.role === "Admin" && (
           <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="mb-4 flex items-center gap-2 text-slate-900">
@@ -449,10 +473,11 @@ function AdminDashboard() {
                         </td>
                         <td className="py-3 pr-4">
                           <span
-                            className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${e.action === "login"
+                            className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                              e.action === "login"
                                 ? "bg-green-50 text-green-700 ring-1 ring-green-200"
                                 : "bg-slate-100 text-slate-600"
-                              }`}
+                            }`}
                           >
                             {e.action === "login" ? "Connexion" : "Déconnexion"}
                           </span>
@@ -565,45 +590,41 @@ function AdminDashboard() {
                   onChange={(e) => setEditForm({ ...editForm, role: e.target.value as Role })}
                   className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-100"
                 >
-                  {user?.role === "Admin" ? (
-                    <>
-                      <option value="Admin">Administrateur</option>
-                      <option value="Chef">Chef de Service</option>
-                      <option value="Medecin">Ophtalmologue</option>
-                      <option value="Resident">Résident</option>
-                      <option value="Technicien">Technicien</option>
-                      <option value="MedecinReferant">Médecin Référant</option>
-                    </>
-                  ) : (
-                    <>
-                      <option value="Medecin">Ophtalmologue</option>
-                      <option value="Resident">Résident</option>
-                      <option value="Technicien">Technicien</option>
-                      <option value="MedecinReferant">Médecin Référant</option>
-                    </>
-                  )}
+                  {(user?.role === "Admin"
+                    ? (["Admin", "Chef", "Medecin", "Technicien", "MedecinReferant"] as Role[])
+                    : (["Medecin", "Technicien", "MedecinReferant"] as Role[])
+                  ).map((r) => (
+                    <option key={r} value={r}>
+                      {ROLE_LABELS[r]}
+                    </option>
+                  ))}
                 </select>
               </div>
 
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  Établissement / Hôpital {editForm.role === "Technicien" && <span className="text-purple-600 font-normal">(filtrage worklist)</span>}
+                  Établissement / Hôpital{" "}
+                  {editForm.role !== "Admin" && (
+                    <span className="text-blue-600 font-normal">
+                      (obligatoire, définit le périmètre)
+                    </span>
+                  )}
                 </label>
                 <input
                   type="text"
                   list="edit-etablissements-list"
+                  required={editForm.role !== "Admin"}
+                  // Le coordinateur d'établissement ne peut pas sortir un compte de son établissement.
+                  readOnly={user?.role === "Chef"}
                   value={editForm.etablissement}
                   onChange={(e) => setEditForm({ ...editForm, etablissement: e.target.value })}
                   placeholder="Ex: HOPITAL CIRCONSCRIPTION KELIBIA"
-                  className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-100"
+                  className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-100 read-only:bg-slate-50 read-only:text-slate-600"
                 />
                 <datalist id="edit-etablissements-list">
-                  <option value="HOPITAL CIRCONSCRIPTION KELIBIA" />
-                  <option value="Hôpital de Circonscription Menzel Temime" />
-                  <option value="HOPITAL REGIONAL KEBILI" />
-                  <option value="Hôpital de Circonscription Deguech" />
-                  <option value="Hôpital de Circonscription Mateur" />
-                  <option value="HOPITAL REGIONAL SILIANA" />
+                  {ETABLISSEMENTS.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
                 </datalist>
               </div>
 
@@ -633,18 +654,15 @@ function AdminDashboard() {
 }
 
 function RoleBadge({ role }: { role: Role }) {
-  const map: Record<Role, { label: string; cls: string }> = {
-    Admin: { label: "Admin", cls: "bg-slate-100 text-slate-700" },
-    Chef: { label: "Chef de Service", cls: "bg-blue-50 text-blue-700" },
-    Medecin: { label: "Ophtalmologue", cls: "bg-emerald-50 text-emerald-700" },
-    Resident: { label: "Résident", cls: "bg-orange-50 text-orange-700" },
-    Technicien: { label: "Technicien", cls: "bg-purple-50 text-purple-700" },
-    MedecinReferant: { label: "Médecin Référant", cls: "bg-rose-50 text-rose-700" },
+  const classes: Record<Role, string> = {
+    Admin: "bg-slate-100 text-slate-700",
+    Chef: "bg-blue-50 text-blue-700",
+    Medecin: "bg-emerald-50 text-emerald-700",
+    Technicien: "bg-purple-50 text-purple-700",
+    MedecinReferant: "bg-rose-50 text-rose-700",
   };
-  const { label, cls } = map[role] || {
-    label: role || "Inconnu",
-    cls: "bg-slate-100 text-slate-700",
-  };
+  const label = ROLE_LABELS[role] || role || "Inconnu";
+  const cls = classes[role] || "bg-slate-100 text-slate-700";
   return <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${cls}`}>{label}</span>;
 }
 
