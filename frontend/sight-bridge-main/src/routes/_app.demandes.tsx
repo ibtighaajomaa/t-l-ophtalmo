@@ -77,7 +77,10 @@ function DemandesPage() {
     const q = search.trim().toLowerCase();
     return referrals
       .filter((r) => filtre === "toutes" || isPending(r))
-      .filter((r) => !q || r.patient_id.toLowerCase().includes(q))
+      .filter(
+        (r) =>
+          !q || r.patient_id.toLowerCase().includes(q) || r.patient_name.toLowerCase().includes(q),
+      )
       .sort(compareDemandes);
   }, [referrals, search, filtre]);
 
@@ -120,7 +123,7 @@ function DemandesPage() {
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Rechercher un ID patient"
+                  placeholder="Rechercher un INS ou un nom"
                   className="w-64 rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 />
               </label>
@@ -131,7 +134,7 @@ function DemandesPage() {
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-4 py-3 text-left font-semibold">ID</th>
-                  <th className="px-4 py-3 text-left font-semibold">ID patient</th>
+                  <th className="px-4 py-3 text-left font-semibold">Patient (INS)</th>
                   <th className="px-4 py-3 text-left font-semibold">Âge</th>
                   <th className="px-4 py-3 text-left font-semibold">Priorité</th>
                   <th className="px-4 py-3 text-left font-semibold">Antécédents / motif</th>
@@ -169,7 +172,17 @@ function DemandesPage() {
                       <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-500">
                         #{r.id}
                       </td>
-                      <td className="px-4 py-3 font-medium text-slate-900">{r.patient_id}</td>
+                      <td className="px-4 py-3">
+                        <div className="font-mono font-medium text-slate-900">{r.patient_id}</div>
+                        {r.patient_name && (
+                          <div className="text-xs text-slate-600">{r.patient_name}</div>
+                        )}
+                        {r.patient_birth_date && (
+                          <div className="text-xs text-slate-500">
+                            Né(e) le {r.patient_birth_date.split("-").reverse().join("/")}
+                          </div>
+                        )}
+                      </td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">
                         {r.patient_age != null ? `${r.patient_age} ans` : "—"}
                       </td>

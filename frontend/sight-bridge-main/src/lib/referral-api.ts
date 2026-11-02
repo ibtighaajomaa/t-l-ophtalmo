@@ -17,8 +17,14 @@ export interface ReferralClinicalInfo {
 
 export interface PatientReferral {
   id: number;
+  /** INS du patient, vérifié dans le SIIS (ID à saisir sur le rétinographe). */
   patient_id: string;
   patient_age: number | null;
+  patient_name: string;
+  patient_name_ar: string;
+  patient_birth_date: string | null;
+  patient_sex: "" | "M" | "F" | "O";
+  ins_verified: boolean;
   priority: ReferralPriority;
   clinical_info: ReferralClinicalInfo;
   patient_history: string;
@@ -37,6 +43,25 @@ export interface NewReferral {
   priority: ReferralPriority;
   clinical_info: ReferralClinicalInfo;
 }
+
+/** Citoyen trouvé dans le SIIS (registre national de santé). */
+export interface SiisPatient {
+  ins: string;
+  first_name_fr: string;
+  last_name_fr: string;
+  first_name_ar: string;
+  last_name_ar: string;
+  filiation_fr: string;
+  filiation_ar: string;
+  gender: "" | "M" | "F" | "O";
+  birth_date: string;
+  deceased: boolean;
+}
+
+export type InsSearch =
+  | { mode: "cin"; cin: string; birth_date: string }
+  | { mode: "social"; social_id: string; birth_date: string }
+  | { mode: "ins"; ins: string };
 
 const BASE = "/api/patients-adresses/";
 
@@ -69,4 +94,16 @@ export async function createReferral(data: NewReferral): Promise<PatientReferral
   const res = await fetch(BASE, { method: "POST", headers: headers(), body: JSON.stringify(data) });
   if (!res.ok) throw new Error(await readError(res));
   return res.json();
+}
+
+/** Recherche de l'INS dans le SIIS (CIN ou identifiant social + date de naissance, ou INS). */
+export async function searchIns(criteria: InsSearch): Promise<SiisPatient[]> {
+  const res = await fetch(`${BASE}recherche-ins/`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(criteria),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  const body = (await res.json()) as { patients: SiisPatient[] };
+  return body.patients;
 }

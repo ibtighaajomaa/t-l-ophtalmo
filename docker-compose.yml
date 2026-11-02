@@ -118,6 +118,9 @@ services:
       DEFAULT_FROM_EMAIL: tele.ophtalmo@rns.tn
       MONAI_CACHE_DIR: /root/.cache/monailabel
       DMI_API_TOKEN: ${DMI_API_TOKEN:-test-dmi-secret-change-in-production}
+      SIIS_BASE_URL: ${SIIS_BASE_URL:-https://siis-preprod.msante.tn}
+      SIIS_USERNAME: ${SIIS_USERNAME:-}
+      SIIS_PASSWORD: ${SIIS_PASSWORD:-}
     volumes:
       - ./monai-label/cache:/root/.cache/monailabel
       - ./monai-label/cache/clip:/root/.cache/clip:ro

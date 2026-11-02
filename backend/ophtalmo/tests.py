@@ -1515,10 +1515,35 @@ class TechnicienEtablissementFilterTest(TestCase):
         self.assertEqual([p.user_id for p in get_medecins_disponibles()], [med.id])
 
 
+LOCMEM_CACHE = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+
+
+def _siis_identity(ins, **over):
+    identity = {
+        "ins": ins,
+        "first_name_fr": "KHADIJA",
+        "last_name_fr": "JARRAY",
+        "first_name_ar": "خديجة",
+        "last_name_ar": "جراي",
+        "filiation_fr": "",
+        "filiation_ar": "",
+        "gender": "F",
+        "birth_date": "1966-05-04",
+        "deceased": False,
+    }
+    identity.update(over)
+    return identity
+
+
+@override_settings(CACHES=LOCMEM_CACHE)
 class PatientReferralTest(TestCase):
-    """Le médecin référant adresse un patient ; l'examen du même ID en hérite."""
+    """Le médecin référant adresse un patient (INS du SIIS) ; l'examen du même ID en hérite."""
 
     def setUp(self):
+        cache.clear()
+        patcher = patch("ophtalmo.siis_client.find_by_ins", side_effect=lambda ins: _siis_identity(ins))
+        self.find_by_ins = patcher.start()
+        self.addCleanup(patcher.stop)
         from ophtalmo.views import patient_referrals
         from users.models import Profil
 
@@ -1544,7 +1569,7 @@ class PatientReferralTest(TestCase):
 
     def _valid(self, **over):
         data = {
-            "patient_id": "P-100",
+            "patient_id": "INS100",
             "patient_age": 58,
             "priority": "Urgent",
             "clinical_info": {"diabete_type": "Type 2", "hta": "oui", "motif_notes": "Baisse d'acuité"},
@@ -1553,7 +1578,7 @@ class PatientReferralTest(TestCase):
         return data
 
     def test_saisie_rattachee_a_l_examen_existant(self):
-        exam = Exam.objects.create(patient_name="X", patient_id="p-100", date=TODAY)
+        exam = Exam.objects.create(patient_name="X", patient_id="ins100", date=TODAY)
         res = self._post(self.referant, self._valid())
         self.assertEqual(res.status_code, 201)
         self.assertEqual(res.data["exam_id"], exam.id)
@@ -1565,7 +1590,7 @@ class PatientReferralTest(TestCase):
         self.assertIn("HTA: Oui", exam.patient_history)
 
     def test_examen_interprete_non_modifie(self):
-        exam = Exam.objects.create(patient_name="X", patient_id="P-100", date=TODAY, status="Interprété")
+        exam = Exam.objects.create(patient_name="X", patient_id="INS100", date=TODAY, status="Interprété")
         res = self._post(self.referant, self._valid())
         self.assertIsNone(res.data["exam_id"])
         exam.refresh_from_db()
@@ -1575,7 +1600,7 @@ class PatientReferralTest(TestCase):
         from ophtalmo.patient_referrals import link_exam_to_pending_referral
 
         self._post(self.referant, self._valid())
-        exam = Exam.objects.create(patient_name="X", patient_id="P-100", date=TODAY, patient_age=60)
+        exam = Exam.objects.create(patient_name="X", patient_id="INS100", date=TODAY, patient_age=60)
         referral = link_exam_to_pending_referral(exam)
         self.assertIsNotNone(referral)
         exam.refresh_from_db()
@@ -1583,7 +1608,7 @@ class PatientReferralTest(TestCase):
         self.assertEqual(exam.patient_age, 60)  # l'âge DICOM est conservé
         self.assertEqual(exam.clinical_info["diabete_type"], "Type 2")
         # Une seconde acquisition ne réutilise pas une saisie déjà rattachée.
-        other = Exam.objects.create(patient_name="X", patient_id="P-100", date=TODAY)
+        other = Exam.objects.create(patient_name="X", patient_id="INS100", date=TODAY)
         self.assertIsNone(link_exam_to_pending_referral(other))
 
     def test_validation(self):
@@ -1603,6 +1628,8 @@ class PatientReferralTest(TestCase):
         )
 
     def test_age_facultatif(self):
+        # Ni âge saisi ni date de naissance au SIIS : l'âge reste vide.
+        self.find_by_ins.side_effect = lambda ins: _siis_identity(ins, birth_date="")
         data = self._valid()
         del data["patient_age"]
         res = self._post(self.referant, data)
@@ -1621,15 +1648,15 @@ class PatientReferralTest(TestCase):
         from ophtalmo.models import PatientReferral
 
         self._post(self.referant, self._valid())  # Kélibia
-        PatientReferral.objects.create(patient_id="P-200", etablissement="kebili", created_by=self.autre_referant)
+        PatientReferral.objects.create(patient_id="INS200", etablissement="kebili", created_by=self.autre_referant)
 
         res = self._get(self._technicien("tech-kelibia", "Hôpital de Kélibia"))
         self.assertEqual(res.status_code, 200)
-        self.assertEqual([r["patient_id"] for r in res.data], ["P-100"])
+        self.assertEqual([r["patient_id"] for r in res.data], ["INS100"])
         self.assertEqual(res.data[0]["created_by_name"], "ref@x.tn")
 
         res = self._get(self._technicien("tech-kebili", "HOPITAL REGIONAL KEBILI"))
-        self.assertEqual([r["patient_id"] for r in res.data], ["P-200"])
+        self.assertEqual([r["patient_id"] for r in res.data], ["INS200"])
 
         res = self._get(self._technicien("tech-sans-etab", ""))
         self.assertEqual(res.data, [])
@@ -1640,7 +1667,7 @@ class PatientReferralTest(TestCase):
         chef = get_user_model().objects.create_user(username="chef", email="chef@x.tn", password="x")
         Profil.objects.create(user=chef, role="Chef", region_affectation="Hôpital de Kélibia")
         res = self._get(chef)
-        self.assertEqual([r["patient_id"] for r in res.data], ["P-100"])
+        self.assertEqual([r["patient_id"] for r in res.data], ["INS100"])
 
     def test_technicien_ne_peut_pas_adresser(self):
         res = self._post(self._technicien("tech", "Kélibia"), self._valid())
@@ -1661,8 +1688,8 @@ class PatientReferralTest(TestCase):
     def test_compte_rendu_de_ses_patients_seulement(self):
         from ophtalmo.views import exam_detail, medical_report_detail, medical_report_list, sign_medical_report
 
-        mine = Exam.objects.create(patient_name="X", patient_id="P-100", date=TODAY)
-        other = Exam.objects.create(patient_name="Y", patient_id="P-999", date=TODAY, status="Interprété")
+        mine = Exam.objects.create(patient_name="X", patient_id="INS100", date=TODAY)
+        other = Exam.objects.create(patient_name="Y", patient_id="INS999", date=TODAY, status="Interprété")
         self._post(self.referant, self._valid())
         Exam.objects.filter(id=mine.id).update(status="Interprété")
         my_report, other_report = self._report_for(mine), self._report_for(other)
@@ -1691,6 +1718,263 @@ class PatientReferralTest(TestCase):
 
     def test_chaque_referant_ne_voit_que_ses_patients(self):
         self._post(self.referant, self._valid())
-        self._post(self.autre_referant, self._valid(patient_id="P-200"))
+        self._post(self.autre_referant, self._valid(patient_id="INS200"))
         res = self._get(self.referant)
-        self.assertEqual([r["patient_id"] for r in res.data], ["P-100"])
+        self.assertEqual([r["patient_id"] for r in res.data], ["INS100"])
+
+    def test_identite_siis_enregistree(self):
+        data = self._valid()
+        del data["patient_age"]
+        res = self._post(self.referant, data)
+        self.assertEqual(res.status_code, 201)
+        self.find_by_ins.assert_called_once_with("INS100")
+        self.assertEqual(res.data["patient_id"], "INS100")
+        self.assertEqual(res.data["patient_name"], "KHADIJA JARRAY")
+        self.assertEqual(res.data["patient_name_ar"], "خديجة جراي")
+        self.assertEqual(res.data["patient_birth_date"], "1966-05-04")
+        self.assertEqual(res.data["patient_sex"], "F")
+        self.assertTrue(res.data["ins_verified"])
+        # Sans âge saisi, l'âge vient de la date de naissance du SIIS.
+        self.assertGreaterEqual(res.data["patient_age"], 59)
+
+    def test_identite_completee_sur_l_examen(self):
+        from ophtalmo.patient_referrals import link_exam_to_pending_referral
+
+        self._post(self.referant, self._valid())
+        exam = Exam.objects.create(patient_name="", patient_id="INS100", date=TODAY)
+        link_exam_to_pending_referral(exam)
+        exam.refresh_from_db()
+        self.assertEqual(exam.patient_name, "KHADIJA JARRAY")
+        self.assertEqual(exam.patient_birth_date, date(1966, 5, 4))
+
+    def test_ins_inconnu_refuse(self):
+        from ophtalmo.models import PatientReferral
+        from ophtalmo.siis_client import SIISNotFound
+
+        self.find_by_ins.side_effect = SIISNotFound("inconnu")
+        res = self._post(self.referant, self._valid())
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["fields"], {"patient_id": "Cet INS est inconnu du SIIS."})
+        self.assertFalse(PatientReferral.objects.exists())
+
+    def test_id_qui_n_est_pas_un_ins_refuse(self):
+        res = self._post(self.referant, self._valid(patient_id="P-100"))
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("patient_id", res.data["fields"])
+        self.find_by_ins.assert_not_called()
+
+    def test_siis_injoignable(self):
+        from ophtalmo.siis_client import SIISUnavailable
+
+        self.find_by_ins.side_effect = SIISUnavailable("Le SIIS est injoignable.")
+        res = self._post(self.referant, self._valid())
+        self.assertEqual(res.status_code, 503)
+        self.assertEqual(res.data["error"], "Le SIIS est injoignable.")
+
+    def test_patient_decede_refuse(self):
+        self.find_by_ins.side_effect = lambda ins: _siis_identity(ins, deceased=True)
+        res = self._post(self.referant, self._valid())
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("décédé", res.data["fields"]["patient_id"])
+
+    def _search(self, user, data):
+        from ophtalmo.views import siis_patient_search
+
+        request = self.factory.post("/api/patients-adresses/recherche-ins/", data, format="json")
+        force_authenticate(request, user=user)
+        return siis_patient_search(request)
+
+    def test_recherche_puis_demande_sans_second_appel(self):
+        with patch("ophtalmo.siis_client.search_patients", return_value=[_siis_identity("INS100")]) as search:
+            res = self._search(self.referant, {"mode": "cin", "cin": "12345678", "birth_date": "1966-05-04"})
+        self.assertEqual(res.status_code, 200)
+        search.assert_called_once_with({"cin": "12345678", "birthDate": "1966-05-04"})
+        self.assertEqual(res.data["patients"][0]["ins"], "INS100")
+        res = self._post(self.referant, self._valid())
+        self.assertEqual(res.status_code, 201)
+        self.find_by_ins.assert_not_called()
+
+    def test_recherche_par_identifiant_social_et_ins(self):
+        with patch("ophtalmo.siis_client.search_patients", return_value=[_siis_identity("INS100")]) as search:
+            self._search(self.referant, {"mode": "social", "social_id": "3017037173", "birth_date": "1839-03-14"})
+            self._search(self.referant, {"mode": "ins", "ins": "INS100"})
+        self.assertEqual(
+            [c.args[0] for c in search.call_args_list],
+            [{"socialId": "3017037173", "birthDate": "1839-03-14"}, {"ids": "INS100"}],
+        )
+
+    def test_recherche_validation_et_droits(self):
+        with patch("ophtalmo.siis_client.search_patients") as search:
+            res = self._search(self.referant, {"mode": "cin", "cin": "1234", "birth_date": "2999-01-01"})
+            self.assertEqual(res.status_code, 400)
+            self.assertEqual(set(res.data["fields"]), {"cin", "birth_date"})
+            res = self._search(self.referant, {"mode": "nom"})
+            self.assertEqual(set(res.data["fields"]), {"mode"})
+            self.assertEqual(self._search(self.ophtalmo, {"mode": "ins", "ins": "INS100"}).status_code, 403)
+            search.assert_not_called()
+
+    def test_recherche_sans_resultat(self):
+        from ophtalmo.siis_client import SIISNotFound
+
+        with patch("ophtalmo.siis_client.search_patients", side_effect=SIISNotFound("Aucun citoyen")):
+            res = self._search(self.referant, {"mode": "ins", "ins": "INS404"})
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.data["error"], "Aucun citoyen")
+
+
+SIIS_URL = "https://siis.test"
+
+
+def _siis_response(status_code, body):
+    response = MagicMock(status_code=status_code)
+    response.json.return_value = body
+    return response
+
+
+def _siis_login_body(token):
+    base = f"{SIIS_URL}/fhir/StructureDefinition"
+    return {
+        "resourceType": "OperationOutcome",
+        "extension": [
+            {"url": f"{base}/accessToken", "valueString": token},
+            {"url": f"{base}/tokenType", "valueString": "Bearer"},
+            {"url": f"{base}/expiresIn", "valueInteger": 900000},
+            {"url": f"{base}/refreshToken", "valueString": f"refresh-{token}"},
+        ],
+        "issue": [{"severity": "information", "details": {"text": "LOGIN_SUCCESSFUL"}}],
+    }
+
+
+# Exemple réel du contrat SIIS (recherche par identifiant social).
+SIIS_BUNDLE = {
+    "resourceType": "Bundle",
+    "type": "searchset",
+    "total": 1,
+    "entry": [
+        {
+            "fullUrl": "Patient/null",
+            "resource": {
+                "resourceType": "Patient",
+                "id": None,
+                "gender": "FEMALE",
+                "birthDate": "1839-03-14",
+                "deceasedBoolean": False,
+                "deceasedDateTime": None,
+                "extension": [
+                    {"url": "http://siis-preprod.msante.tn/fhir/StructureDefinition/firstNameFR.json", "valueString": "KHADIJA"},
+                    {"url": "http://siis-preprod.msante.tn/fhir/StructureDefinition/lastNameFR.json", "valueString": "JARRAY"},
+                    {"url": "http://siis-preprod.msante.tn/fhir/StructureDefinition/firstNameAR.json", "valueString": "خديجة"},
+                    {"url": "http://siis-preprod.msante.tn/fhir/StructureDefinition/lastNameAR.json", "valueString": "جراي"},
+                    {
+                        "url": "http://siis-preprod.msante.tn/fhir/StructureDefinition/grandFatherFirstNameFR.json",
+                        "valueString": "JAOUADI ALI BEN AHMED BEN AMARA BEN JAFEL",
+                    },
+                    {"url": "http://siis-preprod.msante.tn/fhir/StructureDefinition/ids.json", "valueString": "7061422925"},
+                    {"url": "http://siis-preprod.msante.tn/fhir/StructureDefinition/birthDelegation.json", "valueString": "4121"},
+                    {"url": "http://siis-preprod.msante.tn/fhir/StructureDefinition/socialId.json", "valueString": "3017037173"},
+                ],
+            },
+        }
+    ],
+}
+
+
+@override_settings(CACHES=LOCMEM_CACHE, SIIS_BASE_URL=SIIS_URL, SIIS_USERNAME="evax", SIIS_PASSWORD="secret")
+class SIISClientTest(TestCase):
+    """Authentification par jeton et recherche FHIR selon le contrat SIIS."""
+
+    def setUp(self):
+        cache.clear()
+        self.logins = 0
+
+    def _router(self, search_responses):
+        search_responses = list(search_responses)
+
+        def post(url, json=None, headers=None, **kwargs):
+            if url.endswith("/api/v1/auth/login"):
+                self.assertEqual(json, {"username": "evax", "password": "secret"})
+                self.logins += 1
+                return _siis_response(200, _siis_login_body(f"tok-{self.logins}"))
+            if url.endswith("/api/v1/auth/refresh"):
+                return _siis_response(401, {})
+            self.assertEqual(url, f"{SIIS_URL}/api/v1/fhir/Patient/_search")
+            response = search_responses.pop(0)
+            response.seen_token = headers["Authorization"]
+            return response
+
+        return post
+
+    def test_lecture_du_bundle_et_jeton_reutilise(self):
+        from ophtalmo import siis_client
+
+        with patch("ophtalmo.siis_client.requests.post", side_effect=self._router([
+            _siis_response(200, SIIS_BUNDLE), _siis_response(200, SIIS_BUNDLE),
+        ])) as post:
+            patients = siis_client.search_patients({"socialId": "3017037173", "birthDate": "1839-03-14"})
+            siis_client.search_patients({"ids": "7061422925"})
+        self.assertEqual(self.logins, 1)
+        self.assertEqual(post.call_args_list[1].kwargs["headers"]["Authorization"], "Bearer tok-1")
+        self.assertEqual(patients, [{
+            "ins": "7061422925",
+            "first_name_fr": "KHADIJA",
+            "last_name_fr": "JARRAY",
+            "first_name_ar": "خديجة",
+            "last_name_ar": "جراي",
+            "filiation_fr": "JAOUADI ALI BEN AHMED BEN AMARA BEN JAFEL",
+            "filiation_ar": "",
+            "gender": "F",
+            "birth_date": "1839-03-14",
+            "deceased": False,
+        }])
+
+    def test_jeton_expire_renouvele(self):
+        from ophtalmo import siis_client
+
+        expired = _siis_response(401, {"resourceType": "OperationOutcome", "issue": [{"code": "security"}]})
+        with patch("ophtalmo.siis_client.requests.post", side_effect=self._router([
+            expired, _siis_response(200, SIIS_BUNDLE),
+        ])) as post:
+            self.assertEqual(siis_client.find_by_ins("7061422925")["last_name_fr"], "JARRAY")
+        self.assertEqual(self.logins, 2)
+        self.assertEqual(post.call_args_list[-1].kwargs["headers"]["Authorization"], "Bearer tok-2")
+
+    def test_aucun_resultat(self):
+        from ophtalmo import siis_client
+
+        empty = {"resourceType": "Bundle", "type": "searchset", "total": 0, "entry": []}
+        not_found = {"resourceType": "OperationOutcome", "issue": [{"severity": "error", "code": "not-found"}]}
+        with patch("ophtalmo.siis_client.requests.post", side_effect=self._router([
+            _siis_response(200, empty), _siis_response(404, not_found),
+        ])):
+            with self.assertRaises(siis_client.SIISNotFound):
+                siis_client.search_patients({"cin": "12345678", "birthDate": "1990-01-15"})
+            with self.assertRaises(siis_client.SIISNotFound):
+                siis_client.search_patients({"cin": "12345678", "birthDate": "1990-01-15"})
+
+    def test_identifiants_refuses_suspendent_la_connexion(self):
+        from ophtalmo import siis_client
+
+        refused = _siis_response(401, {"issue": [{"details": {"text": "UNAUTHORIZED"}}]})
+        with patch("ophtalmo.siis_client.requests.post", return_value=refused) as post:
+            with self.assertRaises(siis_client.SIISError):
+                siis_client.search_patients({"ids": "7061422925"})
+            with self.assertRaises(siis_client.SIISUnavailable):
+                siis_client.search_patients({"ids": "7061422925"})
+        # La seconde recherche ne retente pas la connexion (verrouillage après 10 échecs).
+        self.assertEqual(post.call_count, 1)
+
+    def test_siis_injoignable(self):
+        import requests as http
+        from ophtalmo import siis_client
+
+        with patch("ophtalmo.siis_client.requests.post", side_effect=http.ConnectTimeout("timeout")):
+            with self.assertRaises(siis_client.SIISUnavailable) as ctx:
+                siis_client.search_patients({"ids": "7061422925"})
+        self.assertEqual(ctx.exception.status, 503)
+
+    @override_settings(SIIS_PASSWORD="")
+    def test_non_configure(self):
+        from ophtalmo import siis_client
+
+        with self.assertRaises(siis_client.SIISNotConfigured):
+            siis_client.search_patients({"ids": "7061422925"})

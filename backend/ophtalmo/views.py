@@ -1,7 +1,10 @@
 import json
 import logging
 import os
+import re
 from datetime import date, datetime
+from django.core.cache import cache
+from django.utils import timezone as dj_timezone
 from django.db.models import Q, Max
 import requests
 from rest_framework import status
@@ -33,6 +36,7 @@ from .patient_referrals import (
     link_referral_to_existing_exam,
 )
 from .orthanc_origin import resolve_study_origin
+from . import siis_client
 from .etablissements import etablissement_matches, filter_exams_by_etablissement
 from .analysis_utils import (
     DEEPSEENET_FACTORS,
@@ -3010,6 +3014,11 @@ def _referral_payload(referral):
         'id': referral.id,
         'patient_id': referral.patient_id,
         'patient_age': referral.patient_age,
+        'patient_name': referral.patient_name,
+        'patient_name_ar': referral.patient_name_ar,
+        'patient_birth_date': referral.patient_birth_date.isoformat() if referral.patient_birth_date else None,
+        'patient_sex': referral.patient_sex,
+        'ins_verified': referral.ins_verified_at is not None,
         'priority': referral.priority,
         'clinical_info': referral.clinical_info or {},
         'patient_history': referral.patient_history,
@@ -3025,6 +3034,92 @@ def _referral_payload(referral):
         'exam_patient_name': exam.patient_name if exam else '',
         'exam_patient_age': exam.patient_age if exam else None,
     }
+
+
+INS_RE = re.compile(r'^[0-9A-Za-z]{4,32}$')
+CIN_RE = re.compile(r'^\d{8}$')
+SOCIAL_ID_RE = re.compile(r'^\d{4,20}$')
+# Identités vérifiées par une recherche SIIS : la demande qui suit n'a pas à
+# interroger le SIIS une seconde fois.
+SIIS_VERIFIED_TTL = 2 * 3600
+
+
+def _siis_verified_key(user, ins):
+    return f'siis:verified:{user.pk}:{ins}'
+
+
+def _parse_birth_date(value):
+    value = str(value or '').strip()
+    try:
+        parsed = datetime.strptime(value, '%Y-%m-%d').date()
+    except ValueError:
+        return None
+    if len(value) != 10 or parsed.year < 1800 or parsed > date.today():
+        return None
+    return parsed
+
+
+def _age_from_birth_date(birth):
+    if birth is None:
+        return None
+    today = date.today()
+    age = today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
+    return age if 0 <= age <= 130 else None
+
+
+def _full_name(first, last):
+    return ' '.join(part for part in (first, last) if part).strip()
+
+
+@api_view(['POST'])
+@authentication_classes([KeycloakAuthentication])
+@permission_classes([IsAuthenticated])
+def siis_patient_search(request):
+    """Recherche de l'INS d'un patient dans le SIIS (médecin référant).
+
+    Corps : ``{"mode": "cin", "cin", "birth_date"}``,
+    ``{"mode": "social", "social_id", "birth_date"}`` ou ``{"mode": "ins", "ins"}``.
+    """
+    if not _is_medecin_referant(request):
+        return Response({'error': 'Recherche INS réservée au médecin référant.'}, status=status.HTTP_403_FORBIDDEN)
+
+    data = request.data or {}
+    mode = str(data.get('mode') or '').strip()
+    errors = {}
+    criteria = {}
+    if mode == 'ins':
+        ins = str(data.get('ins') or '').strip()
+        if not INS_RE.match(ins):
+            errors['ins'] = 'INS invalide (chiffres et lettres uniquement).'
+        criteria = {'ids': ins}
+    elif mode in ('cin', 'social'):
+        if mode == 'cin':
+            value = str(data.get('cin') or '').strip()
+            if not CIN_RE.match(value):
+                errors['cin'] = 'Le numéro de CIN comporte 8 chiffres.'
+            criteria['cin'] = value
+        else:
+            value = str(data.get('social_id') or '').strip()
+            if not SOCIAL_ID_RE.match(value):
+                errors['social_id'] = 'Identifiant social invalide (chiffres uniquement).'
+            criteria['socialId'] = value
+        birth = _parse_birth_date(data.get('birth_date'))
+        if birth is None:
+            errors['birth_date'] = 'Date de naissance invalide (pas dans le futur).'
+        else:
+            criteria['birthDate'] = birth.isoformat()
+    else:
+        errors['mode'] = 'Mode de recherche inconnu (cin, social ou ins).'
+    if errors:
+        return Response({'error': 'Critères invalides.', 'fields': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        patients = siis_client.search_patients(criteria)
+    except siis_client.SIISError as exc:
+        return Response({'error': str(exc)}, status=exc.status)
+    for patient in patients:
+        cache.set(_siis_verified_key(request.user, patient['ins']), patient, SIIS_VERIFIED_TTL)
+    return Response({'patients': patients})
 
 
 @api_view(['GET', 'POST'])
@@ -3066,9 +3161,9 @@ def patient_referrals(request):
     errors = {}
     patient_id = str(data.get('patient_id') or '').strip()
     if not patient_id:
-        errors['patient_id'] = "L'identifiant patient est obligatoire."
-    elif len(patient_id) > 255:
-        errors['patient_id'] = "Identifiant patient trop long."
+        errors['patient_id'] = "L'INS du patient est obligatoire."
+    elif not INS_RE.match(patient_id):
+        errors['patient_id'] = "INS invalide (chiffres et lettres uniquement)."
     age = None
     raw_age = data.get('patient_age')
     if raw_age not in (None, ''):
@@ -3099,6 +3194,27 @@ def patient_referrals(request):
     if errors:
         return Response({'error': 'Formulaire invalide.', 'fields': errors}, status=status.HTTP_400_BAD_REQUEST)
 
+    # L'ID patient est l'INS : il doit exister dans le SIIS.
+    identity = cache.get(_siis_verified_key(request.user, patient_id))
+    if identity is None:
+        try:
+            identity = siis_client.find_by_ins(patient_id)
+        except siis_client.SIISNotFound:
+            return Response(
+                {'error': 'Formulaire invalide.', 'fields': {'patient_id': 'Cet INS est inconnu du SIIS.'}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except siis_client.SIISError as exc:
+            return Response({'error': str(exc)}, status=exc.status)
+    if identity.get('deceased'):
+        return Response(
+            {'error': 'Formulaire invalide.', 'fields': {'patient_id': 'Le SIIS indique ce patient comme décédé.'}},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    birth_date = _parse_birth_date(identity.get('birth_date'))
+    if age is None:
+        age = _age_from_birth_date(birth_date)
+
     clinical_info = {
         k: str(raw_info[k]).strip()[:2000]
         for k in REFERRAL_CLINICAL_KEYS
@@ -3112,6 +3228,11 @@ def patient_referrals(request):
     referral = PatientReferral.objects.create(
         patient_id=patient_id,
         patient_age=age,
+        patient_name=_full_name(identity.get('first_name_fr'), identity.get('last_name_fr'))[:255],
+        patient_name_ar=_full_name(identity.get('first_name_ar'), identity.get('last_name_ar'))[:255],
+        patient_birth_date=birth_date,
+        patient_sex=(identity.get('gender') or '')[:1],
+        ins_verified_at=dj_timezone.now(),
         priority=priority,
         clinical_info=clinical_info or None,
         patient_history=build_history(clinical_info),

@@ -376,12 +376,21 @@ class ExamStatusHistory(models.Model):
 class PatientReferral(models.Model):
     """Patient adressé par un médecin référant avant l'acquisition.
 
-    Les renseignements saisis (âge, antécédents, priorité) sont reportés sur
+    Le patient est identifié par son INS, recherché dans le SIIS. Les
+    renseignements saisis (âge, antécédents, priorité) sont reportés sur
     l'examen du même identifiant patient dès qu'il arrive d'Orthanc.
     """
 
+    # INS (identifiant national de santé) vérifié dans le SIIS pour les nouvelles
+    # demandes ; c'est l'ID patient à saisir sur le rétinographe.
     patient_id = models.CharField(max_length=255, db_index=True)
     patient_age = models.PositiveIntegerField(null=True, blank=True)
+    # Identité renvoyée par le SIIS au moment de la demande.
+    patient_name = models.CharField(max_length=255, blank=True, default="")
+    patient_name_ar = models.CharField(max_length=255, blank=True, default="")
+    patient_birth_date = models.DateField(null=True, blank=True)
+    patient_sex = models.CharField(max_length=1, blank=True, default="")
+    ins_verified_at = models.DateTimeField(null=True, blank=True)
     clinical_info = models.JSONField(null=True, blank=True)
     patient_history = models.TextField(blank=True, default="")
     priority = models.CharField(

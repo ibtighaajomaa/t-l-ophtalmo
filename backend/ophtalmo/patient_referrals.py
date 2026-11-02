@@ -19,6 +19,13 @@ def apply_referral(exam, referral, save=True):
     if exam.patient_age is None and referral.patient_age is not None:
         exam.patient_age = referral.patient_age
         changed.append("patient_age")
+    # L'identité du SIIS complète les tags DICOM absents, sans les écraser.
+    if not (exam.patient_name or "").strip() and referral.patient_name:
+        exam.patient_name = referral.patient_name
+        changed.append("patient_name")
+    if exam.patient_birth_date is None and referral.patient_birth_date is not None:
+        exam.patient_birth_date = referral.patient_birth_date
+        changed.append("patient_birth_date")
     if referral.clinical_info and exam.clinical_info != referral.clinical_info:
         exam.clinical_info = referral.clinical_info
         changed.append("clinical_info")

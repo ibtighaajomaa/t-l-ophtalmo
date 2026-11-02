@@ -235,6 +235,15 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'support@teleophta.fr'
 # =========================
 DMI_API_TOKEN = os.environ.get('DMI_API_TOKEN', '')
 
+# =========================
+#  SIIS (Ministère de la Santé) — recherche de l'INS des patients adressés
+# =========================
+SIIS_BASE_URL = os.environ.get('SIIS_BASE_URL', 'https://siis-preprod.msante.tn').rstrip('/')
+SIIS_USERNAME = os.environ.get('SIIS_USERNAME', '')
+SIIS_PASSWORD = os.environ.get('SIIS_PASSWORD', '')
+SIIS_TIMEOUT = float(os.environ.get('SIIS_TIMEOUT', '15'))
+SIIS_VERIFY_SSL = os.environ.get('SIIS_VERIFY_SSL', 'True').lower() in ['true', '1', 't', 'y', 'yes']
+
 # Keycloak settings
 KC_ADMIN_URL = f"{PUBLIC_BASE_URL}/auth"
 KC_REALM = "HopitalRealm"

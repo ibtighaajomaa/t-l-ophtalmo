@@ -1,14 +1,28 @@
-/** Médecin référant — formulaire d'ajout d'un patient adressé (antécédents + priorité). */
+/**
+ * Médecin référant — formulaire d'ajout d'un patient adressé.
+ * Le patient est identifié par son INS, recherché dans le SIIS ; l'INS devient l'ID patient.
+ */
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState, type FormEvent, type ReactNode } from "react";
-import { AlertCircle, CheckCircle2, ClipboardList, Loader2, UserPlus } from "lucide-react";
+import { useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ClipboardList,
+  Loader2,
+  Search,
+  ShieldCheck,
+  UserPlus,
+} from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import {
   createReferral,
+  searchIns,
+  type InsSearch,
   type PatientReferral,
   type ReferralClinicalInfo,
   type ReferralPriority,
+  type SiisPatient,
 } from "@/lib/referral-api";
 
 export const Route = createFileRoute("/_app/ajouter-patient")({
@@ -25,7 +39,6 @@ const TODAY_ISO = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
   .slice(0, 10);
 
 const EMPTY_FORM = {
-  patient_id: "",
   priority: "Normal" as ReferralPriority,
   clinical: {} as ReferralClinicalInfo,
 };
@@ -90,11 +103,237 @@ function Section({
   );
 }
 
+type SearchMode = InsSearch["mode"];
+
+const SEARCH_MODES: { value: SearchMode; label: string }[] = [
+  { value: "cin", label: "CIN" },
+  { value: "social", label: "Identifiant social" },
+  { value: "ins", label: "INS" },
+];
+
+const SEX_LABELS: Record<string, string> = { M: "Homme", F: "Femme", O: "Autre" };
+
+const EMPTY_CRITERIA = { cin: "", social_id: "", ins: "", birth_date: "" };
+
+/** AAAA-MM-JJ → JJ/MM/AAAA, sans passer par Date (pas de décalage de fuseau). */
+function formatDate(iso: string) {
+  const [y, m, d] = iso.split("-");
+  return y && m && d ? `${d}/${m}/${y}` : iso;
+}
+
+const fullName = (first: string, last: string) => [first, last].filter(Boolean).join(" ");
+
+function PatientIdentity({ patient }: { patient: SiisPatient }) {
+  const nameFr = fullName(patient.first_name_fr, patient.last_name_fr);
+  const nameAr = fullName(patient.first_name_ar, patient.last_name_ar);
+  const filiation = patient.filiation_fr || patient.filiation_ar;
+  const details = [
+    `INS ${patient.ins}`,
+    SEX_LABELS[patient.gender],
+    patient.birth_date && `Né(e) le ${formatDate(patient.birth_date)}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <div className="min-w-0">
+      <div className="font-semibold text-slate-950">
+        <bdi>{nameFr || nameAr || "Nom non renseigné"}</bdi>
+      </div>
+      {nameFr && nameAr && (
+        <div className="text-sm text-slate-600">
+          <bdi lang="ar">{nameAr}</bdi>
+        </div>
+      )}
+      <div className="mt-0.5 text-xs text-slate-500">{details}</div>
+      {filiation && (
+        <div className="text-xs text-slate-500">
+          Filiation : <bdi>{filiation}</bdi>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Recherche du patient dans le SIIS par CIN, identifiant social ou INS. */
+function InsLookup({ onSelect }: { onSelect: (patient: SiisPatient) => void }) {
+  const [mode, setMode] = useState<SearchMode>("cin");
+  const [values, setValues] = useState(EMPTY_CRITERIA);
+  const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<SiisPatient[] | null>(null);
+
+  const set = (key: keyof typeof EMPTY_CRITERIA, value: string) =>
+    setValues((v) => ({ ...v, [key]: value }));
+
+  function criteria(): InsSearch | string {
+    if (mode === "ins") {
+      const ins = values.ins.trim();
+      return /^[0-9A-Za-z]{4,32}$/.test(ins)
+        ? { mode, ins }
+        : "INS invalide (chiffres et lettres uniquement).";
+    }
+    const birth_date = values.birth_date;
+    if (mode === "cin") {
+      const cin = values.cin.trim();
+      if (!/^\d{8}$/.test(cin)) return "Le numéro de CIN comporte 8 chiffres.";
+      if (!birth_date) return "La date de naissance est obligatoire.";
+      return { mode, cin, birth_date };
+    }
+    const social_id = values.social_id.trim();
+    if (!/^\d{4,20}$/.test(social_id)) return "Identifiant social invalide (chiffres uniquement).";
+    if (!birth_date) return "La date de naissance est obligatoire.";
+    return { mode, social_id, birth_date };
+  }
+
+  async function search() {
+    const c = criteria();
+    setResults(null);
+    if (typeof c === "string") return setError(c);
+    setError(null);
+    setSearching(true);
+    try {
+      const found = await searchIns(c);
+      setResults(found);
+      if (found.length === 1 && !found[0].deceased) onSelect(found[0]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Recherche impossible.");
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  // Entrée lance la recherche au lieu d'envoyer tout le formulaire.
+  const searchOnEnter = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (!searching) search();
+    }
+  };
+
+  const idField = {
+    cin: { key: "cin", label: "N° CIN *", placeholder: "8 chiffres", numeric: true, max: 8 },
+    social: {
+      key: "social_id",
+      label: "Identifiant social *",
+      placeholder: "Ex. 3017037173",
+      numeric: true,
+      max: 20,
+    },
+    ins: { key: "ins", label: "INS *", placeholder: "Ex. 7061422925", numeric: false, max: 32 },
+  }[mode] as {
+    key: keyof typeof EMPTY_CRITERIA;
+    label: string;
+    placeholder: string;
+    numeric: boolean;
+    max: number;
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <span className={labelClass}>Rechercher par</span>
+        <div role="radiogroup" className="mt-1.5 grid max-w-lg grid-cols-3 gap-2">
+          {SEARCH_MODES.map((m) => (
+            <Choice
+              key={m.value}
+              label={m.label}
+              selected={mode === m.value}
+              onClick={() => {
+                setMode(m.value);
+                setResults(null);
+                setError(null);
+              }}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="block w-full sm:w-56">
+          <span className={labelClass}>{idField.label}</span>
+          <input
+            key={idField.key}
+            value={values[idField.key]}
+            onChange={(e) => set(idField.key, e.target.value)}
+            onKeyDown={searchOnEnter}
+            inputMode={idField.numeric ? "numeric" : "text"}
+            maxLength={idField.max}
+            placeholder={idField.placeholder}
+            autoComplete="off"
+            className={inputClass}
+          />
+        </label>
+        {mode !== "ins" && (
+          <label className="block w-full sm:w-48">
+            <span className={labelClass}>Date de naissance *</span>
+            <input
+              type="date"
+              min="1800-01-01"
+              max={TODAY_ISO}
+              value={values.birth_date}
+              onChange={(e) => set("birth_date", e.target.value)}
+              onKeyDown={searchOnEnter}
+              className={inputClass}
+            />
+          </label>
+        )}
+        <button
+          type="button"
+          onClick={search}
+          disabled={searching}
+          className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:opacity-60"
+        >
+          {searching ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Search className="h-4 w-4" />
+          )}
+          Rechercher dans le SIIS
+        </button>
+      </div>
+      {error && (
+        <p className="flex items-center gap-1.5 text-sm text-red-600">
+          <AlertCircle className="h-4 w-4 shrink-0" /> {error}
+        </p>
+      )}
+      {results && results.length > 0 && (
+        <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+          {results.map((p) => (
+            <li key={p.ins} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+              <PatientIdentity patient={p} />
+              {p.deceased ? (
+                <span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-700">
+                  Décédé selon le SIIS
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onSelect(p)}
+                  className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                >
+                  Sélectionner
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function AddPatientPage() {
   const [form, setForm] = useState(EMPTY_FORM);
+  const [patient, setPatient] = useState<SiisPatient | null>(null);
+  // Change après un enregistrement pour remettre la recherche SIIS à zéro.
+  const [lookupKey, setLookupKey] = useState(0);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<PatientReferral | null>(null);
+
+  const selectPatient = (p: SiisPatient) => {
+    setPatient(p);
+    setFormError(null);
+  };
 
   const setClinical = (key: keyof ReferralClinicalInfo, value: string) =>
     setForm((f) => ({ ...f, clinical: { ...f.clinical, [key]: value } }));
@@ -103,16 +342,18 @@ function AddPatientPage() {
     e.preventDefault();
     setFormError(null);
     setSaved(null);
-    if (!form.patient_id.trim()) return setFormError("L'identifiant patient est obligatoire.");
+    if (!patient) return setFormError("Recherchez le patient dans le SIIS puis sélectionnez-le.");
     setSaving(true);
     try {
       const created = await createReferral({
-        patient_id: form.patient_id.trim(),
+        patient_id: patient.ins,
         priority: form.priority,
         clinical_info: form.clinical,
       });
       setSaved(created);
       setForm(EMPTY_FORM);
+      setPatient(null);
+      setLookupKey((k) => k + 1);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Enregistrement impossible.");
     } finally {
@@ -126,26 +367,38 @@ function AddPatientPage() {
     <>
       <Navbar
         title="Ajouter le patient"
-        subtitle="Renseigner l'identifiant, les antécédents et la priorité du patient adressé"
+        subtitle="Identifier le patient par son INS, puis renseigner ses antécédents et la priorité"
       />
       <div className="flex-1 p-6">
         <form onSubmit={handleSubmit} className="space-y-4">
           <Section
             title="Patient"
-            subtitle="L'identifiant doit être celui saisi sur le rétinographe."
+            subtitle="Recherchez le patient dans le SIIS. Son INS devient l'ID patient, à saisir sur le rétinographe."
           >
-            <div className="max-w-md">
-              <label className="block">
-                <span className={labelClass}>ID patient *</span>
-                <input
-                  required
-                  value={form.patient_id}
-                  onChange={(e) => setForm({ ...form, patient_id: e.target.value })}
-                  className={inputClass}
-                  placeholder="Ex. 20037559"
-                  maxLength={255}
-                />
-              </label>
+            {patient && (
+              <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50/60 p-4">
+                <div className="flex min-w-0 gap-3">
+                  <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+                  <div className="min-w-0">
+                    <PatientIdentity patient={patient} />
+                    <div className="mt-2 text-sm text-emerald-800">
+                      ID patient à saisir sur le rétinographe :{" "}
+                      <span className="font-mono font-semibold">{patient.ins}</span>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPatient(null)}
+                  className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                >
+                  Changer de patient
+                </button>
+              </div>
+            )}
+            {/* Masquée plutôt que démontée : les résultats restent après « Changer de patient ». */}
+            <div className={patient ? "hidden" : ""}>
+              <InsLookup key={lookupKey} onSelect={selectPatient} />
             </div>
             <div>
               <span className={labelClass}>Priorité *</span>
@@ -295,7 +548,7 @@ function AddPatientPage() {
           {saved && (
             <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
               <CheckCircle2 className="h-4 w-4 shrink-0" />
-              Patient {saved.patient_id} enregistré.
+              {saved.patient_name || "Patient"} enregistré avec l'INS {saved.patient_id}.
               {saved.exam_id
                 ? " Son examen en cours a été mis à jour."
                 : " Les renseignements seront joints à son examen dès l'acquisition."}
